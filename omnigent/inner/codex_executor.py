@@ -1128,11 +1128,16 @@ def _populate_codex_home_config(
                 import tomlkit
 
                 profile_document = tomlkit.parse(profile_file.read_text(encoding="utf-8"))
-                profile_provider = profile_document.get("model_provider")
+                raw_profile_provider = profile_document.get("model_provider")
+                profile_provider = (
+                    str(raw_profile_provider).strip()
+                    if raw_profile_provider is not None
+                    else None
+                )
                 profile_providers = profile_document.get("model_providers")
                 provider_config = (
                     profile_providers.get(profile_provider)
-                    if isinstance(profile_provider, str) and profile_providers is not None
+                    if profile_provider and profile_providers is not None
                     else None
                 )
                 if provider_config is not None:
