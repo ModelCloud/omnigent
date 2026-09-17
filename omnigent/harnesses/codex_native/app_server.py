@@ -61,6 +61,7 @@ from omnigent.inner.codex_executor import (
     codex_routing_hook_skip_reason,
     materialize_codex_provider_config,
     read_codex_model_catalog,
+    set_codex_model_catalog_path,
     write_codex_hooks_file,
 )
 from omnigent.inner.databricks_executor import (
@@ -1396,6 +1397,8 @@ class CodexNativeAppServer:
     :param model_catalog_rows: Fresh rows from the shared, launch-shaped
         ``model/list`` catalog. When present, startup derives migration
         acknowledgements locally instead of spawning ``codex debug models``.
+    :param model_metadata_catalog: Optional full catalog written into the
+        private home before startup for an OpenAI-compatible local model.
     :param trust_project: Whether to trust :attr:`cwd` in the private
         session config before startup. Runner-owned headless sessions set
         this because nobody can answer Codex's project-trust TUI prompt.
@@ -1446,6 +1449,7 @@ class CodexNativeAppServer:
     pinned_model: str | None = None
     pinned_effort: str | None = None
     model_catalog_rows: list[_JsonObject] | None = None
+    model_metadata_catalog: _JsonObject | None = None
     process_registry_tag: str | None = None
     process_owner_lock: CodexNativeProcessOwnerLock | None = None
     codex_cli_version: tuple[int, int, int] | None = None
@@ -1524,6 +1528,17 @@ class CodexNativeAppServer:
             extend_model_catalog=codex_extended_catalog_requested(self.env),
             config_profile=self.config_profile,
         )
+        if self.model_metadata_catalog is not None:
+            catalog_path = self.codex_home / "omnigent-model-metadata.json"
+            catalog_path.write_text(
+                json.dumps(self.model_metadata_catalog, separators=(",", ":")),
+                encoding="utf-8",
+            )
+            if not set_codex_model_catalog_path(self.codex_home / "config.toml", catalog_path):
+                _logger.warning(
+                    "Could not register private model metadata catalog for %s",
+                    self.pinned_model or "Codex session",
+                )
         if self.isolated_env_keys:
             # Prevent fallback to $HOME/.codex/auth.json.  The provider's
             # configured bearer env-key is the only credential this runtime
@@ -2595,6 +2610,7 @@ def build_codex_native_server(
     trust_all_hooks: bool = False,
     reasoning_effort: str | None = None,
     model_catalog_rows: list[_JsonObject] | None = None,
+    model_metadata_catalog: _JsonObject | None = None,
     config_source: Path | None = None,
     isolated_env_keys: tuple[str, ...] = (),
     process_registry_path: Path | None = None,
@@ -2653,6 +2669,8 @@ def build_codex_native_server(
         the copied config's value.
     :param model_catalog_rows: Fresh rows from the shared launch-shaped
         ``model/list`` catalog, used to avoid a redundant migration probe.
+    :param model_metadata_catalog: Optional full catalog written into the
+        session's private home before startup for an OpenAI-compatible model.
     :returns: Configured app-server process wrapper.
     :raises ImportError: If no Codex CLI is available.
     :raises OSError: If Databricks routing was requested but no
@@ -2744,6 +2762,7 @@ def build_codex_native_server(
         pinned_model=pinned_model,
         pinned_effort=reasoning_effort,
         model_catalog_rows=model_catalog_rows,
+        model_metadata_catalog=model_metadata_catalog,
         trust_project=trust_project,
         trust_all_hooks=trust_all_hooks,
     )

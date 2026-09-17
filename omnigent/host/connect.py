@@ -718,6 +718,23 @@ HARNESS_CREDENTIAL_ENV_VARS: frozenset[str] = frozenset(
 # their runners need; everything unnamed stays behind the allowlist.
 RUNNER_ENV_PASSTHROUGH_ENV_VAR: str = "OMNIGENT_RUNNER_ENV_PASSTHROUGH"
 
+
+def _localdex_credential_env_vars() -> frozenset[str]:
+    """Return only the credential variable declared by LocalDex's config.
+
+    LocalDex is intentionally outside Omnigent's global provider config, so
+    the normal provider-credential discovery cannot see its ``env_key``.  A
+    runner needs that explicit key to materialize a selected local model; the
+    model-specific Codex child environment remains the boundary that decides
+    whether the bearer reaches a terminal process.
+    """
+    try:
+        from omnigent.harnesses.localdex_native.config import load_localdex_config
+
+        return frozenset({load_localdex_config(require_token=False).env_key})
+    except (FileNotFoundError, ValueError, OSError):
+        return frozenset()
+
 # HTTP statuses on the WebSocket upgrade that are worth retrying. Everything
 # else in the 4xx range is a permanent client error (auth, authorization,
 # wrong/old server) where reconnecting can never succeed — those fail loud.
@@ -825,7 +842,12 @@ def _build_runner_env(
         config_env_vars = provider_credential_env_vars(load_config())
     except (OSError, _OmnigentError):
         config_env_vars = frozenset()
-    forwarded = HARNESS_CREDENTIAL_ENV_VARS | extra_names | config_env_vars
+    forwarded = (
+        HARNESS_CREDENTIAL_ENV_VARS
+        | extra_names
+        | config_env_vars
+        | _localdex_credential_env_vars()
+    )
     env = {
         key: value
         for key, value in base_env.items()

@@ -2871,6 +2871,34 @@ def test_build_runner_env_passthrough_extends_forwarded_set() -> None:
     assert "UNLISTED_SECRET" not in env
 
 
+def test_build_runner_env_forwards_only_registered_localdex_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The additive LocalDex registration forwards its exact bearer key."""
+    monkeypatch.setattr(
+        "omnigent.host.connect._localdex_credential_env_vars",
+        lambda: frozenset({"LOCALDEX_API_KEY"}),
+    )
+    base = {
+        "PATH": "/usr/bin",
+        "HOME": "/root",
+        "LOCALDEX_API_KEY": "localdex-bearer",
+        "UNRELATED_API_KEY": "must-not-leak",
+    }
+
+    env = _build_runner_env(
+        base,
+        server_url="http://server",
+        runner_id="runner_abc",
+        binding_token="tok",
+        workspace="/ws",
+        parent_pid=42,
+    )
+
+    assert env["LOCALDEX_API_KEY"] == "localdex-bearer"
+    assert "UNRELATED_API_KEY" not in env
+
+
 def test_dispatch_trace_context_reaches_runner_but_not_daemon(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

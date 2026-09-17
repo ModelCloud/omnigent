@@ -4404,6 +4404,7 @@ async def _auto_create_codex_terminal(
     from omnigent.inner.codex_executor import _find_codex_cli
 
     _localdex_config = None
+    _localdex_model_catalog = None
     selected_local_model = False
     # LocalDex is an upstream-compatible Codex binary with one additive local
     # provider.  When it is installed, codex-native is the *only* harness: the
@@ -4416,6 +4417,7 @@ async def _auto_create_codex_terminal(
             LOCALDEX_CONFIG_ROOT,
             LOCALDEX_MODEL,
             load_localdex_config,
+            localdex_model_catalog,
             localdex_model_selected,
         )
 
@@ -4428,6 +4430,13 @@ async def _auto_create_codex_terminal(
             # Reject a local pick with no simple bearer credential while still
             # allowing ChatGPT/Codex launches on this same binary.
             load_localdex_config()
+            # Codex needs a complete catalog entry to know the local model's
+            # context and tool capabilities. Inference-Ultra advertises these
+            # through its model-discovery extension; older servers use the
+            # conservative descriptor retained by this helper.
+            _localdex_model_catalog = await asyncio.to_thread(
+                localdex_model_catalog, _localdex_config
+            )
         if selected_local_model:
             _codex_launch = dataclasses.replace(
                 _codex_launch,
@@ -4873,6 +4882,7 @@ async def _auto_create_codex_terminal(
         developer_instructions=_codex_developer_instructions,
         reasoning_effort=launch_config.reasoning_effort,
         model_catalog_rows=_fresh_codex_catalog,
+        model_metadata_catalog=_localdex_model_catalog if selected_local_model else None,
         # Codex can show project-trust and legacy-model migration prompts before
         # creating a thread. This TUI runs detached for the web UI, so persist
         # the runner-owned acknowledgements in the private session config.
