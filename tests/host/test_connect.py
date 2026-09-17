@@ -2816,6 +2816,48 @@ def test_build_runner_env_forwards_harness_credentials_and_endpoints() -> None:
     assert "MY_UNRELATED_SECRET" not in env
 
 
+def test_build_runner_env_forwards_declared_localdex_key_to_codex_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The local provider's configured bearer reaches its Codex runner only."""
+    from omnigent.harnesses.localdex_native import config as localdex_config
+
+    registration = localdex_config.LocalDexConfig(
+        local_model="QB/DSV4.1-Flash",
+        provider="localdex",
+        base_url="http://10.0.13.33:2120/v1",
+        env_key="LOCALDEX_API_KEY",
+    )
+    monkeypatch.setattr(
+        localdex_config,
+        "load_localdex_config",
+        lambda **_kwargs: registration,
+    )
+    base = {"PATH": "/usr/bin", "LOCALDEX_API_KEY": "test-localdex-key"}
+
+    codex_env = _build_runner_env(
+        base,
+        server_url="http://server",
+        runner_id="runner_abc",
+        binding_token="tok",
+        workspace="/ws",
+        parent_pid=42,
+        harness="codex-native",
+    )
+    other_env = _build_runner_env(
+        base,
+        server_url="http://server",
+        runner_id="runner_abc",
+        binding_token="tok",
+        workspace="/ws",
+        parent_pid=42,
+        harness="claude-native",
+    )
+
+    assert codex_env["LOCALDEX_API_KEY"] == "test-localdex-key"
+    assert "LOCALDEX_API_KEY" not in other_env
+
+
 def test_build_runner_env_forwards_omnigent_prefixed_harness_credentials() -> None:
     """Prefixed harness credential aliases forward without creating raw names."""
     from omnigent.host.connect import HARNESS_CREDENTIAL_ENV_VARS
