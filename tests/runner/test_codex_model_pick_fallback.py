@@ -149,6 +149,7 @@ async def codex_launch_harness(
         codex_home=tmp_path / "unused-home",
         env={"OPENAI_API_KEY": "test-key"},
         config_overrides=[],
+        config_profile=None,
         listen_url=None,
         start=AsyncMock(side_effect=lambda: events.append("app-server-start")),
         close=AsyncMock(),
@@ -157,6 +158,7 @@ async def codex_launch_harness(
     def build_server(**kwargs: Any) -> SimpleNamespace:
         builds.append(kwargs)
         app_server.codex_home = kwargs["codex_home"]
+        app_server.config_profile = kwargs.get("config_profile")
         # The real builder writes provider definitions into the private config.
         app_server.config_overrides = [
             override
