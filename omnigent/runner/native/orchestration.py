@@ -4404,30 +4404,52 @@ async def _auto_create_codex_terminal(
     from omnigent.inner.codex_executor import _find_codex_cli
 
     _localdex_config = None
-    if localdex:
+    # LocalDex is an upstream-compatible Codex binary with one additive local
+    # provider.  When it is installed, codex-native is the *only* harness: the
+    # selected model decides the provider, never a harness/agent swap.
+    # ``localdex`` remains solely as a compatibility path for pre-existing
+    # sessions created by the now-retired separate wrapper.
+    try:
         from omnigent.harnesses.localdex_native.config import (
             LOCALDEX_BINARY,
             LOCALDEX_CONFIG_ROOT,
+            localdex_model_selected,
             load_localdex_config,
         )
 
-        _localdex_config = load_localdex_config()
+        _localdex_config = load_localdex_config(require_token=False)
         if not LOCALDEX_BINARY.is_file():
             raise FileNotFoundError(f"LocalDex binary is missing: {LOCALDEX_BINARY}")
+        selected_model = default_model
+        selected_local_model = localdex_model_selected(_localdex_config, selected_model)
+        if selected_local_model:
+            # Reject a local pick with no simple bearer credential while still
+            # allowing ChatGPT/Codex launches on this same binary.
+            load_localdex_config()
         _codex_launch = dataclasses.replace(
             _codex_launch,
             config_overrides=[
-                f"model_provider={json.dumps(_localdex_config.provider)}",
-                f"model={json.dumps(_localdex_config.model)}",
+                f"model_provider={json.dumps(_localdex_config.provider if selected_local_model else 'openai')}",
+                *([f"model={json.dumps(selected_model)}"] if selected_model is not None else []),
             ],
-            model=_localdex_config.model,
+            model=selected_model,
             profile=None,
             config_profile=None,
-            summary="isolated LocalDex provider",
-            login_required=False,
+            summary=(
+                "LocalDex local provider"
+                if selected_local_model
+                else "LocalDex ChatGPT/OpenAI provider"
+            ),
+            login_required=not selected_local_model,
         )
+    except FileNotFoundError:
+        # A stock Codex installation remains useful on hosts that have not
+        # received LocalDex yet; it has no local row in the host picker.
+        _localdex_config = None
 
-    _codex_cli_path = str(LOCALDEX_BINARY) if localdex else _find_codex_cli()
+    _codex_cli_path = (
+        str(LOCALDEX_BINARY) if _localdex_config is not None else _find_codex_cli()
+    )
     _catalog_launch = None
     _fresh_codex_catalog: list[_JsonObject] | None = None
     try:
@@ -4485,7 +4507,10 @@ async def _auto_create_codex_terminal(
                 exc_info=True,
                 extra={"session_id": session_id},
             )
-        if launch_config.model_override and _codex_catalog:
+        if launch_config.model_override and _codex_catalog and not (
+            _localdex_config is not None
+            and localdex_model_selected(_localdex_config, launch_config.model_override)
+        ):
             pick = launch_config.model_override
             reachable = codex_reachable_model_slug(pick, _codex_catalog)
             fresh_rows = _codex_catalog
@@ -4816,8 +4841,12 @@ async def _auto_create_codex_terminal(
         # and can incorrectly require a ChatGPT login even when the selected
         # local provider explicitly has requires_openai_auth = false.
         config_profile=_codex_launch.config_profile,
-        config_source=LOCALDEX_CONFIG_ROOT if localdex else None,
-        isolated_env_keys=(_localdex_config.env_key,) if _localdex_config is not None else (),
+        config_source=LOCALDEX_CONFIG_ROOT if _localdex_config is not None else None,
+        # A unified LocalDex home retains auth.json and cloud configuration for
+        # official models.  The local provider's explicit env_key is resolved
+        # by Codex only when that provider is selected; do not turn the whole
+        # process into the old authless-only mode.
+        isolated_env_keys=(),
         process_registry_path=(bridge_dir.parent / "process-registry.json") if localdex else None,
         process_tag_prefix="localdex-native" if localdex else "codex-native",
         client_identity=(

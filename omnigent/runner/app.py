@@ -5724,6 +5724,30 @@ def create_runner_app(
             read_codex_home_config_model,
             Path(state.codex_home),
         )
+        # A LocalDex installation is still ``codex-native``. Its custom
+        # OpenAI-compatible provider is not reported by Codex's account
+        # ``model/list`` response, so add the registered local model to that
+        # very same live picker.  It is deliberately not a second harness or
+        # a provider-derived replacement for the account rows.
+        if _session_harness_name(conv_id) == "codex-native":
+            try:
+                from omnigent.harnesses.localdex_native.config import load_localdex_config
+
+                localdex = await asyncio.to_thread(load_localdex_config)
+            except (FileNotFoundError, ValueError):
+                localdex = None
+            if localdex is not None and not any(
+                row.get("id") == localdex.local_model or row.get("model") == localdex.local_model
+                for row in rows
+            ):
+                rows.insert(
+                    0,
+                    {
+                        "id": localdex.local_model,
+                        "model": localdex.local_model,
+                        "displayName": localdex.local_model,
+                    },
+                )
         marked = mark_launch_default(rows, active_model)
         # Write the live account rows back to the shared catalog store so the
         # pre-launch picker converges to account truth after the first

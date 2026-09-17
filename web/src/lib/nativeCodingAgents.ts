@@ -147,20 +147,6 @@ export const NATIVE_CODING_AGENTS = [
     fullySupported: true,
   },
   {
-    // LocalDex is an isolated Codex app-server fork. It deliberately shares
-    // Codex's visual treatment, but keeps a separate harness and wrapper
-    // identity so its provider, bridge state, and raw rollouts cannot mix.
-    key: "localdex",
-    agentName: "localdex-native-ui",
-    harness: "localdex-native",
-    wrapperLabel: "localdex-native-ui",
-    subagentWrapperLabel: "localdex-native-ui-subagent",
-    displayName: "LocalDex",
-    iconKind: "codex",
-    sortRank: 21,
-    pinnedModel: "QB/DSV4.1-Flash",
-  },
-  {
     key: "opencode",
     agentName: "opencode-native-ui",
     harness: "opencode-native",

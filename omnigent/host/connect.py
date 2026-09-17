@@ -3041,11 +3041,35 @@ class HostProcess:
             # that cannot run is a failed lookup, not a successful empty catalog.
             probed = await self._probed_codex_model_options()
             if probed is not None:
+                # LocalDex is the Codex binary installed on these hosts, not a
+                # second harness.  Its simple-bearer provider contributes one
+                # additional row to the exact same native Codex picker.  The
+                # account rows remain the app-server's own ChatGPT catalog.
+                try:
+                    from omnigent.harnesses.localdex_native.config import load_localdex_config
+
+                    localdex = await asyncio.to_thread(load_localdex_config, require_token=False)
+                except FileNotFoundError:
+                    localdex = None
+                except ValueError:
+                    _logger.warning("LocalDex provider registration is invalid", exc_info=True)
+                    localdex = None
+                if localdex is not None and os.environ.get(localdex.env_key):
+                    local_row = {
+                        "id": localdex.local_model,
+                        "model": localdex.local_model,
+                        "displayName": localdex.local_model,
+                    }
+                    rows = [local_row, *probed.models]
+                    routable = [localdex.local_model, *probed.routable_models]
+                else:
+                    rows = probed.models
+                    routable = probed.routable_models
                 return HostModelOptionsResultFrame(
                     request_id=frame.request_id,
                     status="ok",
-                    models=with_source(probed.models),
-                    routable_models=probed.routable_models,
+                    models=with_source(rows),
+                    routable_models=routable,
                 )
             return HostModelOptionsResultFrame(
                 request_id=frame.request_id,
