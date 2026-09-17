@@ -3256,6 +3256,7 @@ def resolve_native_codex_launch(
 
     config_profile = _native_codex_config_profile(spec)
     if config_profile is not None:
+        _logger.info("native-codex routing: Codex configuration profile %r", config_profile)
         return _codex_config_profile_launch(model=model, config_profile=config_profile)
 
     explicit = load_config()
