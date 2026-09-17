@@ -1954,6 +1954,7 @@ def test_native_codex_profile_and_history_are_bridged(tmp_path: Path) -> None:
                 'base_url = "http://local.invalid/v1"',
                 'env_key = "LOCAL_KEY"',
                 'wire_api = "responses"',
+                'requires_openai_auth = false',
                 '',
             ]
         ),
@@ -1970,6 +1971,8 @@ def test_native_codex_profile_and_history_are_bridged(tmp_path: Path) -> None:
     assert bridged_config["model_provider"] == "local-openai"
     assert bridged_config["model_catalog_json"] == "/models/local.json"
     assert bridged_config["model_providers"]["local-openai"]["base_url"] == "http://local.invalid/v1"
+    assert (target_home / "auth.json").read_text(encoding="utf-8") == "{}\n"
+    assert not (target_home / "auth.json").is_symlink()
     assert (target_home / "sessions").is_symlink()
     assert (target_home / "sessions").resolve() == (source_home / "sessions").resolve()
 

@@ -1029,10 +1029,17 @@ def _populate_codex_home_config(
     if profile_disables_openai_auth:
         symlink_files = tuple(name for name in symlink_files if name != "auth.json")
         # A resumed native session may reuse a pre-existing private home from
-        # before its profile was selected. Remove that stale bridge as well.
+        # before its profile was selected. Replace that stale bridge with a
+        # private empty marker rather than merely deleting it: Codex otherwise
+        # falls back to ``$HOME/.codex/auth.json`` and can select the user's
+        # ChatGPT account for an explicitly authless local provider. The
+        # regular marker also prevents a later profile-free bridge pass from
+        # recreating the symlink.
         stale_auth = target_dir / "auth.json"
         if stale_auth.exists() or stale_auth.is_symlink():
             stale_auth.unlink()
+        stale_auth.write_text("{}\n", encoding="utf-8")
+        os.chmod(stale_auth, 0o600)
     if not minimal_config:
         symlink_files += _CODEX_HOME_GLOBAL_INSTRUCTION_FILES
     if inject_hooks:
