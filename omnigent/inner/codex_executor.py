@@ -1116,6 +1116,42 @@ def _populate_codex_home_config(
         profile_target = target_dir / profile_file.name
         if profile_file.is_file() and not (profile_target.exists() or profile_target.is_symlink()):
             shutil.copy2(profile_file, profile_target)
+        # ``codex app-server`` validates ``config.toml`` before it layers a
+        # named profile. Its explicit ``model_provider=…`` launch override
+        # therefore fails unless the provider table is already available in
+        # the private base config. Mirror only the selected provider and model
+        # catalog into that private config; the complete profile remains the
+        # user-facing source of truth for normal Codex invocations.
+        config_path = target_dir / "config.toml"
+        if profile_file.is_file() and config_path.is_file():
+            try:
+                import tomlkit
+
+                profile_document = tomlkit.parse(profile_file.read_text(encoding="utf-8"))
+                profile_provider = profile_document.get("model_provider")
+                profile_providers = profile_document.get("model_providers")
+                provider_config = (
+                    profile_providers.get(profile_provider)
+                    if isinstance(profile_provider, str) and profile_providers is not None
+                    else None
+                )
+                if provider_config is not None:
+                    base_document = tomlkit.parse(config_path.read_text(encoding="utf-8"))
+                    providers = base_document.get("model_providers")
+                    if providers is None:
+                        providers = tomlkit.table()
+                        base_document["model_providers"] = providers
+                    providers[profile_provider] = provider_config
+                    base_document["model_provider"] = profile_provider
+                    if "model_catalog_json" in profile_document:
+                        base_document["model_catalog_json"] = profile_document["model_catalog_json"]
+                    config_path.write_text(tomlkit.dumps(base_document), encoding="utf-8")
+            except (OSError, tomllib.TOMLDecodeError, ValueError):
+                logger.warning(
+                    "could not mirror provider from Codex profile %s into private config",
+                    profile_file,
+                    exc_info=True,
+                )
 
 
 def materialize_codex_provider_config(

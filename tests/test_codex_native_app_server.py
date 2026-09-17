@@ -1943,14 +1943,33 @@ def test_native_codex_profile_and_history_are_bridged(tmp_path: Path) -> None:
     source_home = tmp_path / "source-codex-home"
     source_home.mkdir()
     (source_home / "config.toml").write_text('model = "base"\n', encoding="utf-8")
-    (source_home / "local.config.toml").write_text('model = "local"\n', encoding="utf-8")
+    (source_home / "local.config.toml").write_text(
+        '\n'.join(
+            [
+                'model = "local"',
+                'model_provider = "local-openai"',
+                'model_catalog_json = "/models/local.json"',
+                '',
+                '[model_providers.local-openai]',
+                'base_url = "http://local.invalid/v1"',
+                'env_key = "LOCAL_KEY"',
+                'wire_api = "responses"',
+                '',
+            ]
+        ),
+        encoding="utf-8",
+    )
     (source_home / "sessions").mkdir()
     target_home = tmp_path / "native-codex-home"
     target_home.mkdir()
 
     _populate_codex_home_config(target_home, source_home, config_profile="local")
 
-    assert (target_home / "local.config.toml").read_text(encoding="utf-8") == 'model = "local"\n'
+    assert (target_home / "local.config.toml").is_file()
+    bridged_config = tomllib.loads((target_home / "config.toml").read_text(encoding="utf-8"))
+    assert bridged_config["model_provider"] == "local-openai"
+    assert bridged_config["model_catalog_json"] == "/models/local.json"
+    assert bridged_config["model_providers"]["local-openai"]["base_url"] == "http://local.invalid/v1"
     assert (target_home / "sessions").is_symlink()
     assert (target_home / "sessions").resolve() == (source_home / "sessions").resolve()
 
