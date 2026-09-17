@@ -109,6 +109,8 @@ export interface NativeCodingAgentSpec {
   subagentWrapperLabel?: string;
   displayName: string;
   iconKind: NativeCodingAgentIconKind;
+  /** Fixed model displayed for a provider-pinned native harness. */
+  pinnedModel?: string;
   sortRank: number;
   capabilities?: readonly NativeCodingAgentCapability[];
   /**
@@ -156,6 +158,7 @@ export const NATIVE_CODING_AGENTS = [
     displayName: "LocalDex",
     iconKind: "codex",
     sortRank: 21,
+    pinnedModel: "QB/DSV4.1-Flash",
   },
   {
     key: "opencode",
