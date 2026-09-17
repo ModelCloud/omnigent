@@ -3738,11 +3738,15 @@ def codex_terminal_env(app_server: CodexNativeAppServer) -> dict[str, str]:
     :param app_server: Running app-server wrapper.
     :returns: Environment variables for the terminal process.
     """
+    profile_credentials = set(
+        _authless_codex_profile_env_passthrough(app_server.config_profile)
+    )
     return {
         key: value
         for key, value in {**app_server.env, "CODEX_HOME": str(app_server.codex_home)}.items()
         if key
         in {"CODEX_HOME", "DATABRICKS_HOST", "DATABRICKS_CODEX_TOKEN", "OTEL_RESOURCE_ATTRIBUTES"}
+        or key in profile_credentials
         or key.startswith(("OPENAI_", "HTTP_", "HTTPS_", "NO_PROXY", "ALL_PROXY"))
     }
 
