@@ -1261,6 +1261,7 @@ async def _prepare_codex_terminal(
             cwd=Path.cwd(),
             model=_codex_launch.model,
             profile=_codex_launch.profile,
+            config_profile=_codex_launch.config_profile,
             codex_path=command,
             extra_config_overrides=_codex_launch.config_overrides,
             bridge_dir=bridge_dir,
@@ -1314,6 +1315,7 @@ async def _prepare_codex_terminal(
                 # the app-server so it resolves the Omnigent provider
                 # and skips the OpenAI-login onboarding screen.
                 config_overrides=tuple(app_server.config_overrides),
+                config_profile=app_server.config_profile,
                 codex_cli_version=app_server.codex_cli_version,
             )
             terminal_id = launched_terminal.terminal_id
@@ -2732,6 +2734,7 @@ async def _launch_codex_terminal(
     remote_url: str,
     env: dict[str, str],
     config_overrides: tuple[str, ...] = (),
+    config_profile: str | None = None,
     codex_cli_version: tuple[int, int, int] | None = None,
 ) -> LaunchedCodexTerminal:
     """
@@ -2760,6 +2763,7 @@ async def _launch_codex_terminal(
         thread_id=thread_id,
         remote_url=remote_url,
         config_overrides=config_overrides,
+        config_profile=config_profile,
         codex_cli_version=codex_cli_version,
     )
     body = {

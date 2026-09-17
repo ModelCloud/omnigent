@@ -4182,9 +4182,13 @@ def create_runner_app(
                 _launch_pre = _claude_pre_launch
                 _launch_build = _claude_build_context
 
-            elif harness_name == "codex-native":
+            elif harness_name in {"codex-native", "localdex-native"}:
 
                 async def _codex_pre_launch(has_terminal: bool) -> PreLaunchResult:
+                    if harness_name == "localdex-native":
+                        # LocalDex has its own raw rollout root.  Do not try to
+                        # adopt a Codex-native bridge during startup.
+                        return PreLaunchResult(needs_terminal=True)
                     needs = (
                         init_context.envelope is not None
                         or await _codex_session_needs_runner_terminal(server_client, session_id)
@@ -8376,6 +8380,19 @@ def create_runner_app(
             write_mcp_bridge_config(codex_bdir)
             await _ensure_comment_relay_started(
                 conv, explicit_bridge_dir=codex_bdir, await_notify=False
+            )
+        elif harness_name == "localdex-native":
+            from omnigent.harnesses.codex_native.bridge import write_mcp_bridge_config
+            from omnigent.harnesses.localdex_native.bridge import bridge_dir_for_bridge_id
+
+            localdex_labels = await _session_labels_for_runner_spawn(
+                server_client=server_client, session_id=conv
+            )
+            localdex_bid = localdex_labels.get("omnigent.localdex_native.bridge_id")
+            localdex_bdir = bridge_dir_for_bridge_id(localdex_bid or conv)
+            write_mcp_bridge_config(localdex_bdir)
+            await _ensure_comment_relay_started(
+                conv, explicit_bridge_dir=localdex_bdir, await_notify=False
             )
         elif harness_name == "antigravity-native":
             from omnigent.harnesses.antigravity_native.bridge import (

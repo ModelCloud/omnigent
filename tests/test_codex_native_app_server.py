@@ -1904,6 +1904,93 @@ def test_remote_codex_rejects_unmaterialized_provider_config() -> None:
         )
 
 
+def test_native_codex_profile_is_passed_to_app_server_and_remote_tui() -> None:
+    """A named profile is global CLI state for both native processes."""
+    from omnigent.harnesses.codex_native import app_server as codex_native_app_server
+
+    app_server_argv = _build_native_codex_app_server_argv(
+        tagged_argv0="codex session-tag",
+        listen_url="ws://127.0.0.1:9876",
+        config_overrides=['model_provider="local-openai"'],
+        config_profile="local",
+    )
+    remote_argv = codex_native_app_server.build_codex_remote_args(
+        codex_args=(),
+        thread_id=None,
+        remote_url="ws://127.0.0.1:9876",
+        config_overrides=('model_provider="local-openai"',),
+        config_profile="local",
+    )
+
+    assert app_server_argv[:4] == ["codex session-tag", "--profile", "local", "app-server"]
+    assert remote_argv[:2] == ["--profile", "local"]
+
+
+def test_empty_agent_codex_profile_uses_host_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unset serialized agent field must not suppress the host profile."""
+    from types import SimpleNamespace
+
+    from omnigent.harnesses.codex_native import app_server as codex_native_app_server
+
+    monkeypatch.setenv("OMNIGENT_CODEX_PROFILE", "local")
+    spec = SimpleNamespace(executor=SimpleNamespace(config={"codex_profile": ""}))
+
+    assert codex_native_app_server._native_codex_config_profile(spec) == "local"
+
+
+def test_native_codex_profile_and_history_are_bridged(tmp_path: Path) -> None:
+    """Native sessions retain user profiles and the normal Codex resume store."""
+    source_home = tmp_path / "source-codex-home"
+    source_home.mkdir()
+    (source_home / "config.toml").write_text(
+        '\n'.join(
+            [
+                'model = "base"',
+                'model_provider = "databricks"',
+                '',
+                '[model_providers.databricks]',
+                'base_url = "https://databricks.invalid/v1"',
+                'env_key = "DATABRICKS_CODEX_TOKEN"',
+                '',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (source_home / "local.config.toml").write_text(
+        '\n'.join(
+            [
+                'model = "local"',
+                'model_provider = "local-openai"',
+                'model_catalog_json = "/models/local.json"',
+                '',
+                '[model_providers.local-openai]',
+                'base_url = "http://local.invalid/v1"',
+                'env_key = "LOCAL_KEY"',
+                'wire_api = "responses"',
+                'requires_openai_auth = false',
+                '',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (source_home / "sessions").mkdir()
+    target_home = tmp_path / "native-codex-home"
+    target_home.mkdir()
+
+    _populate_codex_home_config(target_home, source_home, config_profile="local")
+
+    assert (target_home / "local.config.toml").is_file()
+    bridged_config = tomllib.loads((target_home / "config.toml").read_text(encoding="utf-8"))
+    assert bridged_config["model_provider"] == "local-openai"
+    assert bridged_config["model_catalog_json"] == "/models/local.json"
+    assert bridged_config["model_providers"]["local-openai"]["base_url"] == "http://local.invalid/v1"
+    assert "databricks" not in bridged_config["model_providers"]
+    assert (target_home / "auth.json").read_text(encoding="utf-8") == "{}\n"
+    assert not (target_home / "auth.json").is_symlink()
+    assert (target_home / "sessions").is_symlink()
+    assert (target_home / "sessions").resolve() == (source_home / "sessions").resolve()
+
+
 async def test_untrusted_hook_is_trusted_via_batchwrite() -> None:
     """
     An untrusted Omnigent hook is trusted with its currentHash.

@@ -66,6 +66,7 @@ from omnigent.runner.resource_registry import (
     ANTIGRAVITY_NATIVE_TERMINAL_ROLE,
     CLAUDE_NATIVE_TERMINAL_ROLE,
     CODEX_NATIVE_TERMINAL_ROLE,
+    LOCALDEX_NATIVE_TERMINAL_ROLE,
     CURSOR_NATIVE_TERMINAL_ROLE,
     DEVIN_NATIVE_TERMINAL_ROLE,
     GOOSE_NATIVE_TERMINAL_ROLE,
@@ -4300,6 +4301,7 @@ async def _auto_create_codex_terminal(
     agent_spec: AgentSpec | ResolvedSpec | None = None,
     server_client: httpx.AsyncClient | None = None,
     ensure_comment_relay: _EnsureCommentRelay | None = None,
+    localdex: bool = False,
 ) -> SessionResourceView:
     """
     Auto-create a Codex terminal for a codex-native session.
@@ -4377,7 +4379,14 @@ async def _auto_create_codex_terminal(
     )
     original_external_session_id = launch_config.external_session_id
     workspace = str(launch_config.workspace)
-    bridge_dir = prepare_bridge_dir(session_id)
+    if localdex:
+        from omnigent.harnesses.localdex_native.bridge import (
+            prepare_bridge_dir as _prepare_localdex_bridge,
+        )
+
+        bridge_dir = _prepare_localdex_bridge(session_id)
+    else:
+        bridge_dir = prepare_bridge_dir(session_id)
     socket_path = socket_path_for_bridge_dir(bridge_dir)
     codex_home = codex_home_for_bridge_dir(bridge_dir)
     # Route across all offerings: a configured provider (omnigent setup),
@@ -4394,7 +4403,31 @@ async def _auto_create_codex_terminal(
     _codex_launch = resolve_native_codex_launch(model=default_model, spec=_launch_spec)
     from omnigent.inner.codex_executor import _find_codex_cli
 
-    _codex_cli_path = _find_codex_cli()
+    _localdex_config = None
+    if localdex:
+        from omnigent.harnesses.localdex_native.config import (
+            LOCALDEX_BINARY,
+            LOCALDEX_CONFIG_ROOT,
+            load_localdex_config,
+        )
+
+        _localdex_config = load_localdex_config()
+        if not LOCALDEX_BINARY.is_file():
+            raise FileNotFoundError(f"LocalDex binary is missing: {LOCALDEX_BINARY}")
+        _codex_launch = dataclasses.replace(
+            _codex_launch,
+            config_overrides=[
+                f"model_provider={json.dumps(_localdex_config.provider)}",
+                f"model={json.dumps(_localdex_config.model)}",
+            ],
+            model=_localdex_config.model,
+            profile=None,
+            config_profile=None,
+            summary="isolated LocalDex provider",
+            login_required=False,
+        )
+
+    _codex_cli_path = str(LOCALDEX_BINARY) if localdex else _find_codex_cli()
     _catalog_launch = None
     _fresh_codex_catalog: list[_JsonObject] | None = None
     try:
@@ -4777,6 +4810,19 @@ async def _auto_create_codex_terminal(
         cwd=Path(workspace),
         model=_codex_launch.model,
         profile=_codex_launch.profile,
+        # A named Codex profile is global CLI state, not merely resolver
+        # metadata.  Without passing it into the host-runner app-server,
+        # its private CODEX_HOME falls back to the generated generic provider
+        # and can incorrectly require a ChatGPT login even when the selected
+        # local provider explicitly has requires_openai_auth = false.
+        config_profile=_codex_launch.config_profile,
+        config_source=LOCALDEX_CONFIG_ROOT if localdex else None,
+        isolated_env_keys=(_localdex_config.env_key,) if _localdex_config is not None else (),
+        process_registry_path=(bridge_dir.parent / "process-registry.json") if localdex else None,
+        process_tag_prefix="localdex-native" if localdex else "codex-native",
+        client_identity=(
+            "omnigent-localdex-native-auto" if localdex else "omnigent-codex-native-auto"
+        ),
         extra_config_overrides=[*_codex_launch.config_overrides, *mcp_overrides],
         bridge_dir=bridge_dir,
         ap_server_url=launch_config.policy_server_url,
@@ -4836,7 +4882,7 @@ async def _auto_create_codex_terminal(
 
     event_client = CodexAppServerClient(
         ws_url=codex_ws_url,
-        client_name="omnigent-codex-native-auto",
+        client_name=app_server.client_identity,
     )
     retained_resume_client: CodexAppServerClient | None = None
     if launch_config.external_session_id is not None:
@@ -4960,6 +5006,7 @@ async def _auto_create_codex_terminal(
             # built-in (which would force the first-run login screen and block
             # thread creation).
             config_overrides=tuple(app_server.config_overrides),
+            config_profile=_codex_launch.config_profile,
             codex_cli_version=app_server.codex_cli_version,
             # Omnigent provisions the private CODEX_HOME and vets hook sources
             # itself; skip the interactive trust prompt that headless sub-agents
@@ -4997,7 +5044,9 @@ async def _auto_create_codex_terminal(
         # A config ``command`` (isaac's wrapper) still applies; env path
         # overrides are deliberately not consulted on this managed-host path.
         _, _codex_overrides = resolve_harness_config(_codex_harness_cfg)
-        _codex_cmd_override = (_codex_overrides.get("codex-native") or {}).get("command")
+        _codex_cmd_override = (
+            None if localdex else (_codex_overrides.get("codex-native") or {}).get("command")
+        )
         configured_codex_command = (
             _codex_cmd_override.strip()
             if isinstance(_codex_cmd_override, str) and _codex_cmd_override.strip()
@@ -5034,13 +5083,17 @@ async def _auto_create_codex_terminal(
                     session_id,
                 )
         codex_launch_args = resolve_harness_args(
-            "codex-native", tuple(codex_remote_args), cfg=_codex_harness_cfg
+            "localdex-native" if localdex else "codex-native",
+            tuple(codex_remote_args),
+            cfg=_codex_harness_cfg,
         )
         terminal_view = await resource_registry.launch_auxiliary_terminal(
             session_id=session_id,
-            terminal_name="codex",
+            terminal_name="localdex" if localdex else "codex",
             session_key="main",
-            resource_role=CODEX_NATIVE_TERMINAL_ROLE,
+            resource_role=LOCALDEX_NATIVE_TERMINAL_ROLE
+            if localdex
+            else CODEX_NATIVE_TERMINAL_ROLE,
             parent_os_env=agent_os_env,
             spec=TerminalEnvSpec(
                 os_env=OSEnvSpec(
@@ -5080,9 +5133,9 @@ async def _auto_create_codex_terminal(
         _schedule_terminal_interactive_observer(
             session_id=session_id,
             resource_registry=resource_registry,
-            terminal_name="codex",
+            terminal_name="localdex" if localdex else "codex",
             session_key="main",
-            harness="codex-native",
+            harness="localdex-native" if localdex else "codex-native",
             readiness_signal="codex_composer",
             is_interactive=lambda pane: codex_terminal_interactive(bridge_dir, pane),
         )
@@ -8623,6 +8676,21 @@ async def _launch_codex(ctx: NativeLaunchContext) -> SessionResourceView:
         agent_spec=ctx.agent_spec,
         server_client=ctx.server_client,
         ensure_comment_relay=ctx.ensure_comment_relay,
+    )
+
+
+async def _launch_localdex(ctx: NativeLaunchContext) -> SessionResourceView:
+    """Adapter: build the isolated LocalDex native terminal."""
+    return await _auto_create_codex_terminal(
+        ctx.session_id,
+        ctx.resource_registry,
+        ctx.publish_event,
+        bundle_dir=ctx.bundle_dir,
+        skills_filter=ctx.skills_filter,
+        agent_spec=ctx.agent_spec,
+        server_client=ctx.server_client,
+        ensure_comment_relay=ctx.ensure_comment_relay,
+        localdex=True,
     )
 
 

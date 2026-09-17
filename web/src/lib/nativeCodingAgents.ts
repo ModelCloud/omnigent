@@ -58,6 +58,21 @@ export function codexNativeSubagentLabel(
   return labels[CODEX_NATIVE_NICKNAME_LABEL_KEY]?.trim() || null;
 }
 
+export type NativeCodingAgentKey =
+  | "claude"
+  | "codex"
+  | "localdex"
+  | "opencode"
+  | "pi"
+  | "cursor"
+  | "kiro"
+  | "goose"
+  | "qwen"
+  | "antigravity"
+  | "kimi"
+  | "hermes"
+  | "devin";
+
 export type NativeCodingAgentIconKind =
   | "claude"
   | "codex"
@@ -81,7 +96,7 @@ export type NativeCodingAgentCapability =
   | "devinPermission";
 
 export interface NativeCodingAgentSpec {
-  key: NativeCodingAgentIconKind;
+  key: NativeCodingAgentKey;
   agentName: string;
   harness: string;
   wrapperLabel: string;
@@ -94,6 +109,8 @@ export interface NativeCodingAgentSpec {
   subagentWrapperLabel?: string;
   displayName: string;
   iconKind: NativeCodingAgentIconKind;
+  /** Fixed model displayed for a provider-pinned native harness. */
+  pinnedModel?: string;
   sortRank: number;
   capabilities?: readonly NativeCodingAgentCapability[];
   /**
@@ -128,6 +145,20 @@ export const NATIVE_CODING_AGENTS = [
     sortRank: 20,
     capabilities: ["approvalMode"],
     fullySupported: true,
+  },
+  {
+    // LocalDex is an isolated Codex app-server fork. It deliberately shares
+    // Codex's visual treatment, but keeps a separate harness and wrapper
+    // identity so its provider, bridge state, and raw rollouts cannot mix.
+    key: "localdex",
+    agentName: "localdex-native-ui",
+    harness: "localdex-native",
+    wrapperLabel: "localdex-native-ui",
+    subagentWrapperLabel: "localdex-native-ui-subagent",
+    displayName: "LocalDex",
+    iconKind: "codex",
+    sortRank: 21,
+    pinnedModel: "QB/DSV4.1-Flash",
   },
   {
     key: "opencode",

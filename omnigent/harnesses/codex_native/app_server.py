@@ -1338,9 +1338,13 @@ def _build_native_codex_app_server_argv(
     tagged_argv0: str,
     listen_url: str,
     config_overrides: Sequence[str],
+    config_profile: str | None = None,
 ) -> list[str]:
     """Build argv for the native Codex app-server subprocess."""
-    argv = [tagged_argv0, "app-server", "--listen", listen_url]
+    argv = [tagged_argv0]
+    if config_profile:
+        argv.extend(["--profile", config_profile])
+    argv.extend(["app-server", "--listen", listen_url])
     for override in config_overrides:
         argv.extend(["-c", override])
     return argv
@@ -1418,6 +1422,17 @@ class CodexNativeAppServer:
     config_overrides: list[str]
     cwd: Path
     bridge_dir: Path
+    config_profile: str | None = None
+    # LocalDex owns its source config rather than falling back to ~/.codex.
+    # This also keeps app-server profile-free: current Codex rejects --profile
+    # on that subcommand.
+    config_source: Path | None = None
+    # Authless OpenAI-compatible providers receive only these declared bearer
+    # variables, never ambient OpenAI or Databricks credentials.
+    isolated_env_keys: tuple[str, ...] = ()
+    process_registry_path: Path | None = None
+    process_tag_prefix: str = "codex-native"
+    client_identity: str = "omnigent-codex-native-auto"
     developer_instructions: str | None = None
     ap_server_url: str | None = None
     ap_auth_headers: dict[str, str] | None = None
@@ -1481,7 +1496,7 @@ class CodexNativeAppServer:
                 router_bridge_dir = None
         self.router_hooks_registered = router_bridge_dir is not None and policy_hooks_supported
         routed_spawns = router_bridge_dir is not None
-        config_source = _codex_home_config_source_from_env()
+        config_source = self.config_source or _codex_home_config_source_from_env()
         model_migration_target: str | None = None
         if self.trust_project and self.pinned_model:
             catalog: object = self.model_catalog_rows
@@ -1507,7 +1522,15 @@ class CodexNativeAppServer:
             config_source,
             inject_hooks=self.router_hooks_registered,
             extend_model_catalog=codex_extended_catalog_requested(self.env),
+            config_profile=self.config_profile,
         )
+        if self.isolated_env_keys:
+            # Prevent fallback to $HOME/.codex/auth.json.  The provider's
+            # configured bearer env-key is the only credential this runtime
+            # may consult.
+            auth_path = self.codex_home / "auth.json"
+            auth_path.write_text("{}\n", encoding="utf-8")
+            os.chmod(auth_path, 0o600)
         if self.trust_project:
             _trust_codex_project(self.codex_home, self.cwd)
         # Write the MCP server config into config.toml so the app-server
@@ -1569,9 +1592,9 @@ class CodexNativeAppServer:
                     ap_server_url=self.ap_server_url,
                     ap_auth_headers=self.ap_auth_headers or {},
                 )
-        reconcile_codex_native_process_registry()
+        reconcile_codex_native_process_registry(registry_path=self.process_registry_path)
         resolved_listen = self.listen_url or f"unix://{self.socket_path}"
-        self.process_registry_tag = f"codex-native-{uuid.uuid4().hex}"
+        self.process_registry_tag = f"{self.process_tag_prefix}-{uuid.uuid4().hex}"
         tagged_argv0 = (
             f"{Path(self.codex_path).name} "
             f"{codex_native_session_tag_cmdline_arg(self.process_registry_tag)}"
@@ -1580,6 +1603,7 @@ class CodexNativeAppServer:
             tagged_argv0=tagged_argv0,
             listen_url=resolved_listen,
             config_overrides=self.config_overrides,
+            config_profile=self.config_profile,
         )
         proc_env = {**self.env, "CODEX_HOME": str(self.codex_home)}
         self.process_owner_lock = acquire_codex_native_process_owner_lock()
@@ -1605,6 +1629,7 @@ class CodexNativeAppServer:
                 pgid=_process_group_id(self.proc),
                 session_tag=self.process_registry_tag,
                 owner_lock_path=self.process_owner_lock.path,
+                registry_path=self.process_registry_path,
             )
         self.recent_stderr = []
         self.stderr_task = asyncio.create_task(
@@ -1797,7 +1822,9 @@ class CodexNativeAppServer:
                 _kill_process_tree(self.proc)
                 await self.proc.wait()
         if self.process_registry_tag is not None:
-            unregister_codex_native_process(self.process_registry_tag)
+            unregister_codex_native_process(
+                self.process_registry_tag, registry_path=self.process_registry_path
+            )
         if self.process_owner_lock is not None:
             self.process_owner_lock.close()
         if self.stderr_task is not None:
@@ -2556,6 +2583,7 @@ def build_codex_native_server(
     model: str | None,
     profile: str | None,
     bridge_dir: Path,
+    config_profile: str | None = None,
     ap_server_url: str | None = None,
     ap_auth_headers: dict[str, str] | None = None,
     python_executable: str | None = None,
@@ -2567,6 +2595,11 @@ def build_codex_native_server(
     trust_all_hooks: bool = False,
     reasoning_effort: str | None = None,
     model_catalog_rows: list[_JsonObject] | None = None,
+    config_source: Path | None = None,
+    isolated_env_keys: tuple[str, ...] = (),
+    process_registry_path: Path | None = None,
+    process_tag_prefix: str = "codex-native",
+    client_identity: str = "omnigent-codex-native-auto",
 ) -> CodexNativeAppServer:
     """
     Build a configured native Codex app-server process wrapper.
@@ -2577,6 +2610,9 @@ def build_codex_native_server(
     :param model: Optional Codex model id, e.g. ``"gpt-5.4-mini"``.
     :param profile: Optional Databricks CLI profile, e.g.
         ``"<your-profile>"``.
+    :param config_profile: Optional named Codex configuration profile, e.g.
+        ``"local"`` for ``$CODEX_HOME/local.config.toml``. This is distinct
+        from a Databricks profile and is passed to both app-server and TUI.
     :param bridge_dir: Native Codex bridge directory; the policy hook is
         pointed at it and reads the session id + Omnigent coordinates from it.
     :param ap_server_url: Omnigent server base URL the policy hook POSTs tool
@@ -2629,7 +2665,27 @@ def build_codex_native_server(
             "installed on a PATH the host daemon didn't inherit (e.g. an "
             "nvm-managed bin dir), set OMNIGENT_CODEX_PATH=/path/to/codex."
         )
-    env = _clean_codex_env()
+    authless_profile_env = _authless_codex_profile_env_passthrough(config_profile)
+    if isolated_env_keys:
+        authless_profile_env = tuple(sorted(set(isolated_env_keys)))
+    env = _clean_codex_env(authless_profile_env)
+    if authless_profile_env:
+        # ``codex-modelcloud`` is deliberately an authless, OpenAI-compatible
+        # runtime.  Do not let an ambient OpenAI or Databricks credential make
+        # it into the process: its selected profile's ``env_key`` is the only
+        # inference credential it may receive.  The profile config is copied
+        # into a private home by ``_populate_codex_home_config`` below, so its
+        # bearer token and base URL remain the complete routing contract.
+        env = {
+            key: value
+            for key, value in env.items()
+            if not key.startswith(("OPENAI_", "DATABRICKS_"))
+        }
+        # Codex's cloud-config channel owns a separate ChatGPT auth manager.
+        # It is not needed for a profile that explicitly routes all inference
+        # through a local/provider-specific credential, and must not refresh
+        # an ambient ChatGPT token during terminal startup or a turn.
+        env["CODEX_DISABLE_CLOUD_CONFIG"] = "1"
     config_overrides: list[str] = []
     pinned_model = model
     if profile is not None:
@@ -2673,6 +2729,12 @@ def build_codex_native_server(
         codex_home=codex_home,
         env=env,
         config_overrides=config_overrides,
+        config_profile=config_profile,
+        config_source=config_source,
+        isolated_env_keys=authless_profile_env,
+        process_registry_path=process_registry_path,
+        process_tag_prefix=process_tag_prefix,
+        client_identity=client_identity,
         cwd=cwd,
         bridge_dir=bridge_dir,
         developer_instructions=developer_instructions,
@@ -2701,6 +2763,9 @@ class NativeCodexLaunch:
     :param profile: Databricks profile for the ucode path, or ``None`` (a
         generic provider routes via *config_overrides*; CLI login uses
         neither).
+    :param config_profile: Named Codex profile selected for app-server and
+        remote TUI startup. It uses the user's profile settings while the
+        native bridge retains isolated writable integration settings.
     :param summary: Human-readable one-line description of the routing
         outcome (provider / profile / model, or the login-fallback state),
         set at resolution time and surfaced in the startup-timeout error so
@@ -2715,11 +2780,109 @@ class NativeCodexLaunch:
     config_overrides: list[str]
     model: str | None
     profile: str | None
+    config_profile: str | None = None
     summary: str = ""
     login_required: bool = False
 
 
 _MODEL_PROVIDER_OVERRIDE_PREFIX = "model_provider="
+
+
+def _native_codex_config_profile(spec: AgentSpec | None) -> str | None:
+    """Return the named Codex config profile selected for a native session.
+
+    A per-agent ``executor.config.codex_profile`` wins over the host-wide
+    ``OMNIGENT_CODEX_PROFILE`` setting. ``executor.profile`` stays reserved
+    for the legacy Databricks profile and is intentionally not reused.
+    """
+    value: object | None = spec.executor.config.get("codex_profile") if spec else None
+    # Agent specs commonly serialize an unset optional field as an empty
+    # string. Treat it exactly like an omitted field so the host-wide profile
+    # remains a real default rather than being accidentally suppressed.
+    if value is None or not str(value).strip():
+        value = os.environ.get("OMNIGENT_CODEX_PROFILE")
+    if value is None or not str(value).strip():
+        # Runner environment sanitization can remove OMNIGENT_* keys from
+        # ``os.environ`` after the process has started. Linux retains the
+        # original, non-secret service environment in procfs, so recover this
+        # explicit profile-selection setting for native child launches.
+        with contextlib.suppress(OSError):
+            for item in Path("/proc/self/environ").read_bytes().split(b"\0"):
+                key, separator, raw_value = item.partition(b"=")
+                if key == b"OMNIGENT_CODEX_PROFILE" and separator:
+                    value = raw_value.decode("utf-8", errors="replace")
+                    break
+    if value is None or not str(value).strip():
+        return None
+    profile = str(value).strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", profile):
+        raise ValueError(
+            "Codex profile names may contain only letters, numbers, underscores, and hyphens"
+        )
+    return profile
+
+
+def _authless_codex_profile_env_passthrough(config_profile: str | None) -> tuple[str, ...]:
+    """Return credential variable names required by one selected local profile.
+
+    Codex child processes deliberately receive a filtered environment. A
+    selected OpenAI-compatible local provider is different from ambient
+    OpenAI credentials: its ``env_key`` is an explicit part of the profile's
+    authentication contract. Preserve only such keys, and only for providers
+    which explicitly opt out of OpenAI/ChatGPT authentication.
+    """
+    if not config_profile:
+        return ()
+    import tomllib
+
+    profile_path = _codex_home_config_source_from_env() / f"{config_profile}.config.toml"
+    try:
+        document = tomllib.loads(profile_path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return ()
+    providers = document.get("model_providers")
+    if not isinstance(providers, dict):
+        return ()
+    names: set[str] = set()
+    for provider in providers.values():
+        if not isinstance(provider, dict) or provider.get("requires_openai_auth") is not False:
+            continue
+        env_key = provider.get("env_key")
+        if isinstance(env_key, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", env_key):
+            names.add(env_key)
+    return tuple(sorted(names))
+
+
+def _codex_config_profile_launch(*, model: str | None, config_profile: str) -> NativeCodexLaunch:
+    """Resolve a profile's model/provider into resume-safe native overrides."""
+    import tomllib
+
+    source_home = _codex_home_config_source_from_env()
+    profile_path = source_home / f"{config_profile}.config.toml"
+    try:
+        profile_config = tomllib.loads(profile_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"Codex profile {config_profile!r} was selected but {profile_path} does not exist"
+        ) from exc
+    except tomllib.TOMLDecodeError as exc:
+        raise ValueError(f"Codex profile {profile_path} is invalid TOML: {exc}") from exc
+
+    provider = profile_config.get("model_provider")
+    profile_model = profile_config.get("model")
+    overrides: list[str] = []
+    if isinstance(provider, str) and provider:
+        overrides.append(f"model_provider={json.dumps(provider)}")
+    resolved_model = model if model is not None else profile_model
+    if isinstance(resolved_model, str) and resolved_model:
+        overrides.append(f"model={json.dumps(resolved_model)}")
+    return NativeCodexLaunch(
+        config_overrides=overrides,
+        model=resolved_model if isinstance(resolved_model, str) else None,
+        profile=None,
+        config_profile=config_profile,
+        summary=f"Codex configuration profile {config_profile!r}",
+    )
 
 
 def native_codex_launch_pins_model_provider(launch: NativeCodexLaunch) -> bool:
@@ -3172,6 +3335,11 @@ def resolve_native_codex_launch(
     )
     from omnigent.spec.types import DatabricksAuth
 
+    config_profile = _native_codex_config_profile(spec)
+    if config_profile is not None:
+        _logger.info("native-codex routing: Codex configuration profile %r", config_profile)
+        return _codex_config_profile_launch(model=model, config_profile=config_profile)
+
     explicit = load_config()
     config_detection = codex_config_detection()
     config_provider_dismissed = (
@@ -3620,12 +3788,27 @@ def codex_terminal_env(app_server: CodexNativeAppServer) -> dict[str, str]:
     :param app_server: Running app-server wrapper.
     :returns: Environment variables for the terminal process.
     """
+    profile_credentials = set(app_server.isolated_env_keys) or set(
+        _authless_codex_profile_env_passthrough(app_server.config_profile)
+    )
+    authless_profile = bool(profile_credentials)
+    allowed_exact = {
+        "CODEX_HOME",
+        "CODEX_DISABLE_CLOUD_CONFIG",
+        "OTEL_RESOURCE_ATTRIBUTES",
+    }
+    if not authless_profile:
+        allowed_exact.update({"DATABRICKS_HOST", "DATABRICKS_CODEX_TOKEN"})
     return {
         key: value
         for key, value in {**app_server.env, "CODEX_HOME": str(app_server.codex_home)}.items()
-        if key
-        in {"CODEX_HOME", "DATABRICKS_HOST", "DATABRICKS_CODEX_TOKEN", "OTEL_RESOURCE_ATTRIBUTES"}
-        or key.startswith(("OPENAI_", "HTTP_", "HTTPS_", "NO_PROXY", "ALL_PROXY"))
+        if key in allowed_exact
+        or key in profile_credentials
+        or (
+            not authless_profile
+            and key.startswith(("OPENAI_", "HTTP_", "HTTPS_", "NO_PROXY", "ALL_PROXY"))
+        )
+        or (authless_profile and key.startswith(("HTTP_", "HTTPS_", "NO_PROXY", "ALL_PROXY")))
     }
 
 
@@ -3756,6 +3939,7 @@ def build_codex_remote_args(
     thread_id: str | None,
     remote_url: str,
     config_overrides: tuple[str, ...] = (),
+    config_profile: str | None = None,
     codex_cli_version: tuple[int, int, int] | None = None,
     bypass_sandbox: bool = False,
     bypass_hook_trust: bool = False,
@@ -3825,6 +4009,8 @@ def build_codex_remote_args(
     :returns: Codex argv tail after the executable.
     """
     override_args: list[str] = []
+    if config_profile:
+        override_args.extend(["--profile", config_profile])
     for override in config_overrides:
         if override.lstrip().startswith("model_providers."):
             raise ValueError(

@@ -21,6 +21,7 @@ import sys
 import tempfile
 import threading
 import time
+import tomllib
 from collections.abc import (
     AsyncIterator,
     Awaitable,
@@ -156,6 +157,12 @@ _CODEX_HOME_COPY_FILES = ("config.toml",)
 # one real cache dedupes it across sessions; codex's own writes land in the
 # shared cache exactly as they would without the private home.
 _CODEX_HOME_SYMLINK_DIRS = (
+    # Rollouts are the durable Codex resume history. Sharing them makes a
+    # native app-server session visible to the user's regular Codex CLI (and
+    # vice versa) while leaving runner-owned config and hooks isolated.
+    Path("sessions"),
+    Path("archived_sessions"),
+    Path("thread-writer-locks"),
     Path("plugins") / "cache",
     # Cross-process lock guarding ``.credentials.json``; shared so a token
     # refresh in one session cannot race another into a stale refresh token.
@@ -935,6 +942,7 @@ def _populate_codex_home_config(
     minimal_config: bool | None = None,
     inject_hooks: bool = False,
     extend_model_catalog: bool = False,
+    config_profile: str | None = None,
 ) -> None:
     """
     Bridge user config files from the real ``CODEX_HOME`` into the temp one.
@@ -980,6 +988,10 @@ def _populate_codex_home_config(
         its own catalog plus the gateway-only arms. Costs a ``codex debug
         models`` probe, so it is reserved for Smart Routing sessions whose
         turns/spawns can land on such an arm.
+    :param config_profile: Optional named Codex profile to copy from the
+        source home, e.g. ``"local"`` for ``local.config.toml``. The session
+        selects it with ``codex --profile local`` while retaining an isolated
+        writable base config for Omnigent's bridge settings.
     """
     if not source_dir.is_dir():
         return
@@ -990,7 +1002,78 @@ def _populate_codex_home_config(
             "true",
             "yes",
         }
+
+    # A profile can intentionally select a local/OpenAI-compatible provider
+    # that does not use ChatGPT auth.  Never bridge ``auth.json`` into that
+    # private home: Codex otherwise classifies the selected custom model as a
+    # ChatGPT-account model and rejects it before contacting the provider.
+    profile_disables_openai_auth = False
+    authless_profile_text: str | None = None
+    if config_profile:
+        profile_path = source_dir / f"{config_profile}.config.toml"
+        try:
+            profile_config = tomllib.loads(profile_path.read_text(encoding="utf-8"))
+            provider_name = profile_config.get("model_provider")
+            providers = profile_config.get("model_providers")
+            provider_config = providers.get(provider_name) if isinstance(providers, dict) else None
+            profile_disables_openai_auth = (
+                isinstance(provider_config, dict)
+                and provider_config.get("requires_openai_auth") is False
+            )
+            if profile_disables_openai_auth:
+                # A ModelCloud profile is self-contained: its provider table,
+                # base URL, and env_key are the complete routing contract.
+                # Never mix it with the user's generic config, which could
+                # register ChatGPT, Databricks, or unrelated plugin providers.
+                authless_profile_text = profile_path.read_text(encoding="utf-8")
+        except (OSError, tomllib.TOMLDecodeError):
+            # Profile validation and launch diagnostics happen at the caller.
+            # A failed optional inspection here must not break ordinary Codex
+            # home setup.
+            pass
+
     symlink_files: tuple[str, ...] = _CODEX_HOME_SYMLINK_FILES
+    if profile_disables_openai_auth:
+        minimal_config = True
+        symlink_files = tuple(name for name in symlink_files if name != "auth.json")
+        # A resumed native session may reuse a pre-existing private home from
+        # before its profile was selected. Replace that stale bridge with a
+        # private empty marker rather than merely deleting it: Codex otherwise
+        # falls back to ``$HOME/.codex/auth.json`` and can select the user's
+        # ChatGPT account for an explicitly authless local provider. The
+        # regular marker also prevents a later profile-free bridge pass from
+        # recreating the symlink.
+        stale_auth = target_dir / "auth.json"
+        if stale_auth.exists() or stale_auth.is_symlink():
+            stale_auth.unlink()
+        stale_auth.write_text("{}\n", encoding="utf-8")
+        os.chmod(stale_auth, 0o600)
+        # The app-server validates config.toml before applying --profile.
+        # Install only the selected authless profile as that base config and
+        # replace any prior per-session copy.  This also prevents a resumed
+        # session from retaining a former Databricks/OpenAI provider table.
+        config_path = target_dir / "config.toml"
+        if config_path.exists() or config_path.is_symlink():
+            config_path.unlink()
+        if authless_profile_text is not None:
+            config_path.write_text(authless_profile_text, encoding="utf-8")
+            os.chmod(config_path, 0o600)
+        # Preserve resume continuity with the official Codex runtime without
+        # inheriting its credentials, plugins, rules, or generic config.
+        # Rollouts are local transcript state, not provider authentication.
+        source_sessions = source_dir / "sessions"
+        target_sessions = target_dir / "sessions"
+        if source_sessions.is_dir() and not (
+            target_sessions.exists() or target_sessions.is_symlink()
+        ):
+            try:
+                target_sessions.symlink_to(source_sessions.resolve())
+            except OSError as exc:
+                logger.warning(
+                    "could not link Codex rollout history into authless profile home %s (%s)",
+                    target_dir,
+                    exc,
+                )
     if not minimal_config:
         symlink_files += _CODEX_HOME_GLOBAL_INSTRUCTION_FILES
     if inject_hooks:
@@ -1068,6 +1151,53 @@ def _populate_codex_home_config(
                 )
                 if catalog_path is not None:
                     set_codex_model_catalog_path(dest_path, catalog_path)
+
+    if config_profile:
+        profile_file = source_dir / f"{config_profile}.config.toml"
+        profile_target = target_dir / profile_file.name
+        if profile_file.is_file() and not (profile_target.exists() or profile_target.is_symlink()):
+            shutil.copy2(profile_file, profile_target)
+        # ``codex app-server`` validates ``config.toml`` before it layers a
+        # named profile. Its explicit ``model_provider=…`` launch override
+        # therefore fails unless the provider table is already available in
+        # the private base config. Mirror only the selected provider and model
+        # catalog into that private config; the complete profile remains the
+        # user-facing source of truth for normal Codex invocations.
+        config_path = target_dir / "config.toml"
+        if profile_file.is_file() and config_path.is_file():
+            try:
+                import tomlkit
+
+                profile_document = tomlkit.parse(profile_file.read_text(encoding="utf-8"))
+                raw_profile_provider = profile_document.get("model_provider")
+                profile_provider = (
+                    str(raw_profile_provider).strip()
+                    if raw_profile_provider is not None
+                    else None
+                )
+                profile_providers = profile_document.get("model_providers")
+                provider_config = (
+                    profile_providers.get(profile_provider)
+                    if profile_provider and profile_providers is not None
+                    else None
+                )
+                if provider_config is not None:
+                    base_document = tomlkit.parse(config_path.read_text(encoding="utf-8"))
+                    providers = base_document.get("model_providers")
+                    if providers is None:
+                        providers = tomlkit.table()
+                        base_document["model_providers"] = providers
+                    providers[profile_provider] = provider_config
+                    base_document["model_provider"] = profile_provider
+                    if "model_catalog_json" in profile_document:
+                        base_document["model_catalog_json"] = profile_document["model_catalog_json"]
+                    config_path.write_text(tomlkit.dumps(base_document), encoding="utf-8")
+            except (OSError, tomllib.TOMLDecodeError, ValueError):
+                logger.warning(
+                    "could not mirror provider from Codex profile %s into private config",
+                    profile_file,
+                    exc_info=True,
+                )
 
 
 def materialize_codex_provider_config(
