@@ -4777,6 +4777,12 @@ async def _auto_create_codex_terminal(
         cwd=Path(workspace),
         model=_codex_launch.model,
         profile=_codex_launch.profile,
+        # A named Codex profile is global CLI state, not merely resolver
+        # metadata.  Without passing it into the host-runner app-server,
+        # its private CODEX_HOME falls back to the generated generic provider
+        # and can incorrectly require a ChatGPT login even when the selected
+        # local provider explicitly has requires_openai_auth = false.
+        config_profile=_codex_launch.config_profile,
         extra_config_overrides=[*_codex_launch.config_overrides, *mcp_overrides],
         bridge_dir=bridge_dir,
         ap_server_url=launch_config.policy_server_url,
@@ -4960,6 +4966,7 @@ async def _auto_create_codex_terminal(
             # built-in (which would force the first-run login screen and block
             # thread creation).
             config_overrides=tuple(app_server.config_overrides),
+            config_profile=_codex_launch.config_profile,
             codex_cli_version=app_server.codex_cli_version,
             # Omnigent provisions the private CODEX_HOME and vets hook sources
             # itself; skip the interactive trust prompt that headless sub-agents

@@ -651,3 +651,36 @@ async def test_newer_pick_survives_reset_after_slow_fallback_launch(
     assert harness.snapshot["model_override"] == new_pick
     assert harness.resets == [{"expected_model_override": _RETIRED_PICK}]
     assert harness.builds[0]["model"] == _PROVIDER_DEFAULT
+
+
+@pytest.mark.asyncio
+async def test_host_runner_preserves_selected_codex_profile(
+    codex_launch_harness: _LaunchHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The detached host-runner must pass a local profile to both Codex processes.
+
+    A profile can declare an authless OpenAI-compatible provider.  Dropping the
+    profile here leaves the private session home on Omnigent's generic provider,
+    which then incorrectly tries to refresh a ChatGPT credential.
+    """
+
+    def resolve_launch(
+        *, model: str | None, spec: AgentSpec | None = None
+    ) -> codex_app.NativeCodexLaunch:
+        return codex_app.NativeCodexLaunch(
+            config_overrides=['model_provider="local-openai"'],
+            model=model or _PROVIDER_DEFAULT,
+            profile=None,
+            config_profile="local",
+        )
+
+    monkeypatch.setattr(codex_app, "resolve_native_codex_launch", resolve_launch)
+    harness = codex_launch_harness
+    harness.seed_catalog([{"id": _PROVIDER_DEFAULT, "isDefault": True}])
+
+    await harness.launch()
+
+    assert harness.builds[0]["config_profile"] == "local"
+    launch_spec = harness.registry.launch_auxiliary_terminal.await_args.kwargs["spec"]
+    assert launch_spec.args[:2] == ["--profile", "local"]
+    assert 'model_provider="local-openai"' in launch_spec.args
