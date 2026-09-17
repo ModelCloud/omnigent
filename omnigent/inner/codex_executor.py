@@ -21,6 +21,7 @@ import sys
 import tempfile
 import threading
 import time
+import tomllib
 from collections.abc import (
     AsyncIterator,
     Awaitable,
@@ -1001,7 +1002,37 @@ def _populate_codex_home_config(
             "true",
             "yes",
         }
+
+    # A profile can intentionally select a local/OpenAI-compatible provider
+    # that does not use ChatGPT auth.  Never bridge ``auth.json`` into that
+    # private home: Codex otherwise classifies the selected custom model as a
+    # ChatGPT-account model and rejects it before contacting the provider.
+    profile_disables_openai_auth = False
+    if config_profile:
+        profile_path = source_dir / f"{config_profile}.config.toml"
+        try:
+            profile_config = tomllib.loads(profile_path.read_text(encoding="utf-8"))
+            provider_name = profile_config.get("model_provider")
+            providers = profile_config.get("model_providers")
+            provider_config = providers.get(provider_name) if isinstance(providers, dict) else None
+            profile_disables_openai_auth = (
+                isinstance(provider_config, dict)
+                and provider_config.get("requires_openai_auth") is False
+            )
+        except (OSError, tomllib.TOMLDecodeError):
+            # Profile validation and launch diagnostics happen at the caller.
+            # A failed optional inspection here must not break ordinary Codex
+            # home setup.
+            pass
+
     symlink_files: tuple[str, ...] = _CODEX_HOME_SYMLINK_FILES
+    if profile_disables_openai_auth:
+        symlink_files = tuple(name for name in symlink_files if name != "auth.json")
+        # A resumed native session may reuse a pre-existing private home from
+        # before its profile was selected. Remove that stale bridge as well.
+        stale_auth = target_dir / "auth.json"
+        if stale_auth.exists() or stale_auth.is_symlink():
+            stale_auth.unlink()
     if not minimal_config:
         symlink_files += _CODEX_HOME_GLOBAL_INSTRUCTION_FILES
     if inject_hooks:
