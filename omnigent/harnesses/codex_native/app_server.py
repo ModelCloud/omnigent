@@ -2640,7 +2640,14 @@ def build_codex_native_server(
             "installed on a PATH the host daemon didn't inherit (e.g. an "
             "nvm-managed bin dir), set OMNIGENT_CODEX_PATH=/path/to/codex."
         )
-    env = _clean_codex_env(_authless_codex_profile_env_passthrough(config_profile))
+    authless_profile_env = _authless_codex_profile_env_passthrough(config_profile)
+    env = _clean_codex_env(authless_profile_env)
+    if authless_profile_env:
+        # Codex's cloud-config channel owns a separate ChatGPT auth manager.
+        # It is not needed for a profile that explicitly routes all inference
+        # through a local/provider-specific credential, and must not refresh
+        # an ambient ChatGPT token during terminal startup or a turn.
+        env["CODEX_DISABLE_CLOUD_CONFIG"] = "1"
     config_overrides: list[str] = []
     pinned_model = model
     if profile is not None:
@@ -3745,7 +3752,13 @@ def codex_terminal_env(app_server: CodexNativeAppServer) -> dict[str, str]:
         key: value
         for key, value in {**app_server.env, "CODEX_HOME": str(app_server.codex_home)}.items()
         if key
-        in {"CODEX_HOME", "DATABRICKS_HOST", "DATABRICKS_CODEX_TOKEN", "OTEL_RESOURCE_ATTRIBUTES"}
+        in {
+            "CODEX_HOME",
+            "CODEX_DISABLE_CLOUD_CONFIG",
+            "DATABRICKS_HOST",
+            "DATABRICKS_CODEX_TOKEN",
+            "OTEL_RESOURCE_ATTRIBUTES",
+        }
         or key in profile_credentials
         or key.startswith(("OPENAI_", "HTTP_", "HTTPS_", "NO_PROXY", "ALL_PROXY"))
     }
