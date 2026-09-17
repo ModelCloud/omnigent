@@ -55,6 +55,7 @@ _DEFAULT_WORKSPACE_ROOT = os.path.join(
 )
 
 CODEX_NATIVE_TERMINAL_ROLE = "codex-native"
+LOCALDEX_NATIVE_TERMINAL_ROLE = "localdex-native"
 CLAUDE_NATIVE_TERMINAL_ROLE = "claude-native"
 PI_NATIVE_TERMINAL_ROLE = "pi-native"
 OPENCODE_NATIVE_TERMINAL_ROLE = "opencode-native"

@@ -1423,6 +1423,16 @@ class CodexNativeAppServer:
     cwd: Path
     bridge_dir: Path
     config_profile: str | None = None
+    # LocalDex owns its source config rather than falling back to ~/.codex.
+    # This also keeps app-server profile-free: current Codex rejects --profile
+    # on that subcommand.
+    config_source: Path | None = None
+    # Authless OpenAI-compatible providers receive only these declared bearer
+    # variables, never ambient OpenAI or Databricks credentials.
+    isolated_env_keys: tuple[str, ...] = ()
+    process_registry_path: Path | None = None
+    process_tag_prefix: str = "codex-native"
+    client_identity: str = "omnigent-codex-native-auto"
     developer_instructions: str | None = None
     ap_server_url: str | None = None
     ap_auth_headers: dict[str, str] | None = None
@@ -1486,7 +1496,7 @@ class CodexNativeAppServer:
                 router_bridge_dir = None
         self.router_hooks_registered = router_bridge_dir is not None and policy_hooks_supported
         routed_spawns = router_bridge_dir is not None
-        config_source = _codex_home_config_source_from_env()
+        config_source = self.config_source or _codex_home_config_source_from_env()
         model_migration_target: str | None = None
         if self.trust_project and self.pinned_model:
             catalog: object = self.model_catalog_rows
@@ -1514,6 +1524,13 @@ class CodexNativeAppServer:
             extend_model_catalog=codex_extended_catalog_requested(self.env),
             config_profile=self.config_profile,
         )
+        if self.isolated_env_keys:
+            # Prevent fallback to $HOME/.codex/auth.json.  The provider's
+            # configured bearer env-key is the only credential this runtime
+            # may consult.
+            auth_path = self.codex_home / "auth.json"
+            auth_path.write_text("{}\n", encoding="utf-8")
+            os.chmod(auth_path, 0o600)
         if self.trust_project:
             _trust_codex_project(self.codex_home, self.cwd)
         # Write the MCP server config into config.toml so the app-server
@@ -1575,9 +1592,9 @@ class CodexNativeAppServer:
                     ap_server_url=self.ap_server_url,
                     ap_auth_headers=self.ap_auth_headers or {},
                 )
-        reconcile_codex_native_process_registry()
+        reconcile_codex_native_process_registry(registry_path=self.process_registry_path)
         resolved_listen = self.listen_url or f"unix://{self.socket_path}"
-        self.process_registry_tag = f"codex-native-{uuid.uuid4().hex}"
+        self.process_registry_tag = f"{self.process_tag_prefix}-{uuid.uuid4().hex}"
         tagged_argv0 = (
             f"{Path(self.codex_path).name} "
             f"{codex_native_session_tag_cmdline_arg(self.process_registry_tag)}"
@@ -1612,6 +1629,7 @@ class CodexNativeAppServer:
                 pgid=_process_group_id(self.proc),
                 session_tag=self.process_registry_tag,
                 owner_lock_path=self.process_owner_lock.path,
+                registry_path=self.process_registry_path,
             )
         self.recent_stderr = []
         self.stderr_task = asyncio.create_task(
@@ -1804,7 +1822,9 @@ class CodexNativeAppServer:
                 _kill_process_tree(self.proc)
                 await self.proc.wait()
         if self.process_registry_tag is not None:
-            unregister_codex_native_process(self.process_registry_tag)
+            unregister_codex_native_process(
+                self.process_registry_tag, registry_path=self.process_registry_path
+            )
         if self.process_owner_lock is not None:
             self.process_owner_lock.close()
         if self.stderr_task is not None:
@@ -2575,6 +2595,11 @@ def build_codex_native_server(
     trust_all_hooks: bool = False,
     reasoning_effort: str | None = None,
     model_catalog_rows: list[_JsonObject] | None = None,
+    config_source: Path | None = None,
+    isolated_env_keys: tuple[str, ...] = (),
+    process_registry_path: Path | None = None,
+    process_tag_prefix: str = "codex-native",
+    client_identity: str = "omnigent-codex-native-auto",
 ) -> CodexNativeAppServer:
     """
     Build a configured native Codex app-server process wrapper.
@@ -2641,6 +2666,8 @@ def build_codex_native_server(
             "nvm-managed bin dir), set OMNIGENT_CODEX_PATH=/path/to/codex."
         )
     authless_profile_env = _authless_codex_profile_env_passthrough(config_profile)
+    if isolated_env_keys:
+        authless_profile_env = tuple(sorted(set(isolated_env_keys)))
     env = _clean_codex_env(authless_profile_env)
     if authless_profile_env:
         # ``codex-modelcloud`` is deliberately an authless, OpenAI-compatible
@@ -2703,6 +2730,11 @@ def build_codex_native_server(
         env=env,
         config_overrides=config_overrides,
         config_profile=config_profile,
+        config_source=config_source,
+        isolated_env_keys=authless_profile_env,
+        process_registry_path=process_registry_path,
+        process_tag_prefix=process_tag_prefix,
+        client_identity=client_identity,
         cwd=cwd,
         bridge_dir=bridge_dir,
         developer_instructions=developer_instructions,
@@ -3756,7 +3788,7 @@ def codex_terminal_env(app_server: CodexNativeAppServer) -> dict[str, str]:
     :param app_server: Running app-server wrapper.
     :returns: Environment variables for the terminal process.
     """
-    profile_credentials = set(
+    profile_credentials = set(app_server.isolated_env_keys) or set(
         _authless_codex_profile_env_passthrough(app_server.config_profile)
     )
     authless_profile = bool(profile_credentials)

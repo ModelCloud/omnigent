@@ -162,6 +162,16 @@ CODEX_NATIVE_CODING_AGENT = NativeCodingAgent(
     subagent_wrapper_label="codex-native-ui-subagent",
 )
 
+LOCALDEX_NATIVE_CODING_AGENT = NativeCodingAgent(
+    key="localdex",
+    display_name="LocalDex",
+    agent_name="localdex-native-ui",
+    harness="localdex-native",
+    wrapper_label="localdex-native-ui",
+    terminal_name="localdex",
+    subagent_wrapper_label="localdex-native-ui-subagent",
+)
+
 PI_NATIVE_CODING_AGENT = NativeCodingAgent(
     key="pi",
     display_name="Pi",
@@ -322,6 +332,15 @@ _BUILTIN_NATIVE_PROVIDERS: tuple[NativeHarnessProvider, ...] = tuple(
     )
 )
 
+LOCALDEX_NATIVE_PROVIDER = NativeHarnessProvider(
+    key="localdex",
+    run_native="omnigent.harnesses.localdex_native.main:run_localdex_native",
+    auto_create_terminal="omnigent.runner.native:_launch_localdex",
+    spawn_env_builder="omnigent.harnesses.localdex_native.bridge:build_localdex_native_spawn_env",
+    bridge_id_label_key="omnigent.localdex_native.bridge_id",
+    materialize_agent_spec="omnigent.harnesses.localdex_native.main:_materialize_localdex_agent_spec",
+)
+
 
 # Declared capabilities for the built-in harnesses. Each value is backed by the
 # module that implements it; the derivable axes (model_family, subagents) are
@@ -372,6 +391,21 @@ _BUILTIN_CAPABILITIES: dict[str, HarnessCapabilities] = {
         _EF.CODEX_NATIVE,
         _MF.GPT,
         _AU.OMNIGENT_CREDENTIAL,
+        subagents=True,
+        interrupt=True,
+        streaming=True,
+        fork_history=_FH.REBUILD,
+        shell_tool_name="shell",
+        shell_tool_prompt=_SHELL_PROMPT,
+        instruction_delivery=_ID.AGENT_STARTUP_ADDITIVE,
+    ),
+    "localdex-native": _C(
+        _IM.NATIVE_TUI,
+        _EL.JSONRPC,
+        _RS.WARM_REATTACH,
+        _EF.CODEX_NATIVE,
+        _MF.MULTI,
+        _AU.SESSION_SCOPED_CONFIG,
         subagents=True,
         interrupt=True,
         streaming=True,
@@ -758,6 +792,7 @@ _BUILTIN_CONTRIBUTION = HarnessContribution(
             "claude-sdk",
             "codex",
             "codex-native",
+            "localdex-native",
             "copilot",
             "cursor",
             "cursor-native",
@@ -792,6 +827,7 @@ _BUILTIN_CONTRIBUTION = HarnessContribution(
         "claude-sdk": "omnigent.inner.claude_sdk_harness",
         "codex": "omnigent.inner.codex_harness",
         "codex-native": "omnigent.inner.codex_native_harness",
+        "localdex-native": "omnigent.inner.codex_native_harness",
         "copilot": "omnigent.inner.copilot_harness",
         "cursor": "omnigent.inner.cursor_harness",
         "cursor-native": "omnigent.inner.cursor_native_harness",
@@ -847,6 +883,7 @@ _BUILTIN_CONTRIBUTION = HarnessContribution(
             "antigravity-native",
             "claude-native",
             "codex-native",
+            "localdex-native",
             "cursor-native",
             "devin-native",
             "goose-native",
@@ -874,6 +911,7 @@ _BUILTIN_CONTRIBUTION = HarnessContribution(
     native_agents=(
         CLAUDE_NATIVE_CODING_AGENT,
         CODEX_NATIVE_CODING_AGENT,
+        LOCALDEX_NATIVE_CODING_AGENT,
         PI_NATIVE_CODING_AGENT,
         OPENCODE_NATIVE_CODING_AGENT,
         CURSOR_NATIVE_CODING_AGENT,
@@ -885,7 +923,7 @@ _BUILTIN_CONTRIBUTION = HarnessContribution(
         HERMES_NATIVE_CODING_AGENT,
         DEVIN_NATIVE_CODING_AGENT,
     ),
-    native_providers=_BUILTIN_NATIVE_PROVIDERS,
+    native_providers=(*_BUILTIN_NATIVE_PROVIDERS, LOCALDEX_NATIVE_PROVIDER),
     # Catalog rows gate readiness on their vendor binary; the install spec also
     # feeds setup steps and (for npm rows) the one-click install path.
     install_specs={name: row.install for name, row in ACP_CLI_HARNESSES.items()},
@@ -922,11 +960,15 @@ _BUILTIN_CONTRIBUTION = HarnessContribution(
         "codex-native": BackgroundTitleGeneratorSpec(
             "omnigent.runner.background_titles.codex_native:generate_background_title"
         ),
+        "localdex-native": BackgroundTitleGeneratorSpec(
+            "omnigent.runner.background_titles.codex_native:generate_background_title"
+        ),
     },
     harness_labels={
         "antigravity": "Antigravity",
         "claude-sdk": "Claude SDK",
         "codex": "Codex",
+        "localdex-native": "LocalDex",
         "copilot": "Copilot",
         "cursor": "Cursor",
         "devin-native": "Devin",
