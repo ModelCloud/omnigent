@@ -1338,9 +1338,13 @@ def _build_native_codex_app_server_argv(
     tagged_argv0: str,
     listen_url: str,
     config_overrides: Sequence[str],
+    config_profile: str | None = None,
 ) -> list[str]:
     """Build argv for the native Codex app-server subprocess."""
-    argv = [tagged_argv0, "app-server", "--listen", listen_url]
+    argv = [tagged_argv0]
+    if config_profile:
+        argv.extend(["--profile", config_profile])
+    argv.extend(["app-server", "--listen", listen_url])
     for override in config_overrides:
         argv.extend(["-c", override])
     return argv
@@ -1418,6 +1422,7 @@ class CodexNativeAppServer:
     config_overrides: list[str]
     cwd: Path
     bridge_dir: Path
+    config_profile: str | None = None
     developer_instructions: str | None = None
     ap_server_url: str | None = None
     ap_auth_headers: dict[str, str] | None = None
@@ -1507,6 +1512,7 @@ class CodexNativeAppServer:
             config_source,
             inject_hooks=self.router_hooks_registered,
             extend_model_catalog=codex_extended_catalog_requested(self.env),
+            config_profile=self.config_profile,
         )
         if self.trust_project:
             _trust_codex_project(self.codex_home, self.cwd)
@@ -1580,6 +1586,7 @@ class CodexNativeAppServer:
             tagged_argv0=tagged_argv0,
             listen_url=resolved_listen,
             config_overrides=self.config_overrides,
+            config_profile=self.config_profile,
         )
         proc_env = {**self.env, "CODEX_HOME": str(self.codex_home)}
         self.process_owner_lock = acquire_codex_native_process_owner_lock()
@@ -2556,6 +2563,7 @@ def build_codex_native_server(
     model: str | None,
     profile: str | None,
     bridge_dir: Path,
+    config_profile: str | None = None,
     ap_server_url: str | None = None,
     ap_auth_headers: dict[str, str] | None = None,
     python_executable: str | None = None,
@@ -2577,6 +2585,9 @@ def build_codex_native_server(
     :param model: Optional Codex model id, e.g. ``"gpt-5.4-mini"``.
     :param profile: Optional Databricks CLI profile, e.g.
         ``"<your-profile>"``.
+    :param config_profile: Optional named Codex configuration profile, e.g.
+        ``"local"`` for ``$CODEX_HOME/local.config.toml``. This is distinct
+        from a Databricks profile and is passed to both app-server and TUI.
     :param bridge_dir: Native Codex bridge directory; the policy hook is
         pointed at it and reads the session id + Omnigent coordinates from it.
     :param ap_server_url: Omnigent server base URL the policy hook POSTs tool
@@ -2673,6 +2684,7 @@ def build_codex_native_server(
         codex_home=codex_home,
         env=env,
         config_overrides=config_overrides,
+        config_profile=config_profile,
         cwd=cwd,
         bridge_dir=bridge_dir,
         developer_instructions=developer_instructions,
@@ -2701,6 +2713,9 @@ class NativeCodexLaunch:
     :param profile: Databricks profile for the ucode path, or ``None`` (a
         generic provider routes via *config_overrides*; CLI login uses
         neither).
+    :param config_profile: Named Codex profile selected for app-server and
+        remote TUI startup. It uses the user's profile settings while the
+        native bridge retains isolated writable integration settings.
     :param summary: Human-readable one-line description of the routing
         outcome (provider / profile / model, or the login-fallback state),
         set at resolution time and surfaced in the startup-timeout error so
@@ -2715,11 +2730,64 @@ class NativeCodexLaunch:
     config_overrides: list[str]
     model: str | None
     profile: str | None
+    config_profile: str | None = None
     summary: str = ""
     login_required: bool = False
 
 
 _MODEL_PROVIDER_OVERRIDE_PREFIX = "model_provider="
+
+
+def _native_codex_config_profile(spec: AgentSpec | None) -> str | None:
+    """Return the named Codex config profile selected for a native session.
+
+    A per-agent ``executor.config.codex_profile`` wins over the host-wide
+    ``OMNIGENT_CODEX_PROFILE`` setting. ``executor.profile`` stays reserved
+    for the legacy Databricks profile and is intentionally not reused.
+    """
+    value: object | None = spec.executor.config.get("codex_profile") if spec else None
+    if value is None:
+        value = os.environ.get("OMNIGENT_CODEX_PROFILE")
+    if value is None or not str(value).strip():
+        return None
+    profile = str(value).strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", profile):
+        raise ValueError(
+            "Codex profile names may contain only letters, numbers, underscores, and hyphens"
+        )
+    return profile
+
+
+def _codex_config_profile_launch(*, model: str | None, config_profile: str) -> NativeCodexLaunch:
+    """Resolve a profile's model/provider into resume-safe native overrides."""
+    import tomllib
+
+    source_home = _codex_home_config_source_from_env()
+    profile_path = source_home / f"{config_profile}.config.toml"
+    try:
+        profile_config = tomllib.loads(profile_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"Codex profile {config_profile!r} was selected but {profile_path} does not exist"
+        ) from exc
+    except tomllib.TOMLDecodeError as exc:
+        raise ValueError(f"Codex profile {profile_path} is invalid TOML: {exc}") from exc
+
+    provider = profile_config.get("model_provider")
+    profile_model = profile_config.get("model")
+    overrides: list[str] = []
+    if isinstance(provider, str) and provider:
+        overrides.append(f"model_provider={json.dumps(provider)}")
+    resolved_model = model if model is not None else profile_model
+    if isinstance(resolved_model, str) and resolved_model:
+        overrides.append(f"model={json.dumps(resolved_model)}")
+    return NativeCodexLaunch(
+        config_overrides=overrides,
+        model=resolved_model if isinstance(resolved_model, str) else None,
+        profile=None,
+        config_profile=config_profile,
+        summary=f"Codex configuration profile {config_profile!r}",
+    )
 
 
 def native_codex_launch_pins_model_provider(launch: NativeCodexLaunch) -> bool:
@@ -3171,6 +3239,10 @@ def resolve_native_codex_launch(
         _synthesize_codex_api_key_provider,
     )
     from omnigent.spec.types import DatabricksAuth
+
+    config_profile = _native_codex_config_profile(spec)
+    if config_profile is not None:
+        return _codex_config_profile_launch(model=model, config_profile=config_profile)
 
     explicit = load_config()
     config_detection = codex_config_detection()
@@ -3756,6 +3828,7 @@ def build_codex_remote_args(
     thread_id: str | None,
     remote_url: str,
     config_overrides: tuple[str, ...] = (),
+    config_profile: str | None = None,
     codex_cli_version: tuple[int, int, int] | None = None,
     bypass_sandbox: bool = False,
     bypass_hook_trust: bool = False,
@@ -3825,6 +3898,8 @@ def build_codex_remote_args(
     :returns: Codex argv tail after the executable.
     """
     override_args: list[str] = []
+    if config_profile:
+        override_args.extend(["--profile", config_profile])
     for override in config_overrides:
         if override.lstrip().startswith("model_providers."):
             raise ValueError(

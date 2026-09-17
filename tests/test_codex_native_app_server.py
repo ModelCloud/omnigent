@@ -1904,6 +1904,45 @@ def test_remote_codex_rejects_unmaterialized_provider_config() -> None:
         )
 
 
+def test_native_codex_profile_is_passed_to_app_server_and_remote_tui() -> None:
+    """A named profile is global CLI state for both native processes."""
+    from omnigent.harnesses.codex_native import app_server as codex_native_app_server
+
+    app_server_argv = _build_native_codex_app_server_argv(
+        tagged_argv0="codex session-tag",
+        listen_url="ws://127.0.0.1:9876",
+        config_overrides=['model_provider="local-openai"'],
+        config_profile="local",
+    )
+    remote_argv = codex_native_app_server.build_codex_remote_args(
+        codex_args=(),
+        thread_id=None,
+        remote_url="ws://127.0.0.1:9876",
+        config_overrides=('model_provider="local-openai"',),
+        config_profile="local",
+    )
+
+    assert app_server_argv[:4] == ["codex session-tag", "--profile", "local", "app-server"]
+    assert remote_argv[:2] == ["--profile", "local"]
+
+
+def test_native_codex_profile_and_history_are_bridged(tmp_path: Path) -> None:
+    """Native sessions retain user profiles and the normal Codex resume store."""
+    source_home = tmp_path / "source-codex-home"
+    source_home.mkdir()
+    (source_home / "config.toml").write_text('model = "base"\n', encoding="utf-8")
+    (source_home / "local.config.toml").write_text('model = "local"\n', encoding="utf-8")
+    (source_home / "sessions").mkdir()
+    target_home = tmp_path / "native-codex-home"
+    target_home.mkdir()
+
+    _populate_codex_home_config(target_home, source_home, config_profile="local")
+
+    assert (target_home / "local.config.toml").read_text(encoding="utf-8") == 'model = "local"\n'
+    assert (target_home / "sessions").is_symlink()
+    assert (target_home / "sessions").resolve() == (source_home / "sessions").resolve()
+
+
 async def test_untrusted_hook_is_trusted_via_batchwrite() -> None:
     """
     An untrusted Omnigent hook is trusted with its currentHash.

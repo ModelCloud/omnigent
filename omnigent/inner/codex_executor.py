@@ -156,6 +156,12 @@ _CODEX_HOME_COPY_FILES = ("config.toml",)
 # one real cache dedupes it across sessions; codex's own writes land in the
 # shared cache exactly as they would without the private home.
 _CODEX_HOME_SYMLINK_DIRS = (
+    # Rollouts are the durable Codex resume history. Sharing them makes a
+    # native app-server session visible to the user's regular Codex CLI (and
+    # vice versa) while leaving runner-owned config and hooks isolated.
+    Path("sessions"),
+    Path("archived_sessions"),
+    Path("thread-writer-locks"),
     Path("plugins") / "cache",
     # Cross-process lock guarding ``.credentials.json``; shared so a token
     # refresh in one session cannot race another into a stale refresh token.
@@ -935,6 +941,7 @@ def _populate_codex_home_config(
     minimal_config: bool | None = None,
     inject_hooks: bool = False,
     extend_model_catalog: bool = False,
+    config_profile: str | None = None,
 ) -> None:
     """
     Bridge user config files from the real ``CODEX_HOME`` into the temp one.
@@ -980,6 +987,10 @@ def _populate_codex_home_config(
         its own catalog plus the gateway-only arms. Costs a ``codex debug
         models`` probe, so it is reserved for Smart Routing sessions whose
         turns/spawns can land on such an arm.
+    :param config_profile: Optional named Codex profile to copy from the
+        source home, e.g. ``"local"`` for ``local.config.toml``. The session
+        selects it with ``codex --profile local`` while retaining an isolated
+        writable base config for Omnigent's bridge settings.
     """
     if not source_dir.is_dir():
         return
@@ -1068,6 +1079,12 @@ def _populate_codex_home_config(
                 )
                 if catalog_path is not None:
                     set_codex_model_catalog_path(dest_path, catalog_path)
+
+    if config_profile:
+        profile_file = source_dir / f"{config_profile}.config.toml"
+        profile_target = target_dir / profile_file.name
+        if profile_file.is_file() and not (profile_target.exists() or profile_target.is_symlink()):
+            shutil.copy2(profile_file, profile_target)
 
 
 def materialize_codex_provider_config(
