@@ -2752,6 +2752,17 @@ def _native_codex_config_profile(spec: AgentSpec | None) -> str | None:
     if value is None or not str(value).strip():
         value = os.environ.get("OMNIGENT_CODEX_PROFILE")
     if value is None or not str(value).strip():
+        # Runner environment sanitization can remove OMNIGENT_* keys from
+        # ``os.environ`` after the process has started. Linux retains the
+        # original, non-secret service environment in procfs, so recover this
+        # explicit profile-selection setting for native child launches.
+        with contextlib.suppress(OSError):
+            for item in Path("/proc/self/environ").read_bytes().split(b"\0"):
+                key, separator, raw_value = item.partition(b"=")
+                if key == b"OMNIGENT_CODEX_PROFILE" and separator:
+                    value = raw_value.decode("utf-8", errors="replace")
+                    break
+    if value is None or not str(value).strip():
         return None
     profile = str(value).strip()
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", profile):
