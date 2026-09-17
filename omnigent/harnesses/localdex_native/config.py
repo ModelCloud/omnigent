@@ -20,6 +20,7 @@ import tomllib
 LOCALDEX_CONFIG_ROOT = Path.home() / ".local" / "share" / "localdex"
 LOCALDEX_CONFIG_PATH = LOCALDEX_CONFIG_ROOT / "config.toml"
 LOCALDEX_BINARY = Path.home() / ".local" / "bin" / "localdex"
+LOCALDEX_MODEL = "QB/DSV4.1-Flash"
 
 
 @dataclass(frozen=True)
@@ -54,7 +55,7 @@ def load_localdex_config(
     # The current registration is intentionally one model.  Keeping it as a
     # harness-owned constant avoids adding LocalDex-only keys to Codex's strict
     # config schema.  The value remains part of the public model picker.
-    local_model = "QB/DSV4.1-Flash"
+    local_model = LOCALDEX_MODEL
     if not isinstance(provider, dict):
         raise ValueError("LocalDex config requires [model_providers.localdex]")
     base_url, env_key = provider.get("base_url"), provider.get("env_key")
