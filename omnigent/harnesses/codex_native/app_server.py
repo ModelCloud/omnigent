@@ -2640,7 +2640,7 @@ def build_codex_native_server(
             "installed on a PATH the host daemon didn't inherit (e.g. an "
             "nvm-managed bin dir), set OMNIGENT_CODEX_PATH=/path/to/codex."
         )
-    env = _clean_codex_env()
+    env = _clean_codex_env(_authless_codex_profile_env_passthrough(config_profile))
     config_overrides: list[str] = []
     pinned_model = model
     if profile is not None:
@@ -2770,6 +2770,37 @@ def _native_codex_config_profile(spec: AgentSpec | None) -> str | None:
             "Codex profile names may contain only letters, numbers, underscores, and hyphens"
         )
     return profile
+
+
+def _authless_codex_profile_env_passthrough(config_profile: str | None) -> tuple[str, ...]:
+    """Return credential variable names required by one selected local profile.
+
+    Codex child processes deliberately receive a filtered environment. A
+    selected OpenAI-compatible local provider is different from ambient
+    OpenAI credentials: its ``env_key`` is an explicit part of the profile's
+    authentication contract. Preserve only such keys, and only for providers
+    which explicitly opt out of OpenAI/ChatGPT authentication.
+    """
+    if not config_profile:
+        return ()
+    import tomllib
+
+    profile_path = _codex_home_config_source_from_env() / f"{config_profile}.config.toml"
+    try:
+        document = tomllib.loads(profile_path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return ()
+    providers = document.get("model_providers")
+    if not isinstance(providers, dict):
+        return ()
+    names: set[str] = set()
+    for provider in providers.values():
+        if not isinstance(provider, dict) or provider.get("requires_openai_auth") is not False:
+            continue
+        env_key = provider.get("env_key")
+        if isinstance(env_key, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", env_key):
+            names.add(env_key)
+    return tuple(sorted(names))
 
 
 def _codex_config_profile_launch(*, model: str | None, config_profile: str) -> NativeCodexLaunch:
