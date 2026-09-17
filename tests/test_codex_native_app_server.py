@@ -1942,7 +1942,20 @@ def test_native_codex_profile_and_history_are_bridged(tmp_path: Path) -> None:
     """Native sessions retain user profiles and the normal Codex resume store."""
     source_home = tmp_path / "source-codex-home"
     source_home.mkdir()
-    (source_home / "config.toml").write_text('model = "base"\n', encoding="utf-8")
+    (source_home / "config.toml").write_text(
+        '\n'.join(
+            [
+                'model = "base"',
+                'model_provider = "databricks"',
+                '',
+                '[model_providers.databricks]',
+                'base_url = "https://databricks.invalid/v1"',
+                'env_key = "DATABRICKS_CODEX_TOKEN"',
+                '',
+            ]
+        ),
+        encoding="utf-8",
+    )
     (source_home / "local.config.toml").write_text(
         '\n'.join(
             [
@@ -1971,6 +1984,7 @@ def test_native_codex_profile_and_history_are_bridged(tmp_path: Path) -> None:
     assert bridged_config["model_provider"] == "local-openai"
     assert bridged_config["model_catalog_json"] == "/models/local.json"
     assert bridged_config["model_providers"]["local-openai"]["base_url"] == "http://local.invalid/v1"
+    assert "databricks" not in bridged_config["model_providers"]
     assert (target_home / "auth.json").read_text(encoding="utf-8") == "{}\n"
     assert not (target_home / "auth.json").is_symlink()
     assert (target_home / "sessions").is_symlink()

@@ -1008,6 +1008,7 @@ def _populate_codex_home_config(
     # private home: Codex otherwise classifies the selected custom model as a
     # ChatGPT-account model and rejects it before contacting the provider.
     profile_disables_openai_auth = False
+    authless_profile_text: str | None = None
     if config_profile:
         profile_path = source_dir / f"{config_profile}.config.toml"
         try:
@@ -1019,6 +1020,12 @@ def _populate_codex_home_config(
                 isinstance(provider_config, dict)
                 and provider_config.get("requires_openai_auth") is False
             )
+            if profile_disables_openai_auth:
+                # A ModelCloud profile is self-contained: its provider table,
+                # base URL, and env_key are the complete routing contract.
+                # Never mix it with the user's generic config, which could
+                # register ChatGPT, Databricks, or unrelated plugin providers.
+                authless_profile_text = profile_path.read_text(encoding="utf-8")
         except (OSError, tomllib.TOMLDecodeError):
             # Profile validation and launch diagnostics happen at the caller.
             # A failed optional inspection here must not break ordinary Codex
@@ -1027,6 +1034,7 @@ def _populate_codex_home_config(
 
     symlink_files: tuple[str, ...] = _CODEX_HOME_SYMLINK_FILES
     if profile_disables_openai_auth:
+        minimal_config = True
         symlink_files = tuple(name for name in symlink_files if name != "auth.json")
         # A resumed native session may reuse a pre-existing private home from
         # before its profile was selected. Replace that stale bridge with a
@@ -1040,6 +1048,32 @@ def _populate_codex_home_config(
             stale_auth.unlink()
         stale_auth.write_text("{}\n", encoding="utf-8")
         os.chmod(stale_auth, 0o600)
+        # The app-server validates config.toml before applying --profile.
+        # Install only the selected authless profile as that base config and
+        # replace any prior per-session copy.  This also prevents a resumed
+        # session from retaining a former Databricks/OpenAI provider table.
+        config_path = target_dir / "config.toml"
+        if config_path.exists() or config_path.is_symlink():
+            config_path.unlink()
+        if authless_profile_text is not None:
+            config_path.write_text(authless_profile_text, encoding="utf-8")
+            os.chmod(config_path, 0o600)
+        # Preserve resume continuity with the official Codex runtime without
+        # inheriting its credentials, plugins, rules, or generic config.
+        # Rollouts are local transcript state, not provider authentication.
+        source_sessions = source_dir / "sessions"
+        target_sessions = target_dir / "sessions"
+        if source_sessions.is_dir() and not (
+            target_sessions.exists() or target_sessions.is_symlink()
+        ):
+            try:
+                target_sessions.symlink_to(source_sessions.resolve())
+            except OSError as exc:
+                logger.warning(
+                    "could not link Codex rollout history into authless profile home %s (%s)",
+                    target_dir,
+                    exc,
+                )
     if not minimal_config:
         symlink_files += _CODEX_HOME_GLOBAL_INSTRUCTION_FILES
     if inject_hooks:

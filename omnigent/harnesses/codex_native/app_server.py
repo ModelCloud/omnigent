@@ -2643,6 +2643,17 @@ def build_codex_native_server(
     authless_profile_env = _authless_codex_profile_env_passthrough(config_profile)
     env = _clean_codex_env(authless_profile_env)
     if authless_profile_env:
+        # ``codex-modelcloud`` is deliberately an authless, OpenAI-compatible
+        # runtime.  Do not let an ambient OpenAI or Databricks credential make
+        # it into the process: its selected profile's ``env_key`` is the only
+        # inference credential it may receive.  The profile config is copied
+        # into a private home by ``_populate_codex_home_config`` below, so its
+        # bearer token and base URL remain the complete routing contract.
+        env = {
+            key: value
+            for key, value in env.items()
+            if not key.startswith(("OPENAI_", "DATABRICKS_"))
+        }
         # Codex's cloud-config channel owns a separate ChatGPT auth manager.
         # It is not needed for a profile that explicitly routes all inference
         # through a local/provider-specific credential, and must not refresh
@@ -3748,19 +3759,24 @@ def codex_terminal_env(app_server: CodexNativeAppServer) -> dict[str, str]:
     profile_credentials = set(
         _authless_codex_profile_env_passthrough(app_server.config_profile)
     )
+    authless_profile = bool(profile_credentials)
+    allowed_exact = {
+        "CODEX_HOME",
+        "CODEX_DISABLE_CLOUD_CONFIG",
+        "OTEL_RESOURCE_ATTRIBUTES",
+    }
+    if not authless_profile:
+        allowed_exact.update({"DATABRICKS_HOST", "DATABRICKS_CODEX_TOKEN"})
     return {
         key: value
         for key, value in {**app_server.env, "CODEX_HOME": str(app_server.codex_home)}.items()
-        if key
-        in {
-            "CODEX_HOME",
-            "CODEX_DISABLE_CLOUD_CONFIG",
-            "DATABRICKS_HOST",
-            "DATABRICKS_CODEX_TOKEN",
-            "OTEL_RESOURCE_ATTRIBUTES",
-        }
+        if key in allowed_exact
         or key in profile_credentials
-        or key.startswith(("OPENAI_", "HTTP_", "HTTPS_", "NO_PROXY", "ALL_PROXY"))
+        or (
+            not authless_profile
+            and key.startswith(("OPENAI_", "HTTP_", "HTTPS_", "NO_PROXY", "ALL_PROXY"))
+        )
+        or (authless_profile and key.startswith(("HTTP_", "HTTPS_", "NO_PROXY", "ALL_PROXY")))
     }
 
 
