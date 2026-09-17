@@ -3729,9 +3729,8 @@ export function NewChatLandingScreen() {
       }
       const saved = readHarnessOptions(native.harness);
       if (saved.routing === "on") return [agent.id, SMART_ROUTING_LABEL];
-      // LocalDex has one host-owned OpenAI-compatible provider/model contract.
-      // It must never inherit Codex's account model catalog or a remembered
-      // "Default" selection merely because the two share a visual icon.
+      // Provider rows are part of Codex's one catalog.  LocalDex adds its
+      // OpenAI-compatible row there, beside the signed-in ChatGPT models.
       if (native.pinnedModel !== undefined) return [agent.id, native.pinnedModel];
       const catalog =
         native.iconKind === "claude"

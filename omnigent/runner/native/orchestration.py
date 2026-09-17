@@ -66,13 +66,13 @@ from omnigent.runner.resource_registry import (
     ANTIGRAVITY_NATIVE_TERMINAL_ROLE,
     CLAUDE_NATIVE_TERMINAL_ROLE,
     CODEX_NATIVE_TERMINAL_ROLE,
-    LOCALDEX_NATIVE_TERMINAL_ROLE,
     CURSOR_NATIVE_TERMINAL_ROLE,
     DEVIN_NATIVE_TERMINAL_ROLE,
     GOOSE_NATIVE_TERMINAL_ROLE,
     HERMES_NATIVE_TERMINAL_ROLE,
     KIMI_NATIVE_TERMINAL_ROLE,
     KIRO_NATIVE_TERMINAL_ROLE,
+    LOCALDEX_NATIVE_TERMINAL_ROLE,
     OMNIGENT_REPL_TERMINAL_ROLE,
     OPENCODE_NATIVE_TERMINAL_ROLE,
     PI_NATIVE_TERMINAL_ROLE,
@@ -4404,30 +4404,63 @@ async def _auto_create_codex_terminal(
     from omnigent.inner.codex_executor import _find_codex_cli
 
     _localdex_config = None
-    if localdex:
+    selected_local_model = False
+    # LocalDex is an upstream-compatible Codex binary with one additive local
+    # provider.  When it is installed, codex-native is the *only* harness: the
+    # selected model decides the provider, never a harness/agent swap.
+    # ``localdex`` remains solely as a compatibility path for pre-existing
+    # sessions created by the now-retired separate wrapper.
+    try:
         from omnigent.harnesses.localdex_native.config import (
             LOCALDEX_BINARY,
             LOCALDEX_CONFIG_ROOT,
+            LOCALDEX_MODEL,
             load_localdex_config,
+            localdex_model_selected,
         )
 
-        _localdex_config = load_localdex_config()
+        _localdex_config = load_localdex_config(require_token=False)
         if not LOCALDEX_BINARY.is_file():
             raise FileNotFoundError(f"LocalDex binary is missing: {LOCALDEX_BINARY}")
-        _codex_launch = dataclasses.replace(
-            _codex_launch,
-            config_overrides=[
-                f"model_provider={json.dumps(_localdex_config.provider)}",
-                f"model={json.dumps(_localdex_config.model)}",
-            ],
-            model=_localdex_config.model,
-            profile=None,
-            config_profile=None,
-            summary="isolated LocalDex provider",
-            login_required=False,
+        selected_model = default_model
+        selected_local_model = localdex_model_selected(_localdex_config, selected_model)
+        if selected_local_model:
+            # Reject a local pick with no simple bearer credential while still
+            # allowing ChatGPT/Codex launches on this same binary.
+            load_localdex_config()
+        if selected_local_model:
+            _codex_launch = dataclasses.replace(
+                _codex_launch,
+                config_overrides=[
+                    f"model_provider={json.dumps(_localdex_config.provider)}",
+                    f"model={json.dumps(selected_model)}",
+                ],
+                model=selected_model,
+                profile=None,
+                config_profile=None,
+                summary="LocalDex local provider",
+                login_required=False,
+            )
+    except FileNotFoundError:
+        # A stock Codex installation remains useful on hosts that have not
+        # received LocalDex yet; it has no local row in the host picker.
+        _localdex_config = None
+    except ValueError:
+        # Registration is optional for ordinary Codex sessions.  A bad stale
+        # registration must not turn it into a system-wide launch failure, but
+        # an explicit local-model session must surface the repairable config
+        # error instead of silently sending it to another provider.
+        if default_model == LOCALDEX_MODEL:
+            raise
+        _logger.warning(
+            "LocalDex registration is invalid; falling back to stock Codex", exc_info=True
         )
+        _localdex_config = None
+        selected_local_model = False
 
-    _codex_cli_path = str(LOCALDEX_BINARY) if localdex else _find_codex_cli()
+    _codex_cli_path = (
+        str(LOCALDEX_BINARY) if _localdex_config is not None else _find_codex_cli()
+    )
     _catalog_launch = None
     _fresh_codex_catalog: list[_JsonObject] | None = None
     try:
@@ -4485,7 +4518,7 @@ async def _auto_create_codex_terminal(
                 exc_info=True,
                 extra={"session_id": session_id},
             )
-        if launch_config.model_override and _codex_catalog:
+        if launch_config.model_override and _codex_catalog and not selected_local_model:
             pick = launch_config.model_override
             reachable = codex_reachable_model_slug(pick, _codex_catalog)
             fresh_rows = _codex_catalog
@@ -4810,14 +4843,23 @@ async def _auto_create_codex_terminal(
         cwd=Path(workspace),
         model=_codex_launch.model,
         profile=_codex_launch.profile,
+        codex_path=_codex_cli_path,
         # A named Codex profile is global CLI state, not merely resolver
         # metadata.  Without passing it into the host-runner app-server,
         # its private CODEX_HOME falls back to the generated generic provider
         # and can incorrectly require a ChatGPT login even when the selected
         # local provider explicitly has requires_openai_auth = false.
         config_profile=_codex_launch.config_profile,
-        config_source=LOCALDEX_CONFIG_ROOT if localdex else None,
-        isolated_env_keys=(_localdex_config.env_key,) if _localdex_config is not None else (),
+        config_source=LOCALDEX_CONFIG_ROOT if selected_local_model else None,
+        # Only the local provider is authless: hand its app-server the one
+        # declared bearer key and let build_codex_native_server strip ambient
+        # OpenAI/Databricks credentials. Every other Codex launch keeps its
+        # original auth and provider-routing contract unchanged.
+        isolated_env_keys=(
+            (_localdex_config.env_key,)
+            if selected_local_model and _localdex_config is not None
+            else ()
+        ),
         process_registry_path=(bridge_dir.parent / "process-registry.json") if localdex else None,
         process_tag_prefix="localdex-native" if localdex else "codex-native",
         client_identity=(

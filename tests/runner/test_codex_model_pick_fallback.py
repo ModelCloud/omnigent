@@ -159,6 +159,7 @@ async def codex_launch_harness(
         builds.append(kwargs)
         app_server.codex_home = kwargs["codex_home"]
         app_server.config_profile = kwargs.get("config_profile")
+        app_server.isolated_env_keys = kwargs.get("isolated_env_keys", ())
         # The real builder writes provider definitions into the private config.
         app_server.config_overrides = [
             override
@@ -440,6 +441,106 @@ async def test_generic_provider_fallback_rebuilds_model_config_overrides(
     assert f'model="{_PROVIDER_DEFAULT}"' in harness.builds[0]["extra_config_overrides"]
     assert all(pick not in override for override in harness.builds[0]["extra_config_overrides"])
     assert harness.resets == [{"expected_model_override": pick}]
+
+
+@pytest.mark.asyncio
+async def test_localdex_install_preserves_nonlocal_codex_launch(
+    codex_launch_harness: _LaunchHarness, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An installed LocalDex binary must not rewrite a normal Codex provider."""
+    from omnigent.harnesses.localdex_native import config as localdex_config
+
+    harness = codex_launch_harness
+    binary = tmp_path / "localdex"
+    binary.touch()
+    local = localdex_config.LocalDexConfig(
+        local_model=localdex_config.LOCALDEX_MODEL,
+        provider="localdex",
+        base_url="http://127.0.0.1:2120",
+        env_key="BEARER_TOKEN",
+    )
+    monkeypatch.setattr(localdex_config, "LOCALDEX_BINARY", binary)
+    monkeypatch.setattr(localdex_config, "load_localdex_config", lambda **_kwargs: local)
+    harness.app_server.client_identity = "test-codex"
+    harness.snapshot["model_override"] = "gateway-model"
+
+    def resolve_launch(
+        *, model: str | None, spec: AgentSpec | None = None
+    ) -> codex_app.NativeCodexLaunch:
+        del spec
+        return codex_app.NativeCodexLaunch(
+            config_overrides=['model_provider="gateway"'],
+            model=model,
+            profile=None,
+            summary="gateway provider",
+            login_required=False,
+        )
+
+    monkeypatch.setattr(codex_app, "resolve_native_codex_launch", resolve_launch)
+    harness.seed_catalog([{"id": "gateway-model", "isDefault": True}])
+
+    await harness.launch()
+
+    build = harness.builds[0]
+    assert build["codex_path"] == str(binary)
+    assert 'model_provider="gateway"' in build["extra_config_overrides"]
+    assert 'model_provider="localdex"' not in build["extra_config_overrides"]
+    assert build["isolated_env_keys"] == ()
+    assert build["config_source"] is None
+
+
+@pytest.mark.asyncio
+async def test_localdex_model_passes_only_declared_bearer_key(
+    codex_launch_harness: _LaunchHarness, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The local provider receives its declared bearer key through isolation."""
+    from omnigent.harnesses.localdex_native import config as localdex_config
+
+    harness = codex_launch_harness
+    binary = tmp_path / "localdex"
+    binary.touch()
+    local = localdex_config.LocalDexConfig(
+        local_model=localdex_config.LOCALDEX_MODEL,
+        provider="localdex",
+        base_url="http://127.0.0.1:2120",
+        env_key="BEARER_TOKEN",
+    )
+    monkeypatch.setattr(localdex_config, "LOCALDEX_BINARY", binary)
+    monkeypatch.setattr(localdex_config, "LOCALDEX_CONFIG_ROOT", tmp_path / "localdex-home")
+    monkeypatch.setattr(localdex_config, "load_localdex_config", lambda **_kwargs: local)
+    harness.app_server.client_identity = "test-codex"
+    harness.snapshot["model_override"] = local.local_model
+
+    await harness.launch()
+
+    build = harness.builds[0]
+    assert build["isolated_env_keys"] == ("BEARER_TOKEN",)
+    assert build["config_source"] == tmp_path / "localdex-home"
+    assert 'model_provider="localdex"' in build["extra_config_overrides"]
+
+
+@pytest.mark.asyncio
+async def test_invalid_localdex_registration_falls_back_for_stock_model(
+    codex_launch_harness: _LaunchHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stale optional registration cannot block a normal Codex launch."""
+    from omnigent.harnesses.localdex_native import config as localdex_config
+
+    harness = codex_launch_harness
+    harness.app_server.client_identity = "test-codex"
+    harness.snapshot["model_override"] = "gateway-model"
+
+    def invalid_config(**_kwargs: object) -> localdex_config.LocalDexConfig:
+        raise ValueError("obsolete LocalDex registration")
+
+    monkeypatch.setattr(localdex_config, "load_localdex_config", invalid_config)
+    harness.seed_catalog([{"id": "gateway-model", "isDefault": True}])
+
+    await harness.launch()
+
+    build = harness.builds[0]
+    assert build["codex_path"] == _CODEX_PATH
+    assert build["isolated_env_keys"] == ()
 
 
 @pytest.mark.asyncio

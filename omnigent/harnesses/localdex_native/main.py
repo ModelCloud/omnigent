@@ -26,7 +26,8 @@ def _materialize_localdex_agent_spec(tmpdir: Path, *, model: str | None) -> Path
                 "name": "localdex-native-ui",
                 "prompt": (
                     "LocalDex is running in the session terminal. Web UI messages are "
-                    "forwarded into the same isolated LocalDex app-server thread."
+                    "forwarded into the same LocalDex app-server thread, which supports "
+                    "both ChatGPT/Codex and the registered local model."
                 ),
                 "executor": {
                     "harness": "localdex-native",
