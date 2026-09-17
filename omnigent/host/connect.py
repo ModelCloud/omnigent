@@ -825,7 +825,25 @@ def _build_runner_env(
         config_env_vars = provider_credential_env_vars(load_config())
     except (OSError, _OmnigentError):
         config_env_vars = frozenset()
-    forwarded = HARNESS_CREDENTIAL_ENV_VARS | extra_names | config_env_vars
+    # LocalDex is an additive provider under the native Codex harness. Its
+    # bearer key is deliberately named by the LocalDex registration rather
+    # than by a global credential convention, so it is not part of
+    # ``HARNESS_CREDENTIAL_ENV_VARS``. Forward exactly that declared key to a
+    # Codex runner. The runner later isolates it to the selected local
+    # provider; no other harness receives it here.
+    localdex_env_vars: frozenset[str] = frozenset()
+    if harness in {"codex-native", "localdex-native"}:
+        try:
+            from omnigent.harnesses.localdex_native.config import load_localdex_config
+
+            localdex_env_vars = frozenset(
+                {load_localdex_config(require_token=False).env_key}
+            )
+        except (OSError, ValueError):
+            # A missing or stale optional LocalDex registration must not make
+            # ordinary Codex runner creation fail.
+            pass
+    forwarded = HARNESS_CREDENTIAL_ENV_VARS | extra_names | config_env_vars | localdex_env_vars
     env = {
         key: value
         for key, value in base_env.items()
