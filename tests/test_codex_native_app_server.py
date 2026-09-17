@@ -1926,6 +1926,18 @@ def test_native_codex_profile_is_passed_to_app_server_and_remote_tui() -> None:
     assert remote_argv[:2] == ["--profile", "local"]
 
 
+def test_empty_agent_codex_profile_uses_host_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unset serialized agent field must not suppress the host profile."""
+    from types import SimpleNamespace
+
+    from omnigent.harnesses.codex_native import app_server as codex_native_app_server
+
+    monkeypatch.setenv("OMNIGENT_CODEX_PROFILE", "local")
+    spec = SimpleNamespace(executor=SimpleNamespace(config={"codex_profile": ""}))
+
+    assert codex_native_app_server._native_codex_config_profile(spec) == "local"
+
+
 def test_native_codex_profile_and_history_are_bridged(tmp_path: Path) -> None:
     """Native sessions retain user profiles and the normal Codex resume store."""
     source_home = tmp_path / "source-codex-home"

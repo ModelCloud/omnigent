@@ -2746,7 +2746,10 @@ def _native_codex_config_profile(spec: AgentSpec | None) -> str | None:
     for the legacy Databricks profile and is intentionally not reused.
     """
     value: object | None = spec.executor.config.get("codex_profile") if spec else None
-    if value is None:
+    # Agent specs commonly serialize an unset optional field as an empty
+    # string. Treat it exactly like an omitted field so the host-wide profile
+    # remains a real default rather than being accidentally suppressed.
+    if value is None or not str(value).strip():
         value = os.environ.get("OMNIGENT_CODEX_PROFILE")
     if value is None or not str(value).strip():
         return None
