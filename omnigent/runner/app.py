@@ -2976,6 +2976,7 @@ def create_runner_app(
         return _session_cache_generations.get(session_id, 0) == generation
 
     _codex_terminal_ensure_locks: dict[str, asyncio.Lock] = {}
+    _localdex_terminal_ensure_locks: dict[str, asyncio.Lock] = {}
     _pi_terminal_ensure_locks: dict[str, asyncio.Lock] = {}
     _opencode_terminal_ensure_locks: dict[str, asyncio.Lock] = {}
     _cursor_terminal_ensure_locks: dict[str, asyncio.Lock] = {}
@@ -4067,6 +4068,7 @@ def create_runner_app(
                 {
                     "claude": _claude_terminal_ensure_locks,
                     "codex": _codex_terminal_ensure_locks,
+                    "localdex": _localdex_terminal_ensure_locks,
                     "pi": _pi_terminal_ensure_locks,
                     "cursor": _cursor_terminal_ensure_locks,
                     "kiro": _kiro_terminal_ensure_locks,
@@ -4639,6 +4641,7 @@ def create_runner_app(
         _ingest_now_serving.pop(session_id, None)
         _ingest_cond.pop(session_id, None)
         _codex_terminal_ensure_locks.pop(session_id, None)
+        _localdex_terminal_ensure_locks.pop(session_id, None)
         _claude_terminal_ensure_locks.pop(session_id, None)
         _pi_terminal_ensure_locks.pop(session_id, None)
         _cursor_terminal_ensure_locks.pop(session_id, None)
@@ -10115,6 +10118,7 @@ def create_runner_app(
                 {
                     "claude": _claude_terminal_ensure_locks,
                     "codex": _codex_terminal_ensure_locks,
+                    "localdex": _localdex_terminal_ensure_locks,
                     "pi": _pi_terminal_ensure_locks,
                     "cursor": _cursor_terminal_ensure_locks,
                     "kiro": _kiro_terminal_ensure_locks,
@@ -11914,6 +11918,7 @@ def create_runner_app(
         session_id: str,
     ) -> JSONResponse:
         _codex_terminal_ensure_locks.pop(session_id, None)
+        _localdex_terminal_ensure_locks.pop(session_id, None)
         _claude_terminal_ensure_locks.pop(session_id, None)
         _pi_terminal_ensure_locks.pop(session_id, None)
         _cursor_terminal_ensure_locks.pop(session_id, None)
@@ -11941,6 +11946,7 @@ def create_runner_app(
     @app.post("/v1/sessions/{session_id}/reset-state")
     async def reset_session_state(session_id: str) -> JSONResponse:
         _codex_terminal_ensure_locks.pop(session_id, None)
+        _localdex_terminal_ensure_locks.pop(session_id, None)
         _claude_terminal_ensure_locks.pop(session_id, None)
         _pi_terminal_ensure_locks.pop(session_id, None)
         _cursor_terminal_ensure_locks.pop(session_id, None)
