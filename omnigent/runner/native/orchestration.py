@@ -4434,6 +4434,10 @@ async def _auto_create_codex_terminal(
                 config_overrides=[
                     f"model_provider={json.dumps(_localdex_config.provider)}",
                     f"model={json.dumps(selected_model)}",
+                    # LocalDex consumes native raw reasoning deltas. Its
+                    # OpenAI-compatible endpoint has no separate summary
+                    # stream, so do not request one in parallel.
+                    f"model_reasoning_summary={json.dumps('none')}",
                 ],
                 model=selected_model,
                 profile=None,

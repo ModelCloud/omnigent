@@ -517,6 +517,7 @@ async def test_localdex_model_passes_only_declared_bearer_key(
     assert build["isolated_env_keys"] == ("BEARER_TOKEN",)
     assert build["config_source"] == tmp_path / "localdex-home"
     assert 'model_provider="localdex"' in build["extra_config_overrides"]
+    assert 'model_reasoning_summary="none"' in build["extra_config_overrides"]
 
 
 @pytest.mark.asyncio
