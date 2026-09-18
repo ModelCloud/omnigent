@@ -485,6 +485,8 @@ async def test_localdex_install_preserves_nonlocal_codex_launch(
     assert build["codex_path"] == str(binary)
     assert 'model_provider="gateway"' in build["extra_config_overrides"]
     assert 'model_provider="localdex"' not in build["extra_config_overrides"]
+    assert "show_raw_agent_reasoning=true" in build["extra_config_overrides"]
+    assert 'model_reasoning_summary="auto"' in build["extra_config_overrides"]
     assert build["isolated_env_keys"] == ()
     assert build["config_source"] is None
 
@@ -517,7 +519,9 @@ async def test_localdex_model_passes_only_declared_bearer_key(
     assert build["isolated_env_keys"] == ("BEARER_TOKEN",)
     assert build["config_source"] == tmp_path / "localdex-home"
     assert 'model_provider="localdex"' in build["extra_config_overrides"]
+    assert "show_raw_agent_reasoning=true" in build["extra_config_overrides"]
     assert 'model_reasoning_summary="none"' in build["extra_config_overrides"]
+    assert 'model_reasoning_summary="auto"' not in build["extra_config_overrides"]
 
 
 @pytest.mark.asyncio
