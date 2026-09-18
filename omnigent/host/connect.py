@@ -3052,17 +3052,17 @@ class HostProcess:
         """
         harness = canonicalize_harness(frame.harness) or frame.harness
         with_source = functools.partial(_with_model_configuration_source, harness=harness)
-        if harness == "codex-native":
+        if harness in {"codex-native", "localdex-native"}:
             # Harness-truth lane: every launch shape is answered from the
             # shared catalog, probed from the configured Codex binary itself.
             # No curated fallback and no serving-endpoints listing — a probe
             # that cannot run is a failed lookup, not a successful empty catalog.
             probed = await self._probed_codex_model_options()
             if probed is not None:
-                # LocalDex is the Codex binary installed on these hosts, not a
-                # second harness.  Its simple-bearer provider contributes one
-                # additional row to the exact same native Codex picker.  The
-                # account rows remain the app-server's own ChatGPT catalog.
+                # LocalDex is a native sibling of Codex.  Its simple-bearer
+                # provider contributes one additional row while the app-server
+                # account rows remain available for switching/resuming in the
+                # shared conversation UI.
                 try:
                     from omnigent.harnesses.localdex_native.config import load_localdex_config
 

@@ -5188,6 +5188,52 @@ async def test_handle_model_options_serves_codex_probe_rows_and_caches(
     _cleanup_host(host)
 
 
+async def test_handle_model_options_serves_localdex_from_the_native_codex_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The separately advertised LocalDex harness exposes the shared picker."""
+    from omnigent.harnesses.localdex_native import config as localdex_config
+
+    host = _make_host_process()
+
+    async def _probed() -> object:
+        from omnigent.host.connect import ModelOptionsResult
+
+        return ModelOptionsResult(
+            models=[{"id": "gpt-5.6", "displayName": "GPT-5.6"}],
+            routable_models=["gpt-5.6"],
+        )
+
+    monkeypatch.setattr(host, "_probed_codex_model_options", _probed)
+    monkeypatch.setattr(
+        localdex_config,
+        "load_localdex_config",
+        lambda *, require_token: SimpleNamespace(
+            local_model="QB/DSV4.1-Flash", env_key="LOCALDEX_TEST_BEARER"
+        ),
+    )
+    monkeypatch.setenv("LOCALDEX_TEST_BEARER", "test-token")
+
+    result = await host._handle_model_options(
+        HostModelOptionsFrame(request_id="req_localdex", harness="localdex-native"),
+    )
+
+    assert result == HostModelOptionsResultFrame(
+        request_id="req_localdex",
+        status="ok",
+        models=[
+            {
+                "id": "QB/DSV4.1-Flash",
+                "model": "QB/DSV4.1-Flash",
+                "displayName": "QB/DSV4.1-Flash",
+            },
+            {"id": "gpt-5.6", "displayName": "GPT-5.6"},
+        ],
+        routable_models=["QB/DSV4.1-Flash", "gpt-5.6"],
+    )
+    _cleanup_host(host)
+
+
 async def test_handle_model_options_serves_claude_sdk_endpoint_listing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

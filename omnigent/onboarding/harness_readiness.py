@@ -35,6 +35,7 @@ from omnigent.harness_aliases import HARNESS_ALIASES, canonicalize_harness
 from omnigent.harness_availability import (
     CODEX_CANONICAL_HARNESSES,
     HARNESS_BINARY_MISSING,
+    HARNESS_NEEDS_AUTH,
     HARNESS_VERSION_TOO_LOW,
     HarnessAvailability,
 )
@@ -161,6 +162,12 @@ _DEVIN_NATIVE_HARNESSES: frozenset[str] = frozenset({"devin-native", "native-dev
 # ``_HARNESS_FAMILY`` entry, so they must be gated explicitly or they fail open.
 _QWEN_HARNESSES: frozenset[str] = frozenset({QWEN_KEY, "qwen-code", "qwen-native", "native-qwen"})
 
+# LocalDex is a separately registered native harness, but it does not use the
+# generic Codex installation or login check.  It is launchable only when its
+# pinned executable, harness-owned provider registration, and explicitly named
+# bearer credential are all available on this host.
+_LOCALDEX_NATIVE_HARNESSES: frozenset[str] = frozenset({"localdex-native"})
+
 
 def _canonical_harness(harness: str) -> str:
     """Normalize a harness id to its canonical spelling.
@@ -201,6 +208,30 @@ def _install_key(canonical: str) -> str:
     return _HARNESS_FAMILY.get(canonical) or PI_KEY
 
 
+def _localdex_native_availability() -> HarnessAvailability:
+    """Return readiness for the isolated LocalDex native harness.
+
+    Unlike stock Codex, LocalDex must never fall back to the ambient ``codex``
+    binary or ambient OpenAI credentials.  Its own registration identifies the
+    single bearer variable that may be forwarded to the runner.
+    """
+    try:
+        from omnigent.harnesses.localdex_native.config import (
+            LOCALDEX_BINARY,
+            load_localdex_config,
+        )
+
+        if not LOCALDEX_BINARY.is_file():
+            return HARNESS_BINARY_MISSING
+        config = load_localdex_config(require_token=False)
+    except (OSError, ValueError):
+        # A missing or malformed harness-owned registration is not a generic
+        # Codex authentication problem and must not make the harness appear
+        # launchable.
+        return False
+    return True if os.environ.get(config.env_key) else HARNESS_NEEDS_AUTH
+
+
 def _harness_availability_core(harness: str) -> HarnessAvailability:
     """Return the detailed availability state for *harness*.
 
@@ -216,6 +247,8 @@ def _harness_availability_core(harness: str) -> HarnessAvailability:
         ``False`` or a reason string otherwise.
     """
     canonical = _canonical_harness(harness)
+    if canonical in _LOCALDEX_NATIVE_HARNESSES:
+        return _localdex_native_availability()
     if canonical == "acp":
         # The generic ACP harness has no fixed binary — "configured" means at
         # least one agent is registered in the ``acp:`` config block. Each
@@ -470,6 +503,8 @@ def _cli_family_availability(canonical: str, install_key: str) -> HarnessAvailab
 
 def _harness_availability(canonical: str) -> HarnessAvailability:
     """Return picker-facing availability for one canonical harness spelling."""
+    if canonical in _LOCALDEX_NATIVE_HARNESSES:
+        return _localdex_native_availability()
     if _is_codex_family_harness(canonical):
         from omnigent.harnesses.codex_native.main import _codex_auth_unavailable_reason
 

@@ -46,6 +46,11 @@ CLAUDE_NATIVE_WRAPPER_VALUE = "claude-code-native-ui"
 # ``conversations.labels[WRAPPER_LABEL_KEY]``.
 CODEX_NATIVE_WRAPPER_VALUE = "codex-native-ui"
 
+# Value the ``omnigent localdex`` wrapper writes into
+# ``conversations.labels[WRAPPER_LABEL_KEY]``. LocalDex has its own bridge and
+# rollout state, so it must never be represented as the stock Codex wrapper.
+LOCALDEX_NATIVE_WRAPPER_VALUE = "localdex-native-ui"
+
 # Value the ``omnigent pi`` wrapper writes into
 # ``conversations.labels[WRAPPER_LABEL_KEY]``.
 PI_NATIVE_WRAPPER_VALUE = "pi-native-ui"

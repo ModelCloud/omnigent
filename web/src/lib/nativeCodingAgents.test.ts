@@ -26,6 +26,16 @@ describe("nativeCodingAgentForHarness", () => {
     expect(nativeCodingAgentForHarness("opencode-native")?.key).toBe("opencode");
   });
 
+  it("resolves LocalDex and folds its native alias", () => {
+    const localdex = nativeCodingAgentForHarness("localdex-native");
+    expect(localdex).toMatchObject({
+      key: "localdex",
+      displayName: "LocalDex",
+      wrapperLabel: "localdex-native-ui",
+    });
+    expect(nativeCodingAgentForHarness("native-localdex")).toBe(localdex);
+  });
+
   it("folds the reversed native-opencode alias to the opencode-native spec", () => {
     expect(nativeCodingAgentForHarness("native-opencode")).toBe(
       nativeCodingAgentForHarness("opencode-native"),
