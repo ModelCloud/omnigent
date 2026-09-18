@@ -4434,6 +4434,10 @@ async def _auto_create_codex_terminal(
                 config_overrides=[
                     f"model_provider={json.dumps(_localdex_config.provider)}",
                     f"model={json.dumps(selected_model)}",
+                    # LocalDex consumes native raw reasoning deltas. Its
+                    # OpenAI-compatible endpoint has no separate summary
+                    # stream, so do not request one in parallel.
+                    f"model_reasoning_summary={json.dumps('none')}",
                 ],
                 model=selected_model,
                 profile=None,
@@ -4457,6 +4461,17 @@ async def _auto_create_codex_terminal(
         )
         _localdex_config = None
         selected_local_model = False
+
+    # The app-server normally hides raw reasoning events, and the current
+    # ChatGPT catalog defaults its trace request to ``none``. Omnigent owns a
+    # visible thinking surface, so enable raw-event forwarding for every
+    # Codex-family model and explicitly request the official API's available
+    # reasoning summary. LocalDex is different: it already supplies raw
+    # reasoning and its local Responses endpoint must not be asked to produce
+    # a parallel summary stream.
+    _codex_reasoning_trace_overrides = ["show_raw_agent_reasoning=true"]
+    if not selected_local_model:
+        _codex_reasoning_trace_overrides.append('model_reasoning_summary="auto"')
 
     _codex_cli_path = (
         str(LOCALDEX_BINARY) if _localdex_config is not None else _find_codex_cli()
@@ -4865,7 +4880,11 @@ async def _auto_create_codex_terminal(
         client_identity=(
             "omnigent-localdex-native-auto" if localdex else "omnigent-codex-native-auto"
         ),
-        extra_config_overrides=[*_codex_launch.config_overrides, *mcp_overrides],
+        extra_config_overrides=[
+            *_codex_launch.config_overrides,
+            *_codex_reasoning_trace_overrides,
+            *mcp_overrides,
+        ],
         bridge_dir=bridge_dir,
         ap_server_url=launch_config.policy_server_url,
         ap_auth_headers=policy_headers,
