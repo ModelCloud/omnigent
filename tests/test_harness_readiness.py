@@ -2,9 +2,56 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from types import SimpleNamespace
+
 import pytest
 
 from omnigent.onboarding import harness_readiness as hr
+
+
+def test_localdex_native_requires_its_pinned_binary_config_and_bearer(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """LocalDex never reports ready from stock Codex/OpenAI state alone."""
+    from omnigent.harnesses.localdex_native import config as localdex_config
+
+    binary = tmp_path / "localdex"
+    monkeypatch.setattr(localdex_config, "LOCALDEX_BINARY", binary)
+    monkeypatch.setattr(
+        localdex_config,
+        "load_localdex_config",
+        lambda *, require_token: SimpleNamespace(env_key="LOCALDEX_TEST_BEARER"),
+    )
+    monkeypatch.delenv("LOCALDEX_TEST_BEARER", raising=False)
+
+    assert hr._harness_availability_core("localdex-native") == "binary-missing"
+    assert hr.harness_is_configured("localdex-native") is False
+
+    binary.touch()
+    assert hr._harness_availability_core("localdex-native") == "needs-auth"
+    assert hr.harness_is_configured("native-localdex") is False
+
+    monkeypatch.setenv("LOCALDEX_TEST_BEARER", "test-token")
+    assert hr._harness_availability_core("localdex-native") is True
+    assert hr.harness_is_configured("native-localdex") is True
+
+
+def test_localdex_native_invalid_registration_is_not_launchable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A stale LocalDex registration cannot accidentally fall back to Codex."""
+    from omnigent.harnesses.localdex_native import config as localdex_config
+
+    binary = tmp_path / "localdex"
+    binary.touch()
+    monkeypatch.setattr(localdex_config, "LOCALDEX_BINARY", binary)
+
+    def _invalid_config(*, require_token: bool) -> object:
+        raise ValueError("stale LocalDex config")
+
+    monkeypatch.setattr(localdex_config, "load_localdex_config", _invalid_config)
+    assert hr._harness_availability_core("localdex-native") is False
 
 
 @pytest.mark.parametrize("harness", ["pi", "pi-native", "native-pi"])

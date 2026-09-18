@@ -14,6 +14,7 @@ import { nativeAgentSortRank } from "@/lib/nativeCodingAgents";
 export const BUILTIN_AGENTS = new Set([
   "claude-native-ui", // Claude Code
   "codex-native-ui", // Codex
+  "localdex-native-ui", // LocalDex
   "opencode-native-ui", // OpenCode
   "pi-native-ui", // Pi
   "cursor-native-ui", // Cursor
@@ -63,6 +64,7 @@ export function isAcpHarnessAgent(
 export const AGENT_DISPLAY_ORDER = [
   "Claude Code",
   "Codex",
+  "LocalDex",
   "OpenCode",
   "Cursor",
   "Pi",

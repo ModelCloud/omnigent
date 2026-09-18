@@ -147,6 +147,18 @@ export const NATIVE_CODING_AGENTS = [
     fullySupported: true,
   },
   {
+    // LocalDex is separately isolated, while its binary keeps the upstream
+    // Codex/ChatGPT catalog alongside the registered local model.
+    key: "localdex",
+    agentName: "localdex-native-ui",
+    harness: "localdex-native",
+    wrapperLabel: "localdex-native-ui",
+    displayName: "LocalDex",
+    iconKind: "codex",
+    sortRank: 21,
+    capabilities: ["approvalMode"],
+  },
+  {
     key: "opencode",
     agentName: "opencode-native-ui",
     harness: "opencode-native",
@@ -325,6 +337,7 @@ const HARNESS_ALIASES: Record<string, string> = {
   "native-kimi": "kimi-native",
   "native-hermes": "hermes-native",
   "native-opencode": "opencode-native",
+  "native-localdex": "localdex-native",
 };
 
 // Vendors whose elicitation wire prefix differs from their registry `key`:
