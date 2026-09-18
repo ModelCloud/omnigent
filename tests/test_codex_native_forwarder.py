@@ -1770,6 +1770,41 @@ async def test_reasoning_delta_opens_block_then_continues() -> None:
 
 
 @pytest.mark.asyncio
+async def test_raw_reasoning_suppresses_its_summary_mirror() -> None:
+    """A raw+summary mirror must reach the append-only web stream once.
+
+    Inference-Ultra publishes every public thought chunk first as raw
+    ``reasoning_text`` and then as an identical summary fallback. LocalDex
+    faithfully maps both to app-server notifications, so the forwarder—not
+    the model—must select the raw representation.
+    """
+    client = _RecordingClient()
+    state = fwd._CodexForwarderState()
+    coalescer = fwd._OutputTextDeltaCoalescer(
+        client,
+        "conv_x",
+        flush_interval_seconds=60.0,
+        flush_char_threshold=1000,
+    )
+
+    params = {"turnId": "turn_1", "itemId": "item_r", "delta": "Think once."}
+    await fwd._handle_reasoning_delta(params, coalescer, state, is_raw=True)
+    await fwd._handle_reasoning_delta(params, coalescer, state, is_raw=False)
+    await coalescer.flush()
+    await coalescer.close()
+
+    assert client.posts == [
+        (
+            "/v1/sessions/conv_x/events",
+            {
+                "type": "external_output_reasoning_delta",
+                "data": {"delta": "Think once.", "started": True},
+            },
+        ),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_reasoning_delta_new_item_reopens_block() -> None:
     """
     A reasoning delta for a new item id opens a fresh block.

@@ -465,6 +465,13 @@ class _CodexForwarderState:
     # block. Reasoning is transient — it has no completed conversation item;
     # the block finalizes when the turn's assistant message arrives.
     reasoning_stream_item_id: str | None = None
+    # Item ids that have emitted the raw reasoning-text channel in this turn.
+    # Some OpenAI-compatible Responses servers mirror every raw chunk on the
+    # summary channel too.  The web reasoning surface is append-only, so
+    # forwarding both representations corrupts prose by interleaving duplicate
+    # chunks (for example, ``TThe usehe``).  Preserve summary-only providers,
+    # but ignore a summary when its raw counterpart has already arrived.
+    raw_reasoning_item_ids: set[str] = field(default_factory=set)
     turn_diff_by_turn: dict[str, str] = field(default_factory=dict)
     # Whether model output has already settled the synthesized MCP startup
     # round. The round is seeded once per forwarder connection (never on
@@ -3551,6 +3558,7 @@ async def _maybe_handle_turn_event(
                 # A new turn opens a fresh reasoning block: the next reasoning
                 # delta must emit ``response.reasoning.started`` again.
                 forwarder_state.reasoning_stream_item_id = None
+                forwarder_state.raw_reasoning_item_ids.clear()
                 # An in-TUI ``/model`` switch writes config.toml (the cost-policy
                 # source of truth) but emits no notification. Re-read it at turn
                 # start so a switch made since the last turn lands ``model_override``
@@ -3715,7 +3723,12 @@ async def _maybe_handle_delta_event(
     if method in {"item/reasoning/textDelta", "item/reasoning/summaryTextDelta"}:
         if delta_coalescer is None:
             raise RuntimeError("Codex reasoning delta handling requires a text-delta coalescer")
-        await _handle_reasoning_delta(params, delta_coalescer, forwarder_state)
+        await _handle_reasoning_delta(
+            params,
+            delta_coalescer,
+            forwarder_state,
+            is_raw=method == "item/reasoning/textDelta",
+        )
         return True
     return False
 
@@ -6926,6 +6939,8 @@ async def _handle_reasoning_delta(
     params: _JsonObject,
     delta_coalescer: _OutputTextDeltaCoalescer,
     forwarder_state: _CodexForwarderState | None,
+    *,
+    is_raw: bool = True,
 ) -> None:
     """
     Forward one live Codex reasoning (chain-of-thought) delta to AP.
@@ -6944,6 +6959,9 @@ async def _handle_reasoning_delta(
     :param delta_coalescer: Shared transient-delta coalescer.
     :param forwarder_state: Optional forwarder state tracking which
         reasoning item is currently open (for the ``started`` edge).
+    :param is_raw: Whether this is ``item/reasoning/textDelta`` rather than
+        ``summaryTextDelta``. A summary that mirrors an already-seen raw item
+        is deliberately suppressed.
     :returns: None.
     """
     delta = params.get("delta")
@@ -6954,6 +6972,16 @@ async def _handle_reasoning_delta(
         )
         return
     item_id = _item_id_from_delta_params(params)
+    reasoning_key = item_id or ""
+    if forwarder_state is not None:
+        if is_raw:
+            forwarder_state.raw_reasoning_item_ids.add(reasoning_key)
+        elif reasoning_key in forwarder_state.raw_reasoning_item_ids:
+            # Inference-Ultra emits the same public trace on both Responses
+            # reasoning channels.  LocalDex preserves both app-server events;
+            # choose the raw one so Omnigent's append-only web stream sees it
+            # exactly once.
+            return
     started = False
     if forwarder_state is not None:
         if item_id is not None:
