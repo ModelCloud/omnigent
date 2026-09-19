@@ -635,16 +635,13 @@ class _NativeBlockingHarnessClient(_ScriptedHarnessClient):
 def _build_native_app(
     gate: asyncio.Event,
 ) -> tuple[FastAPI, _FakeProcessManager, _NativeBlockingHarnessClient]:
-    """Build a runner app whose session resolves to a claude-native harness.
+    """Build a runner app whose session resolves to a terminal-native harness.
 
     The spec_resolver returns a spec whose executor harness is
-    ``codex-native``; the first turn's ``_run_turn_bg`` caches it (before
-    streaming), so subsequent buffer decisions take the native path. We use
-    ``codex-native`` rather than ``claude-native`` because both share the
-    identical runner-side ordering path (``_is_native_harness`` covers
-    both), but claude-native's turn additionally awaits a live MCP
-    comment-tool relay (``_ensure_comment_relay_started``) that a fake
-    harness can't satisfy — orthogonal to message ordering.
+    ``qwen-native``; the first turn's ``_run_turn_bg`` caches it (before
+    streaming), so subsequent buffer decisions take the terminal-native
+    buffering path. Codex-native deliberately is not used here: it has an
+    app-server ``turn/steer`` RPC and must forward a live message instead.
 
     :param gate: Event that unblocks the first turn.
     :returns: ``(app, process_manager, harness_client)``.
@@ -652,7 +649,7 @@ def _build_native_app(
     spec = AgentSpec(
         spec_version=1,
         name="t",
-        executor=ExecutorSpec(type="omnigent", config={"harness": "codex-native"}),
+        executor=ExecutorSpec(type="omnigent", config={"harness": "qwen-native"}),
     )
     harness_client = _NativeBlockingHarnessClient(gate)
     pm = _FakeProcessManager(harness_client)

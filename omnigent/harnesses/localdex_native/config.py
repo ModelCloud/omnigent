@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
@@ -21,6 +22,69 @@ LOCALDEX_CONFIG_ROOT = Path.home() / ".local" / "share" / "localdex"
 LOCALDEX_CONFIG_PATH = LOCALDEX_CONFIG_ROOT / "config.toml"
 LOCALDEX_BINARY = Path.home() / ".local" / "bin" / "localdex"
 LOCALDEX_MODEL = "QB/DSV4.1-Flash"
+
+
+def localdex_model_picker_row(config: LocalDexConfig) -> dict[str, object]:
+    """Return the capability-complete picker row for LocalDex's local model.
+
+    The upstream Codex account catalog does not include a bearer-authenticated
+    custom provider. Omnigent therefore adds this row beside the account rows.
+    Keep the LocalDex model's supported effort ladder here rather than
+    fabricating an id-only row: the web client intentionally hides its effort
+    control when a model has no ``supportedReasoningEfforts`` metadata.
+
+    This mirrors LocalDex's bundled ``ModelInfo`` for DSV4.1 Flash. The model
+    accepts only ``low``, ``high``, and ``max``; in particular, do not offer
+    Codex's generic ``medium`` value because the endpoint rejects it.
+    """
+    return {
+        "id": config.local_model,
+        "model": config.local_model,
+        "displayName": "DeepSeek V4.1 Flash",
+        "defaultReasoningEffort": "high",
+        "supportedReasoningEfforts": [
+            {
+                "reasoningEffort": "low",
+                "description": "Fast responses with lighter reasoning",
+            },
+            {
+                "reasoningEffort": "high",
+                "description": "Greater reasoning depth for complex work",
+            },
+            {
+                "reasoningEffort": "max",
+                "description": "Maximum reasoning depth for difficult work",
+            },
+        ],
+    }
+
+
+def with_localdex_model_picker_row(
+    rows: Sequence[Mapping[str, object]], config: LocalDexConfig
+) -> list[dict[str, object]]:
+    """Insert the canonical LocalDex row once, preserving a selected default.
+
+    A live app-server row or a previously written host catalog can already
+    contain the local model. Replace it with the capability-complete row so
+    stale id-only rows cannot suppress the effort UI, and remove duplicates
+    before returning the shared picker catalog.
+    """
+    local_row = localdex_model_picker_row(config)
+    matching_rows = [
+        row
+        for row in rows
+        if row.get("id") == config.local_model or row.get("model") == config.local_model
+    ]
+    if any(row.get("isDefault") is True for row in matching_rows):
+        local_row["isDefault"] = True
+    return [
+        local_row,
+        *[
+            dict(row)
+            for row in rows
+            if row.get("id") != config.local_model and row.get("model") != config.local_model
+        ],
+    ]
 
 
 @dataclass(frozen=True)
