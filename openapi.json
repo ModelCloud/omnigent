@@ -4527,6 +4527,18 @@
             ],
             "title": "Scope",
             "type": "string"
+          },
+          "task_description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Human label of the task/spawn this decision governed, e.g. `\"Research auth flows\"` \u2014 what ties a fan-out's decision to its sub-agent when every spawn shares one `agent` type. `None` when the spawn carried none, and on rows written before the field existed.",
+            "title": "Task Description"
           }
         },
         "required": [
@@ -5380,6 +5392,11 @@
             ],
             "description": "Which configured sandbox provider to provision on `host_type: \"managed\"` (one of the server's `sandbox_providers`); `None` takes the server's first. Only valid with `host_type: \"managed\"`.",
             "title": "Sandbox Provider"
+          },
+          "side_chat": {
+            "default": false,
+            "title": "Side Chat",
+            "type": "boolean"
           },
           "terminal_launch_args": {
             "anyOf": [
@@ -6678,6 +6695,22 @@
             "description": "Unique session identifier (also the underlying conversation ID), e.g. `\"conv_abc123\"`.",
             "title": "Id",
             "type": "string"
+          },
+          "inference_configured": {
+            "default": false,
+            "title": "Inference Configured",
+            "type": "boolean"
+          },
+          "inference_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inference Error"
           },
           "items": {
             "description": "Committed conversation items in chronological order. Empty for a freshly created session.",
@@ -10819,6 +10852,75 @@
         ]
       }
     },
+    "/v1/sandbox-providers/{provider}/harnesses/{harness}/model-options": {
+      "get": {
+        "operationId": "model_options_v1_sandbox_providers__provider__harnesses__harness__model_options_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "title": "Provider",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "harness",
+            "required": true,
+            "schema": {
+              "title": "Harness",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "agent_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Model Options V1 Sandbox Providers  Provider  Harnesses  Harness  Model Options Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Model Options",
+        "tags": [
+          "sandbox inference"
+        ]
+      }
+    },
     "/v1/sessions": {
       "get": {
         "description": "List sessions with cursor-based pagination.\n\nSessions are conversations with a non-`None` `agent_id`\n\u2014 i.e. those created via `POST /v1/sessions`.\nConversations without an agent binding are excluded.\n\n**Returns:** A `PaginatedList` of `SessionListItem`.",
@@ -14011,7 +14113,7 @@
     },
     "/v1/sessions/{session_id}/resources/environments/{environment_id}/shell": {
       "post": {
-        "description": "Execute a shell command in an environment.\n\n**Returns:** Shell result.",
+        "description": "Execute a shell command in an environment.\n\nOwner-only. A command has no path to inspect, so unlike the\nfilesystem proxy there is no workspace-relative form that could\nbe opened to collaborators: any command reaches the owner's own\nmachine, the same boundary `_browse_level` closes for absolute\npaths, and it passes no policy or approval gate on the way.\n\n**Returns:** Shell result.",
         "operationId": "run_environment_shell_v1_sessions__session_id__resources_environments__environment_id__shell_post",
         "parameters": [
           {
