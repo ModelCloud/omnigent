@@ -33,6 +33,7 @@ if TYPE_CHECKING:
         CodexAppServerClient,
         CodexNativeAppServer,
     )
+    from omnigent.harnesses.codex_native.bridge import CodexNativeBridgeState
     from omnigent.harnesses.opencode_native.app_server import OpenCodeNativeServer
     from omnigent.harnesses.opencode_native.client import OpenCodeClient, OpenCodeSession
     from omnigent.harnesses.opencode_native.forwarder import OpenCodeNativeForwarder
@@ -342,6 +343,45 @@ _TERMINAL_INTERACTIVE_POLL_INTERVAL_S = 0.15
 # Background Codex app-server instances for host-spawned codex-native
 # runners, kept referenced so they aren't garbage-collected mid-run.
 _AUTO_CODEX_APP_SERVERS: dict[str, CodexNativeAppServer] = {}
+
+
+def _bridge_owner_is_dead(bridge_dir: Path) -> bool:
+    """Return whether a bridge still names a provably-dead prior runner.
+
+    Missing or malformed ownership data fails closed. A stale active turn is
+    only an interruption candidate after its owning runner is known dead.
+    """
+    from omnigent.inner.terminal import _process_alive
+    from omnigent.native.native_bridge_common import OWNER_PID_FILENAME
+
+    try:
+        owner_pid = int((bridge_dir / OWNER_PID_FILENAME).read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return False
+    if owner_pid <= 0:
+        return False
+    return not _process_alive(owner_pid)
+
+
+def _localdex_interrupted_turn_id(
+    *,
+    selected_local_model: bool,
+    prior_owner_dead: bool,
+    previous_state: CodexNativeBridgeState | None,
+    session_id: str,
+    external_session_id: str | None,
+) -> str | None:
+    """Return an interrupted LocalDex turn only for a dead-owner active bridge."""
+    if (
+        not selected_local_model
+        or not prior_owner_dead
+        or external_session_id is None
+        or previous_state is None
+        or previous_state.session_id != session_id
+        or previous_state.thread_id != external_session_id
+    ):
+        return None
+    return previous_state.active_turn_id
 
 # Background OpenCode ``opencode serve`` instances for host-spawned
 # opencode-native runners, kept referenced so they aren't garbage-collected
@@ -4419,9 +4459,11 @@ async def _auto_create_codex_terminal(
     )
     from omnigent.harnesses.codex_native.bridge import (
         CodexNativeBridgeState,
+        bridge_dir_for_bridge_id,
         clear_bridge_state,
         codex_home_for_bridge_dir,
         prepare_bridge_dir,
+        read_bridge_state,
         socket_path_for_bridge_dir,
         write_bridge_state,
     )
@@ -4435,12 +4477,14 @@ async def _auto_create_codex_terminal(
     original_external_session_id = launch_config.external_session_id
     workspace = str(launch_config.workspace)
     if localdex:
-        from omnigent.harnesses.localdex_native.bridge import (
-            prepare_bridge_dir as _prepare_localdex_bridge,
-        )
+        from omnigent.harnesses.localdex_native import bridge as localdex_bridge
 
-        bridge_dir = _prepare_localdex_bridge(session_id)
+        _prior_bridge_dir = localdex_bridge.bridge_dir_for_bridge_id(session_id)
+        _prior_bridge_owner_dead = _bridge_owner_is_dead(_prior_bridge_dir)
+        bridge_dir = localdex_bridge.prepare_bridge_dir(session_id)
     else:
+        _prior_bridge_dir = bridge_dir_for_bridge_id(session_id)
+        _prior_bridge_owner_dead = _bridge_owner_is_dead(_prior_bridge_dir)
         bridge_dir = prepare_bridge_dir(session_id)
     socket_path = socket_path_for_bridge_dir(bridge_dir)
     codex_home = codex_home_for_bridge_dir(bridge_dir)
@@ -4649,6 +4693,26 @@ async def _auto_create_codex_terminal(
         if _codex_catalog and not _codex_catalog_was_stale:
             _fresh_codex_catalog = _codex_catalog
     _session_meta_provider = codex_session_meta_model_provider(_codex_launch)
+    # A host restart destroys the LocalDex app-server and its in-flight HTTP
+    # stream. Resume only if the *previous* bridge was owned by a now-dead
+    # runner and still recorded an active turn. Idle sessions have no active
+    # turn and ordinary in-process terminal recreation still sees a live owner.
+    _previous_bridge_state = read_bridge_state(bridge_dir)
+    _restart_continuation_turn_id = _localdex_interrupted_turn_id(
+        selected_local_model=selected_local_model,
+        prior_owner_dead=_prior_bridge_owner_dead,
+        previous_state=_previous_bridge_state,
+        session_id=session_id,
+        external_session_id=original_external_session_id,
+    )
+    if _restart_continuation_turn_id is not None:
+        _logger.info(
+            "LocalDex interrupted-turn recovery armed: session=%s thread=%s turn=%s",
+            session_id,
+            original_external_session_id,
+            _restart_continuation_turn_id,
+            extra={"session_id": session_id},
+        )
     # Cancel any surviving forwarder first so its teardown closes the OLD app-server,
     # not the one registered below — and so it can't mirror alongside the new one.
     await _cancel_auto_forwarder_task(session_id)
@@ -5336,6 +5400,7 @@ async def _auto_create_codex_terminal(
                 client=retained_resume_client,
                 subagent_router=_codex_router,
                 turn_router=_codex_turn_router,
+                localdex_restart_recovery_turn_id=_restart_continuation_turn_id,
             )
         ),
         name=f"codex-forwarder-{session_id}",
@@ -5609,6 +5674,7 @@ async def _codex_forward_known_thread(
     client: CodexAppServerClient | None = None,
     subagent_router: SubagentRouter | None = None,
     turn_router: TurnRouter | None = None,
+    localdex_restart_recovery_turn_id: str | None = None,
 ) -> None:
     """
     Forward a runner-owned Codex terminal that resumes an existing thread.
@@ -5625,6 +5691,10 @@ async def _codex_forward_known_thread(
         endpoint a re-created terminal has since installed.
     :param turn_router: First-message routing endpoint this launch
         started, torn down alongside the subagent one.
+    :param localdex_restart_recovery_turn_id: Active LocalDex turn observed
+        before the prior host cleared its bridge. When present, the restored,
+        idle thread receives one automatic continuation. ``None`` preserves
+        ordinary Codex behavior.
     :returns: None. Runs until cancelled or the app-server connection
         closes.
     """
@@ -5639,6 +5709,23 @@ async def _codex_forward_known_thread(
         auth_factory = _make_auth_token_factory()
         auth_token = auth_factory() if auth_factory is not None else None
         headers = {"Authorization": f"Bearer {auth_token}"} if auth_token else {}
+        on_subscribed = None
+        if localdex_restart_recovery_turn_id is not None:
+
+            async def _continue_localdex_after_host_restart(
+                codex_client: CodexAppServerClient,
+                _forwarder_state: object,
+            ) -> None:
+                del _forwarder_state
+                await _start_localdex_host_restart_continuation(
+                    codex_client,
+                    bridge_dir=bridge_dir,
+                    thread_id=thread_id,
+                    interrupted_turn_id=localdex_restart_recovery_turn_id,
+                )
+
+            on_subscribed = _continue_localdex_after_host_restart
+
         await supervise_forwarder(
             base_url=server_url,
             headers=headers,
@@ -5648,6 +5735,7 @@ async def _codex_forward_known_thread(
             thread_id=thread_id,
             client=client,
             auth=_RunnerDatabricksAuth(auth_factory),
+            on_subscribed=on_subscribed,
         )
     finally:
         if client is not None:
@@ -5659,6 +5747,77 @@ async def _codex_forward_known_thread(
                 await leftover_app_server.close()
         await _shutdown_session_router_async(session_id, subagent_router)
         await _shutdown_session_turn_router_async(session_id, turn_router)
+
+
+_LOCALDEX_HOST_RESTART_CONTINUATION_PROMPT = (
+    "[System: The Omnigent host restarted while your previous LocalDex response "
+    "was in progress. Continue the previous task from the existing conversation. "
+    "Do not repeat completed work; continue from the last confirmed state.]"
+)
+
+
+async def _start_localdex_host_restart_continuation(
+    client: CodexAppServerClient,
+    *,
+    bridge_dir: Path,
+    thread_id: str,
+    interrupted_turn_id: str,
+) -> None:
+    """Start one replacement LocalDex turn after a host-restart resume.
+
+    ``thread/resume`` restores durable conversation state, but an HTTP
+    generation owned by the old host has no resumable socket. Start a fresh
+    continuation only while the restored bridge is idle; a user message or a
+    live turn that wins the race always takes precedence.
+    """
+    from omnigent.harnesses.codex_native.bridge import (
+        read_bridge_state,
+        update_active_turn_id,
+    )
+
+    state = read_bridge_state(bridge_dir)
+    if state is None or state.thread_id != thread_id:
+        _logger.info(
+            "LocalDex host-restart continuation skipped; bridge changed: "
+            "thread=%s interrupted_turn=%s",
+            thread_id,
+            interrupted_turn_id,
+        )
+        return
+    if state.active_turn_id is not None:
+        _logger.info(
+            "LocalDex host-restart continuation skipped; thread already active: "
+            "thread=%s active_turn=%s interrupted_turn=%s",
+            thread_id,
+            state.active_turn_id,
+            interrupted_turn_id,
+        )
+        return
+    response = await client.request(
+        "turn/start",
+        {
+            "threadId": thread_id,
+            "input": [{"type": "text", "text": _LOCALDEX_HOST_RESTART_CONTINUATION_PROMPT}],
+            "environments": [
+                {
+                    "environmentId": "local",
+                    "cwd": state.cwd or str(Path.cwd()),
+                }
+            ],
+        },
+    )
+    result = response.get("result")
+    turn = result.get("turn") if isinstance(result, dict) else None
+    turn_id = turn.get("id") if isinstance(turn, dict) else None
+    if not isinstance(turn_id, str) or not turn_id:
+        raise RuntimeError("LocalDex restart continuation did not return a turn id")
+    update_active_turn_id(bridge_dir, turn_id)
+    _logger.info(
+        "LocalDex host-restart continuation started: thread=%s interrupted_turn=%s turn=%s",
+        thread_id,
+        interrupted_turn_id,
+        turn_id,
+    )
 
 
 async def _run_antigravity_reader(

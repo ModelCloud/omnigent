@@ -3308,6 +3308,207 @@ async def test_codex_known_thread_forwarder_closes_retained_subscription(
 
 
 @pytest.mark.asyncio
+async def test_localdex_host_restart_continuation_starts_once_on_idle_bridge(
+    tmp_path: Path,
+) -> None:
+    """A restarted LocalDex host resumes the thread with one replacement turn."""
+    from omnigent.runner.native import orchestration
+
+    codex_native_bridge.write_bridge_state(
+        tmp_path,
+        codex_native_bridge.CodexNativeBridgeState(
+            session_id="conv_localdex_restart",
+            socket_path="ws://127.0.0.1:9876",
+            thread_id="thread_localdex",
+            codex_home=str(tmp_path / "codex-home"),
+            cwd="/workspace",
+        ),
+    )
+
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    class _Client:
+        async def request(self, method: str, params: dict[str, object]) -> dict[str, object]:
+            calls.append((method, params))
+            return {"result": {"turn": {"id": "turn_recovered"}}}
+
+    await orchestration._start_localdex_host_restart_continuation(
+        _Client(),  # type: ignore[arg-type]
+        bridge_dir=tmp_path,
+        thread_id="thread_localdex",
+        interrupted_turn_id="turn_interrupted",
+    )
+
+    assert calls == [
+        (
+            "turn/start",
+            {
+                "threadId": "thread_localdex",
+                "input": [
+                    {
+                        "type": "text",
+                        "text": orchestration._LOCALDEX_HOST_RESTART_CONTINUATION_PROMPT,
+                    }
+                ],
+                "environments": [{"environmentId": "local", "cwd": "/workspace"}],
+            },
+        )
+    ]
+    assert codex_native_bridge.read_bridge_state(tmp_path).active_turn_id == "turn_recovered"  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+async def test_localdex_host_restart_continuation_yields_to_a_live_turn(tmp_path: Path) -> None:
+    """A new user turn wins the race against automatic restart recovery."""
+    from omnigent.runner.native import orchestration
+
+    codex_native_bridge.write_bridge_state(
+        tmp_path,
+        codex_native_bridge.CodexNativeBridgeState(
+            session_id="conv_localdex_restart",
+            socket_path="ws://127.0.0.1:9876",
+            thread_id="thread_localdex",
+            codex_home=str(tmp_path / "codex-home"),
+            active_turn_id="turn_user_won",
+        ),
+    )
+
+    class _Client:
+        async def request(self, method: str, params: dict[str, object]) -> dict[str, object]:
+            raise AssertionError(f"unexpected RPC: {method} {params}")
+
+    await orchestration._start_localdex_host_restart_continuation(
+        _Client(),  # type: ignore[arg-type]
+        bridge_dir=tmp_path,
+        thread_id="thread_localdex",
+        interrupted_turn_id="turn_interrupted",
+    )
+    assert codex_native_bridge.read_bridge_state(tmp_path).active_turn_id == "turn_user_won"  # type: ignore[union-attr]
+
+
+def test_localdex_restart_recovery_requires_dead_owner_and_active_turn() -> None:
+    """Only an active turn abandoned by a dead prior runner is recoverable."""
+    from omnigent.runner.native import orchestration
+
+    state = codex_native_bridge.CodexNativeBridgeState(
+        session_id="conv_localdex_restart",
+        socket_path="ws://127.0.0.1:9876",
+        thread_id="thread_localdex",
+        codex_home="/codex-home",
+        active_turn_id="turn_interrupted",
+    )
+
+    assert orchestration._localdex_interrupted_turn_id(
+        selected_local_model=True,
+        prior_owner_dead=True,
+        previous_state=state,
+        session_id=state.session_id,
+        external_session_id=state.thread_id,
+    ) == "turn_interrupted"
+    assert (
+        orchestration._localdex_interrupted_turn_id(
+            selected_local_model=True,
+            prior_owner_dead=False,
+            previous_state=state,
+            session_id=state.session_id,
+            external_session_id=state.thread_id,
+        )
+        is None
+    )
+    assert (
+        orchestration._localdex_interrupted_turn_id(
+            selected_local_model=True,
+            prior_owner_dead=True,
+            previous_state=codex_native_bridge.CodexNativeBridgeState(
+                session_id=state.session_id,
+                socket_path=state.socket_path,
+                thread_id=state.thread_id,
+                codex_home=state.codex_home,
+            ),
+            session_id=state.session_id,
+            external_session_id=state.thread_id,
+        )
+        is None
+    )
+
+
+def test_localdex_restart_recovery_requires_a_dead_bridge_owner(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An existing owner is a live relaunch, not an interrupted host turn."""
+    from omnigent.inner import terminal
+    from omnigent.runner.native import orchestration
+
+    (tmp_path / "owner.pid").write_text("4242", encoding="utf-8")
+    monkeypatch.setattr(terminal, "_process_alive", lambda _pid: True)
+    assert orchestration._bridge_owner_is_dead(tmp_path) is False
+
+    monkeypatch.setattr(terminal, "_process_alive", lambda _pid: False)
+    assert orchestration._bridge_owner_is_dead(tmp_path) is True
+
+    (tmp_path / "owner.pid").write_text("0", encoding="utf-8")
+    assert orchestration._bridge_owner_is_dead(tmp_path) is False
+
+
+@pytest.mark.asyncio
+async def test_codex_known_thread_forwards_localdex_restart_recovery_hook(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The known-thread forwarder runs LocalDex recovery only after subscribe."""
+    from omnigent.harnesses.codex_native import forwarder as codex_forwarder
+    from omnigent.runner import _entry
+    from omnigent.runner.native import orchestration
+
+    codex_native_bridge.write_bridge_state(
+        tmp_path,
+        codex_native_bridge.CodexNativeBridgeState(
+            session_id="conv_localdex_restart",
+            socket_path="ws://127.0.0.1:9876",
+            thread_id="thread_localdex",
+            codex_home=str(tmp_path / "codex-home"),
+        ),
+    )
+    calls: list[str] = []
+
+    class _RetainedClient:
+        async def close(self) -> None:
+            return None
+
+    class _RecoveryClient:
+        async def request(self, method: str, params: dict[str, object]) -> dict[str, object]:
+            calls.append(method)
+            assert params["threadId"] == "thread_localdex"
+            return {"result": {"turn": {"id": "turn_recovered"}}}
+
+    class _AppServer:
+        async def close(self) -> None:
+            return None
+
+    async def _forward(**kwargs: Any) -> None:
+        hook = kwargs["on_subscribed"]
+        assert hook is not None
+        await hook(_RecoveryClient(), object())
+
+    monkeypatch.setattr(orchestration, "_required_runner_env", lambda _name: "http://server")
+    monkeypatch.setattr(_entry, "_make_auth_token_factory", lambda: None)
+    monkeypatch.setattr(codex_forwarder, "supervise_forwarder", _forward)
+    session_id = "conv_localdex_restart"
+    orchestration._AUTO_CODEX_APP_SERVERS[session_id] = _AppServer()  # type: ignore[assignment]
+
+    await orchestration._codex_forward_known_thread(
+        session_id=session_id,
+        bridge_dir=tmp_path,
+        codex_ws_url="ws://127.0.0.1:9876",
+        thread_id="thread_localdex",
+        client=_RetainedClient(),  # type: ignore[arg-type]
+        localdex_restart_recovery_turn_id="turn_interrupted",
+    )
+
+    assert calls == ["turn/start"]
+    assert codex_native_bridge.read_bridge_state(tmp_path).active_turn_id == "turn_recovered"  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
 async def test_codex_discover_thread_and_forward_cleans_up_on_discovery_failure(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
