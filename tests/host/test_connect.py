@@ -450,7 +450,7 @@ async def test_handle_model_options_codex_probe_failure_is_failed(
 async def test_handle_model_options_codex_localdex_row_keeps_reasoning_capabilities(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The pre-launch LocalDex row exposes only DSV4.1's valid effort ladder."""
+    """The pre-launch LocalDex row exposes DSV4.1's valid effort ladder."""
     from omnigent.harnesses.codex_native import app_server as codex_native_app_server
     from omnigent.harnesses.localdex_native import config as localdex_config
 
@@ -481,6 +481,9 @@ async def test_handle_model_options_codex_localdex_row_keeps_reasoning_capabilit
     assert result.status == "ok"
     expected_local_row = localdex_config.localdex_model_picker_row(registration)
     assert {key: result.models[0][key] for key in expected_local_row} == expected_local_row
+    assert [
+        option["reasoningEffort"] for option in expected_local_row["supportedReasoningEfforts"]
+    ] == ["off", "low", "high", "max"]
     assert [row["id"] for row in result.models] == [registration.local_model, "gpt-6-sol"]
     assert result.routable_models == [registration.local_model, "gpt-6-sol"]
     _cleanup_host(host)
@@ -5555,6 +5558,10 @@ async def test_handle_model_options_serves_localdex_from_the_native_codex_catalo
                 "displayName": "DeepSeek V4.1 Flash",
                 "defaultReasoningEffort": "high",
                 "supportedReasoningEfforts": [
+                    {
+                        "reasoningEffort": "off",
+                        "description": "Disable thinking for the fastest responses",
+                    },
                     {
                         "reasoningEffort": "low",
                         "description": "Fast responses with lighter reasoning",

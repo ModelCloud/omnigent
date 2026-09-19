@@ -34,8 +34,10 @@ def localdex_model_picker_row(config: LocalDexConfig) -> dict[str, object]:
     control when a model has no ``supportedReasoningEfforts`` metadata.
 
     This mirrors LocalDex's bundled ``ModelInfo`` for DSV4.1 Flash. The model
-    accepts only ``low``, ``high``, and ``max``; in particular, do not offer
-    Codex's generic ``medium`` value because the endpoint rejects it.
+    accepts ``off``, ``low``, ``high``, and ``max``; in particular, do not
+    offer Codex's generic ``medium`` value because the endpoint rejects it.
+    ``off`` is intentionally explicit and unambiguous; the inference endpoint
+    also accepts Responses' legacy ``none`` alias for compatibility.
     """
     return {
         "id": config.local_model,
@@ -43,6 +45,10 @@ def localdex_model_picker_row(config: LocalDexConfig) -> dict[str, object]:
         "displayName": "DeepSeek V4.1 Flash",
         "defaultReasoningEffort": "high",
         "supportedReasoningEfforts": [
+            {
+                "reasoningEffort": "off",
+                "description": "Disable thinking for the fastest responses",
+            },
             {
                 "reasoningEffort": "low",
                 "description": "Fast responses with lighter reasoning",
