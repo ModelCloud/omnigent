@@ -1805,6 +1805,75 @@ async def test_raw_reasoning_suppresses_its_summary_mirror() -> None:
 
 
 @pytest.mark.asyncio
+async def test_completed_reasoning_item_persists_public_trace_once() -> None:
+    """A LocalDex reasoning item anchors its live trace in session history.
+
+    The raw delta is intentionally transient for first-token display, but the
+    completed Codex item carries the canonical public content.  Persist it so
+    a subsequent user input/snapshot reconciliation cannot remove the thought
+    from the transcript.  Replayed completion notifications must stay
+    idempotent.
+    """
+    client = _RecordingClient()
+    state = fwd._CodexForwarderState()
+    params = {
+        "threadId": "thread_1",
+        "turnId": "turn_1",
+        "item": {
+            "id": "reasoning_1",
+            "type": "reasoning",
+            "content": ["Inspect the current state first."],
+            "summary": ["Inspect state."],
+        },
+    }
+
+    await fwd._handle_completed_item(client, "conv_x", params, forwarder_state=state)
+    await fwd._handle_completed_item(client, "conv_x", params, forwarder_state=state)
+
+    assert client.posts == [
+        (
+            "/v1/sessions/conv_x/events",
+            {
+                "type": "external_conversation_item",
+                "data": {
+                    "item_type": "reasoning",
+                    "item_data": {
+                        "agent": "codex-native-ui",
+                        "summary": [{"type": "summary_text", "text": "Inspect state."}],
+                        "content": [
+                            {
+                                "type": "reasoning_text",
+                                "text": "Inspect the current state first.",
+                            }
+                        ],
+                    },
+                    "response_id": "codex_turn_1",
+                    "source_id": "thread_1:turn_1:reasoning_1",
+                },
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_completed_redacted_reasoning_item_is_not_persisted() -> None:
+    """A reasoning item without public content must not create an empty card."""
+    client = _RecordingClient()
+
+    await fwd._handle_completed_item(
+        client,
+        "conv_x",
+        {
+            "threadId": "thread_1",
+            "turnId": "turn_1",
+            "item": {"id": "reasoning_redacted", "type": "reasoning", "content": []},
+        },
+    )
+
+    assert client.posts == []
+
+
+@pytest.mark.asyncio
 async def test_reasoning_delta_new_item_reopens_block() -> None:
     """
     A reasoning delta for a new item id opens a fresh block.

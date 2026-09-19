@@ -119,10 +119,12 @@ _CODEX_THREAD_COMPACTED_METHOD = "thread/compacted"
 # The executor writes one and returns, so this is the delay before the side chat
 # starts; a fork is cheap, so poll fast enough to feel immediate.
 _SIDE_CHAT_POLL_SECONDS = 0.5
-# Transient reasoning (chain-of-thought) delta — the reasoning analogue of
-# ``external_output_text_delta``. Nothing is persisted; it publishes
+# Live reasoning (chain-of-thought) delta — the reasoning analogue of
+# ``external_output_text_delta``.  It publishes
 # ``response.reasoning_text.delta`` (preceded by ``response.reasoning.started``
 # when ``data.started`` is true) so the web UI paints a live reasoning block.
+# The corresponding ``item/completed`` record is persisted separately, which
+# anchors that live block in durable history once the turn settles.
 _EXTERNAL_OUTPUT_REASONING_DELTA_TYPE = "external_output_reasoning_delta"
 _EXTERNAL_CODEX_COLLABORATION_MODE_CHANGE_TYPE = "external_codex_collaboration_mode_change"
 # Per-attempt client budget for the elicitation long-poll, slightly above
@@ -5094,6 +5096,9 @@ async def _handle_completed_item_inner(
         await _ensure_user_message_posted(client, session_id, params, forwarder_state)
         await _post_agent_message(client, session_id, params, item, source_id=source_id)
         return
+    if item_type == "reasoning":
+        await _post_reasoning_item(client, session_id, params, item, source_id=source_id)
+        return
     if item_type == "plan":
         await _post_plan_item(client, session_id, params, item, source_id=source_id)
         return
@@ -6086,6 +6091,62 @@ async def _post_agent_message(
     )
 
 
+def _reasoning_text_blocks(item: _JsonObject, field: str, block_type: str) -> list[_JsonObject]:
+    """Normalize a public Codex reasoning string array into AP content blocks."""
+    value = item.get(field)
+    if not isinstance(value, list):
+        return []
+    return [
+        {"type": block_type, "text": text}
+        for text in value
+        if isinstance(text, str) and text
+    ]
+
+
+async def _post_reasoning_item(
+    client: httpx.AsyncClient,
+    session_id: str,
+    params: _JsonObject,
+    item: _JsonObject,
+    *,
+    source_id: str | None = None,
+) -> bool:
+    """
+    Persist a completed public Codex reasoning item.
+
+    LocalDex streams the raw public trace as reasoning deltas, then emits the
+    same item in ``item/completed`` with ``content`` and optional ``summary``
+    arrays.  The live deltas give immediate feedback; this durable mirror
+    prevents the thought from disappearing when the UI reconciles history for
+    a later user turn.
+
+    :param client: HTTP client for Omnigent event posts.
+    :param session_id: Omnigent conversation id, e.g. ``"conv_abc123"``.
+    :param params: Codex ``item/completed`` params.
+    :param item: Codex ``reasoning`` thread item.
+    :param source_id: Stable native item id used for server-side deduplication.
+    :returns: Whether the item was accepted by the server.
+    """
+    content = _reasoning_text_blocks(item, "content", "reasoning_text")
+    summary = _reasoning_text_blocks(item, "summary", "summary_text")
+    # A redacted reasoning item is expected to contain neither public raw
+    # content nor a public summary.  Do not add an empty transcript card.
+    if not content and not summary:
+        return False
+    return await _post_external_item(
+        client,
+        session_id,
+        item_type="reasoning",
+        item_data={
+            "agent": _AGENT_NAME,
+            "summary": summary,
+            "content": content or None,
+        },
+        response_id=_response_id(params),
+        source_id=source_id or _source_id(params, item),
+    )
+
+
 async def _post_tool_call_item(
     client: httpx.AsyncClient,
     session_id: str,
@@ -6946,13 +7007,12 @@ async def _handle_reasoning_delta(
     Forward one live Codex reasoning (chain-of-thought) delta to AP.
 
     Codex emits ``item/reasoning/textDelta`` and
-    ``item/reasoning/summaryTextDelta`` while it thinks. Omnigent has no
-    completed reasoning conversation item — the reasoning block is
-    transient and is finalized when the turn's assistant message arrives —
-    so this only publishes a transient ``external_output_reasoning_delta``
-    so the web UI paints a live "thinking" block, matching the in-process
-    executor's wire shape (#1254). The first delta of a reasoning item
-    opens the block (``started=True`` → ``response.reasoning.started``).
+    ``item/reasoning/summaryTextDelta`` while it thinks.  This publishes the
+    immediate ``external_output_reasoning_delta`` so the web UI paints a live
+    "thinking" block.  The later matching ``item/completed`` notification is
+    mirrored as durable history by :func:`_post_reasoning_item`. The first
+    delta of a reasoning item opens the block (``started=True`` →
+    ``response.reasoning.started``).
 
     :param params: Codex reasoning delta params, e.g.
         ``{"turnId": "turn_123", "itemId": "item_r", "delta": "Let me"}``.
