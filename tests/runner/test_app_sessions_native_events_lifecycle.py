@@ -850,7 +850,13 @@ async def test_codex_native_model_options_query_model_list(
     the pane launched on — wins when the list offers it.
     """
     from omnigent.harnesses.codex_native import app_server as codex_native_app_server
+    from omnigent.harnesses.localdex_native import config as localdex_config
     from omnigent.spec.types import ExecutorSpec
+
+    def _no_localdex_config(**_kwargs: object) -> Any:
+        raise FileNotFoundError("test deliberately has no LocalDex registration")
+
+    monkeypatch.setattr(localdex_config, "load_localdex_config", _no_localdex_config)
 
     conv_id = "68ba0a62ebe928d26adf37c8974ce1eb"
     monkeypatch.setattr(codex_native_bridge, "_BRIDGE_ROOT", tmp_path / "codex-bridge")
@@ -1016,13 +1022,128 @@ async def test_codex_native_model_options_query_model_list(
     for model_row in expected_models:
         if model_row["id"] == expected_default:
             model_row["isDefault"] = True
-    assert resp.json() == {"models": expected_models}
+    # Provider-source decoration is host configuration metadata, independent
+    # of Codex's live catalog shape under test here.
+    actual_models = [
+        {key: value for key, value in row.items() if key != "source"}
+        for row in resp.json()["models"]
+    ]
+    assert actual_models == expected_models
     assert fake_client.requests == [
         ("model/list", {"includeHidden": False}),
         ("model/list", {"includeHidden": False, "cursor": "next-page"}),
     ]
     assert fake_client.connected
     assert fake_client.closed
+
+
+@pytest.mark.asyncio
+async def test_codex_native_model_options_enriches_stale_localdex_row(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The live picker repairs an older id-only LocalDex catalog row."""
+    from omnigent.harnesses.codex_native import app_server as codex_native_app_server
+    from omnigent.harnesses.localdex_native import config as localdex_config
+    from omnigent.spec.types import ExecutorSpec
+
+    conv_id = "d2b9d8bdad5c4f52a64f7cc149c2be1b"
+    monkeypatch.setattr(codex_native_bridge, "_BRIDGE_ROOT", tmp_path / "codex-bridge")
+    bridge_dir = codex_native_bridge.bridge_dir_for_bridge_id(conv_id)
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    codex_native_bridge.write_bridge_state(
+        bridge_dir,
+        codex_native_bridge.CodexNativeBridgeState(
+            session_id=conv_id,
+            socket_path="ws://127.0.0.1:43211",
+            thread_id="thread_codex",
+            codex_home=str(codex_home),
+            active_turn_id=None,
+        ),
+    )
+    registration = localdex_config.LocalDexConfig(
+        local_model=localdex_config.LOCALDEX_MODEL,
+        provider="localdex",
+        base_url="http://10.0.13.33:2120/v1",
+        env_key="LOCALDEX_TEST_BEARER",
+    )
+    monkeypatch.setattr(localdex_config, "load_localdex_config", lambda **_kwargs: registration)
+
+    async def _fake_auto_create_codex(
+        session_id: str, resource_registry: Any, publish_event: Any, **kwargs: Any
+    ) -> SessionResourceView:
+        del resource_registry, publish_event, kwargs
+        return SessionResourceView(
+            id="terminal_codex_main",
+            type="terminal",
+            session_id=session_id,
+            name="codex:main",
+            metadata={"terminal_name": "codex", "session_key": "main", "running": True},
+        )
+
+    monkeypatch.setattr(
+        "omnigent.runner.native.orchestration._auto_create_codex_terminal",
+        _fake_auto_create_codex,
+    )
+    fake_client = _RecordingCodexAppServerClient(
+        transport="ws://127.0.0.1:43211", client_name="omnigent-codex-native-runner"
+    )
+    fake_client.model_list_responses = [
+        {
+            "result": {
+                "data": [
+                    {"id": registration.local_model, "displayName": registration.local_model},
+                    {"id": "gpt-6-sol", "displayName": "GPT-6 Sol", "isDefault": True},
+                ],
+                "nextCursor": None,
+            }
+        }
+    ]
+    def _fake_client_for_transport(
+        transport: str, *, client_name: str = "omnigent"
+    ) -> _RecordingCodexAppServerClient:
+        assert transport == fake_client.transport
+        assert client_name == fake_client.client_name
+        return fake_client
+
+    monkeypatch.setattr(
+        codex_native_app_server,
+        "client_for_transport",
+        _fake_client_for_transport,
+    )
+    spec = AgentSpec(
+        spec_version=1,
+        name="t",
+        executor=ExecutorSpec(type="omnigent", config={"harness": "codex-native"}),
+    )
+
+    async def _resolver(agent_id: str, session_id: str | None = None) -> AgentSpec:
+        del agent_id, session_id
+        return spec
+
+    app = create_runner_app(
+        process_manager=_FakeProcessManager(_ScriptedHarnessClient([])),  # type: ignore[arg-type]
+        spec_resolver=_resolver,
+        server_client=NullServerClient(),  # type: ignore[arg-type]
+    )
+    async with _runner_client(app) as client:
+        created = await client.post(
+            "/v1/sessions",
+            json={"session_id": conv_id, "agent_id": "880b5afda28ad55ff74cbeb9b5fc67fb"},
+        )
+        assert created.status_code == 201, created.text
+        response = await client.get(f"/v1/sessions/{conv_id}/codex-model-options")
+
+    assert response.status_code == 200, response.text
+    expected_local_row = localdex_config.localdex_model_picker_row(registration)
+    assert {
+        key: response.json()["models"][0][key] for key in expected_local_row
+    } == expected_local_row
+    assert [row["id"] for row in response.json()["models"]] == [
+        registration.local_model,
+        "gpt-6-sol",
+    ]
 
 
 @pytest.mark.asyncio

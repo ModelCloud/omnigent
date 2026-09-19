@@ -3064,7 +3064,10 @@ class HostProcess:
                 # account rows remain available for switching/resuming in the
                 # shared conversation UI.
                 try:
-                    from omnigent.harnesses.localdex_native.config import load_localdex_config
+                    from omnigent.harnesses.localdex_native.config import (
+                        load_localdex_config,
+                        with_localdex_model_picker_row,
+                    )
 
                     localdex = await asyncio.to_thread(load_localdex_config, require_token=False)
                 except FileNotFoundError:
@@ -3073,13 +3076,15 @@ class HostProcess:
                     _logger.warning("LocalDex provider registration is invalid", exc_info=True)
                     localdex = None
                 if localdex is not None and os.environ.get(localdex.env_key):
-                    local_row = {
-                        "id": localdex.local_model,
-                        "model": localdex.local_model,
-                        "displayName": localdex.local_model,
-                    }
-                    rows = [local_row, *probed.models]
-                    routable = [localdex.local_model, *probed.routable_models]
+                    rows = with_localdex_model_picker_row(probed.models, localdex)
+                    routable = [
+                        localdex.local_model,
+                        *(
+                            model
+                            for model in probed.routable_models
+                            if model != localdex.local_model
+                        ),
+                    ]
                 else:
                     rows = probed.models
                     routable = probed.routable_models

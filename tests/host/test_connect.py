@@ -427,6 +427,45 @@ async def test_handle_model_options_codex_probe_failure_is_failed(
     _cleanup_host(host)
 
 
+async def test_handle_model_options_codex_localdex_row_keeps_reasoning_capabilities(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pre-launch LocalDex row exposes only DSV4.1's valid effort ladder."""
+    from omnigent.harnesses.codex_native import app_server as codex_native_app_server
+    from omnigent.harnesses.localdex_native import config as localdex_config
+
+    registration = localdex_config.LocalDexConfig(
+        local_model=localdex_config.LOCALDEX_MODEL,
+        provider="localdex",
+        base_url="http://10.0.13.33:2120/v1",
+        env_key="LOCALDEX_TEST_BEARER",
+    )
+
+    async def _catalog(**_kwargs: object) -> list[dict[str, object]]:
+        # Include a stale id-only copy to prove the host replaces rather than
+        # duplicates it when its catalog was written by an older runner.
+        return [
+            {"id": registration.local_model, "displayName": registration.local_model},
+            {"id": "gpt-6-sol", "displayName": "GPT-6 Sol", "isDefault": True},
+        ]
+
+    monkeypatch.setattr(codex_native_app_server, "codex_launch_catalog", _catalog)
+    monkeypatch.setattr(localdex_config, "load_localdex_config", lambda **_kwargs: registration)
+    monkeypatch.setenv(registration.env_key, "test-token")
+    host = _make_host_process()
+
+    result = await host._handle_model_options(
+        HostModelOptionsFrame(request_id="req_localdex_models", harness="codex-native"),
+    )
+
+    assert result.status == "ok"
+    expected_local_row = localdex_config.localdex_model_picker_row(registration)
+    assert {key: result.models[0][key] for key in expected_local_row} == expected_local_row
+    assert [row["id"] for row in result.models] == [registration.local_model, "gpt-6-sol"]
+    assert result.routable_models == [registration.local_model, "gpt-6-sol"]
+    _cleanup_host(host)
+
+
 async def test_handle_model_options_rejects_unsupported_harness() -> None:
     """Only launch paths with host-resolved model catalogs are accepted."""
     host = _make_host_process()

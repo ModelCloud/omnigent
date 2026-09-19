@@ -547,6 +547,69 @@ async def test_midturn_message_not_double_delivered_to_harness() -> None:
 
 
 @pytest.mark.asyncio
+async def test_codex_native_midturn_message_is_steered_and_consumed() -> None:
+    """Codex app-server sessions use live steer, not terminal-style buffering.
+
+    Codex serializes ``turn/steer`` with turn start and returns an explicit
+    acknowledgement through ``injection.consumed``. That is unlike the
+    terminal-native harnesses covered below, whose typed-message races require
+    a completion-only buffer. The consumed marker must still remove the
+    buffered durability copy so the message is not replayed as a second turn.
+    """
+    import asyncio as _aio
+
+    gate = _aio.Event()
+    app, _pm, hc = _build_handshake_app(gate)
+    session_id = "a4d2e5cf7bb14e5aa0a1359fdc93f1bb"
+
+    async with _runner_client(app) as client:
+        await client.post(
+            "/v1/sessions",
+            json={
+                "session_id": session_id,
+                "agent_id": "880b5afda28ad55ff74cbeb9b5fc67fb",
+            },
+        )
+        first = await client.post(
+            f"/v1/sessions/{session_id}/events",
+            json={
+                "type": "message",
+                "role": "user",
+                "model": "test-agent",
+                "content": [{"type": "input_text", "text": "first"}],
+                "harness": "codex-native",
+            },
+        )
+        assert first.status_code == 202
+        await _aio.sleep(0.05)
+
+        second = await client.post(
+            f"/v1/sessions/{session_id}/events",
+            json={
+                "type": "message",
+                "role": "user",
+                "model": "test-agent",
+                "content": [{"type": "input_text", "text": "steer now"}],
+                "harness": "codex-native",
+            },
+        )
+        assert second.status_code == 202
+        assert second.json()["status"] == "buffered"
+
+        gate.set()
+        for _ in range(100):
+            if not app.state.session_message_buffers.get(session_id):
+                break
+            await _aio.sleep(0.01)
+
+    steers = [body for body in hc.patched_events if _body_contains_text(body, "steer now")]
+    assert len(steers) == 1
+    assert "injection_id" in steers[0]
+    assert not app.state.session_message_buffers.get(session_id)
+    assert len(hc.posted_bodies) == 1
+
+
+@pytest.mark.asyncio
 async def test_native_buffered_messages_each_delivered_once_in_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

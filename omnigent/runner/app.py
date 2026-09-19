@@ -5403,6 +5403,23 @@ def create_runner_app(
     def _is_native_harness(conv_id: str) -> bool:
         return is_native_harness(_session_harness_name(conv_id))
 
+    def _supports_codex_live_steer(conv_id: str) -> bool:
+        """Return whether this native session has Codex's atomic steer RPC.
+
+        Most terminal-native harnesses must drain a buffered message after the
+        active pane turn: typing into those terminals can race their teardown
+        and has historically dropped or duplicated messages. Codex is not a
+        terminal-input protocol here. Its resident app-server accepts
+        ``turn/steer`` against an explicit active-turn id, and the executor
+        serializes that RPC with turn start. It is therefore safe (and much
+        more responsive) to forward an active web message to Codex.
+
+        ``localdex-native`` is retained only for old persisted sessions. New
+        LocalDex model selections run under ``codex-native``; both spellings
+        share the same app-server semantics for this compatibility window.
+        """
+        return _session_harness_name(conv_id) in {"codex-native", "localdex-native"}
+
     async def _codex_native_bridge_state_for_session(
         conv_id: str,
         *,
@@ -5734,23 +5751,16 @@ def create_runner_app(
         # a provider-derived replacement for the account rows.
         if _session_harness_name(conv_id) == "codex-native":
             try:
-                from omnigent.harnesses.localdex_native.config import load_localdex_config
+                from omnigent.harnesses.localdex_native.config import (
+                    load_localdex_config,
+                    with_localdex_model_picker_row,
+                )
 
                 localdex = await asyncio.to_thread(load_localdex_config)
             except (FileNotFoundError, ValueError):
                 localdex = None
-            if localdex is not None and not any(
-                row.get("id") == localdex.local_model or row.get("model") == localdex.local_model
-                for row in rows
-            ):
-                rows.insert(
-                    0,
-                    {
-                        "id": localdex.local_model,
-                        "model": localdex.local_model,
-                        "displayName": localdex.local_model,
-                    },
-                )
+            if localdex is not None:
+                rows = with_localdex_model_picker_row(rows, localdex)
         marked = mark_launch_default(rows, active_model)
         # Write the live account rows back to the shared catalog store so the
         # pre-launch picker converges to account truth after the first
@@ -9414,9 +9424,10 @@ def create_runner_app(
 
                 if conversation_id in _active_turns:
                     _native = _is_native_harness(conversation_id)
+                    _codex_live_steer = _supports_codex_live_steer(conversation_id)
                     _awaiting_approval = pending_approvals.has_pending(conversation_id)
                     _can_forward = (
-                        not _native
+                        (not _native or _codex_live_steer)
                         and not _awaiting_approval
                         and conversation_id in _live_response_id
                     )
@@ -9424,9 +9435,10 @@ def create_runner_app(
                         message_body["injection_id"] = f"inj_{uuid.uuid4().hex[:16]}"
                     _logger.info(
                         "post_session_events: buffering message for active turn conv=%s "
-                        "native=%s awaiting_approval=%s",
+                        "native=%s codex_live_steer=%s awaiting_approval=%s",
                         conversation_id,
                         _native,
+                        _codex_live_steer,
                         _awaiting_approval,
                         extra={"session_id": conversation_id},
                     )
