@@ -7,7 +7,7 @@ import contextlib
 import hashlib
 import json
 import logging
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -67,6 +67,13 @@ from omnigent.util.json_types import JsonObject as _JsonObject
 _logger = logging.getLogger(__name__)
 
 _AGENT_NAME = "codex-native-ui"
+
+# Invoked after ``thread/resume`` has replayed durable items, but before the
+# live-event loop begins.  Restart recovery uses this narrow seam to start a
+# replacement turn only after the restored thread is known to be idle.
+CodexForwarderSubscribedHook = Callable[
+    [CodexAppServerClient, "_CodexForwarderState"], Awaitable[None]
+]
 _SUBSCRIBE_RETRY_DELAY_SECONDS = 0.2
 _NO_ROLLOUT_FRAGMENT = "no rollout found for thread id"
 # A freshly created thread passes through a second transient state: its rollout
@@ -2028,6 +2035,7 @@ async def supervise_forwarder(
     client: CodexAppServerClient | None = None,
     auth: httpx.Auth | None = None,
     ap_transport: httpx.AsyncBaseTransport | None = None,
+    on_subscribed: CodexForwarderSubscribedHook | None = None,
 ) -> None:
     """
     Mirror Codex app-server notifications into an Omnigent session.
@@ -2050,6 +2058,9 @@ async def supervise_forwarder(
     :param auth: Optional HTTP auth for long-lived remote sessions.
     :param ap_transport: Optional HTTP transport for the Omnigent client,
         e.g. ``httpx.MockTransport(...)`` for tests.
+    :param on_subscribed: Optional one-shot hook run after the initial
+        ``thread/resume`` replay is complete. A hook failure is logged and
+        cannot take the live transcript mirror down.
     :returns: None. Runs until cancelled or the app-server connection
         closes.
     """
@@ -2105,6 +2116,7 @@ async def supervise_forwarder(
                 elicitation_tracker=target.elicitation_tracker,
                 forwarder_state=forwarder_state,
                 ready_signal=thread_active,
+                on_subscribed=on_subscribed,
             ),
             name="codex-native-forwarder-subscribe",
         )
@@ -2145,6 +2157,7 @@ async def supervise_forwarder(
                                 elicitation_tracker=target.elicitation_tracker,
                                 forwarder_state=forwarder_state,
                                 ready_signal=thread_active,
+                                on_subscribed=None,
                             ),
                             name="codex-native-forwarder-subscribe",
                         )
@@ -2508,6 +2521,7 @@ async def _subscribe_until_ready(
     elicitation_tracker: _CodexElicitationTaskTracker,
     forwarder_state: _CodexForwarderState | None = None,
     ready_signal: asyncio.Event | None = None,
+    on_subscribed: CodexForwarderSubscribedHook | None = None,
 ) -> None:
     """Reserve authoritative delivery order while subscribing and replaying."""
     async with _conversation_item_delivery_scope(session_id):
@@ -2521,6 +2535,7 @@ async def _subscribe_until_ready(
             elicitation_tracker=elicitation_tracker,
             forwarder_state=forwarder_state,
             ready_signal=ready_signal,
+            on_subscribed=on_subscribed,
         )
 
 
@@ -2535,6 +2550,7 @@ async def _subscribe_until_ready_inner(
     elicitation_tracker: _CodexElicitationTaskTracker,
     forwarder_state: _CodexForwarderState | None = None,
     ready_signal: asyncio.Event | None = None,
+    on_subscribed: CodexForwarderSubscribedHook | None = None,
 ) -> None:
     """
     Subscribe this app-server connection to a Codex thread.
@@ -2571,6 +2587,9 @@ async def _subscribe_until_ready_inner(
         thread parks here instead of polling. ``None`` falls back to the
         fixed-interval retry (used where no live event stream drives the
         signal).
+    :param on_subscribed: Optional callback run once after the successful
+        resume replay. Used by LocalDex host-restart recovery to begin its
+        replacement turn only after this connection owns the restored thread.
     :returns: None.
     """
     bridge_state = read_bridge_state(bridge_dir)
@@ -2648,6 +2667,11 @@ async def _subscribe_until_ready_inner(
             forwarder_state=forwarder_state,
             replay_from_turn_id=replay_from_turn_id,
         )
+        if on_subscribed is not None and forwarder_state is not None:
+            try:
+                await on_subscribed(client, forwarder_state)
+            except Exception:  # recovery must never kill mirroring.
+                _logger.exception("Codex forwarder post-subscribe hook failed")
         return
 
 
