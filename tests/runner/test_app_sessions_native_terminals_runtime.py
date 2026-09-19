@@ -3397,82 +3397,68 @@ async def test_localdex_host_restart_continuation_yields_to_a_live_turn(tmp_path
     assert codex_native_bridge.read_bridge_state(tmp_path).active_turn_id == "turn_user_won"  # type: ignore[union-attr]
 
 
-def test_localdex_restart_recovery_requires_graceful_stop_proof(tmp_path: Path) -> None:
-    """A stale active bridge alone must never restart an idle conversation."""
+def test_localdex_restart_recovery_requires_dead_owner_and_active_turn() -> None:
+    """Only an active turn abandoned by a dead prior runner is recoverable."""
     from omnigent.runner.native import orchestration
 
     state = codex_native_bridge.CodexNativeBridgeState(
         session_id="conv_localdex_restart",
         socket_path="ws://127.0.0.1:9876",
         thread_id="thread_localdex",
-        codex_home=str(tmp_path / "codex-home"),
+        codex_home="/codex-home",
         active_turn_id="turn_interrupted",
     )
-    codex_native_bridge.write_bridge_state(tmp_path, state)
 
+    assert orchestration._localdex_interrupted_turn_id(
+        selected_local_model=True,
+        prior_owner_dead=True,
+        previous_state=state,
+        session_id=state.session_id,
+        external_session_id=state.thread_id,
+    ) == "turn_interrupted"
     assert (
-        orchestration._localdex_restart_recovery_turn_id(
-            tmp_path,
+        orchestration._localdex_interrupted_turn_id(
             selected_local_model=True,
+            prior_owner_dead=False,
+            previous_state=state,
+            session_id=state.session_id,
+            external_session_id=state.thread_id,
+        )
+        is None
+    )
+    assert (
+        orchestration._localdex_interrupted_turn_id(
+            selected_local_model=True,
+            prior_owner_dead=True,
+            previous_state=codex_native_bridge.CodexNativeBridgeState(
+                session_id=state.session_id,
+                socket_path=state.socket_path,
+                thread_id=state.thread_id,
+                codex_home=state.codex_home,
+            ),
             session_id=state.session_id,
             external_session_id=state.thread_id,
         )
         is None
     )
 
-    codex_native_bridge.write_restart_recovery(tmp_path, state)
-    assert orchestration._localdex_restart_recovery_turn_id(
-        tmp_path,
-        selected_local_model=True,
-        session_id=state.session_id,
-        external_session_id=state.thread_id,
-    ) == "turn_interrupted"
 
-
-@pytest.mark.asyncio
-async def test_graceful_shutdown_marks_only_active_localdex_turns(
+def test_localdex_restart_recovery_requires_a_dead_bridge_owner(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Host shutdown writes restart proof for running, never idle, LocalDex."""
+    """An existing owner is a live relaunch, not an interrupted host turn."""
+    from omnigent.inner import terminal
     from omnigent.runner.native import orchestration
 
-    active_dir = tmp_path / "active"
-    idle_dir = tmp_path / "idle"
-    codex_native_bridge.write_bridge_state(
-        active_dir,
-        codex_native_bridge.CodexNativeBridgeState(
-            session_id="conv_active",
-            socket_path="ws://127.0.0.1:9876",
-            thread_id="thread_active",
-            codex_home=str(active_dir / "codex-home"),
-            active_turn_id="turn_active",
-        ),
-    )
-    codex_native_bridge.write_bridge_state(
-        idle_dir,
-        codex_native_bridge.CodexNativeBridgeState(
-            session_id="conv_idle",
-            socket_path="ws://127.0.0.1:9876",
-            thread_id="thread_idle",
-            codex_home=str(idle_dir / "codex-home"),
-        ),
-    )
-    monkeypatch.setattr(
-        orchestration,
-        "_AUTO_LOCALDEX_BRIDGE_DIRS",
-        {"conv_active": active_dir, "conv_idle": idle_dir},
-    )
+    (tmp_path / "owner.pid").write_text("4242", encoding="utf-8")
+    monkeypatch.setattr(terminal, "_process_alive", lambda _pid: True)
+    assert orchestration._bridge_owner_is_dead(tmp_path) is False
 
-    await orchestration.mark_localdex_interrupted_turns_for_restart()
+    monkeypatch.setattr(terminal, "_process_alive", lambda _pid: False)
+    assert orchestration._bridge_owner_is_dead(tmp_path) is True
 
-    active = codex_native_bridge.read_restart_recovery(active_dir)
-    assert active is not None
-    assert (active.session_id, active.thread_id, active.turn_id) == (
-        "conv_active",
-        "thread_active",
-        "turn_active",
-    )
-    assert codex_native_bridge.read_restart_recovery(idle_dir) is None
+    (tmp_path / "owner.pid").write_text("0", encoding="utf-8")
+    assert orchestration._bridge_owner_is_dead(tmp_path) is False
 
 
 @pytest.mark.asyncio

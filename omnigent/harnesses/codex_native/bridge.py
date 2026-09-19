@@ -49,7 +49,6 @@ _CODEX_DISABLED_COMPOSER_TEXT = frozenset(
 
 _STATE_FILE = "state.json"
 _STATE_LOCK_FILE = "state.lock"
-_RESTART_RECOVERY_FILE = "restart_recovery.json"
 _STARTUP_ERROR_FILE = "startup_error.json"
 _STARTUP_TIMEOUT_FILE = "startup_timeout.json"
 _STARTUP_TIMEOUT_MAX_BYTES = 256
@@ -153,22 +152,6 @@ class CodexNativeBridgeState:
     codex_home: str
     active_turn_id: str | None = None
     cwd: str | None = None
-
-
-@dataclass(frozen=True)
-class CodexNativeRestartRecovery:
-    """A graceful-host-stop proof for one interrupted native Codex turn.
-
-    This is deliberately separate from live bridge state. ``active_turn_id``
-    alone is not enough to infer an interruption after a later relaunch: it
-    can be stale. The runner writes this record only while it is gracefully
-    stopping an actually active LocalDex session.
-    """
-
-    session_id: str
-    thread_id: str
-    turn_id: str
-    created_at: float
 
 
 def bridge_dir_for_bridge_id(bridge_id: str) -> Path:
@@ -896,76 +879,6 @@ def write_bridge_state(bridge_dir: Path, state: CodexNativeBridgeState) -> None:
     """
     with _bridge_state_lock(bridge_dir):
         _write_bridge_state_unlocked(bridge_dir, state)
-
-
-def write_restart_recovery(bridge_dir: Path, state: CodexNativeBridgeState) -> None:
-    """Persist proof that a graceful host stop interrupted an active turn.
-
-    :param bridge_dir: Native Codex bridge directory.
-    :param state: The active bridge state being stopped.
-    :raises ValueError: If *state* has no active turn id.
-    """
-    if state.active_turn_id is None:
-        raise ValueError("restart recovery requires an active Codex turn")
-    payload = {
-        "session_id": state.session_id,
-        "thread_id": state.thread_id,
-        "turn_id": state.active_turn_id,
-        "created_at": time.time(),
-    }
-    with _bridge_state_lock(bridge_dir):
-        fd, tmp_name = tempfile.mkstemp(prefix=f"{_RESTART_RECOVERY_FILE}.", dir=str(bridge_dir))
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                json.dump(payload, handle, allow_nan=False, sort_keys=True)
-                handle.write("\n")
-            os.replace(tmp_name, bridge_dir / _RESTART_RECOVERY_FILE)
-        finally:
-            if os.path.exists(tmp_name):
-                os.unlink(tmp_name)
-
-
-def read_restart_recovery(bridge_dir: Path) -> CodexNativeRestartRecovery | None:
-    """Read a valid graceful-stop recovery proof, or ``None``.
-
-    Invalid or incomplete files fail closed.  They are best-effort crash
-    breadcrumbs and must never cause an idle conversation to continue.
-    """
-    try:
-        with (bridge_dir / _RESTART_RECOVERY_FILE).open("rb") as handle:
-            raw = json.loads(handle.read(4096).decode("utf-8"))
-    except (OSError, UnicodeError, ValueError, RecursionError):
-        return None
-    if not isinstance(raw, dict):
-        return None
-    session_id = raw.get("session_id")
-    thread_id = raw.get("thread_id")
-    turn_id = raw.get("turn_id")
-    created_at = raw.get("created_at")
-    if (
-        not isinstance(session_id, str)
-        or not session_id
-        or not isinstance(thread_id, str)
-        or not thread_id
-        or not isinstance(turn_id, str)
-        or not turn_id
-        or not isinstance(created_at, (int, float))
-        or isinstance(created_at, bool)
-        or not math.isfinite(created_at)
-    ):
-        return None
-    return CodexNativeRestartRecovery(
-        session_id=session_id,
-        thread_id=thread_id,
-        turn_id=turn_id,
-        created_at=float(created_at),
-    )
-
-
-def clear_restart_recovery(bridge_dir: Path) -> None:
-    """Discard a consumed or inapplicable graceful-stop recovery proof."""
-    with _bridge_state_lock(bridge_dir), contextlib.suppress(FileNotFoundError):
-        (bridge_dir / _RESTART_RECOVERY_FILE).unlink()
 
 
 def _validated_startup_timeout(value: object) -> float | None:

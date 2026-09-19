@@ -1623,15 +1623,6 @@ def create_app(
             teardown_all_codex_native_app_servers,
             teardown_all_opencode_native_servers,
         )
-        from omnigent.runner.native.orchestration import (
-            mark_localdex_interrupted_turns_for_restart,
-        )
-
-        # Record only genuinely active local turns before their app-servers
-        # are stopped. The next runner uses this explicit graceful-stop proof
-        # to continue LocalDex work; idle sessions never receive one.
-        with contextlib.suppress(Exception):
-            await mark_localdex_interrupted_turns_for_restart()
         with contextlib.suppress(Exception):
             await teardown_all_codex_native_app_servers()
         with contextlib.suppress(Exception):
