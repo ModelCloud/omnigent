@@ -4,7 +4,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FileViewerContext } from "@/shell/FileViewerContext";
 import type { RenderItem } from "@/lib/renderItems";
-import { ToolCard, ToolGroupSummary, formatToolDuration, getOutputPreview } from "./ToolCard";
+import {
+  ToolCard,
+  ToolGroupSummary,
+  fileChangesFromArguments,
+  formatToolDuration,
+  getOutputPreview,
+  isFileChangeToolCall,
+} from "./ToolCard";
 
 afterEach(cleanup);
 
@@ -65,6 +72,33 @@ describe("getOutputPreview", () => {
 });
 
 describe("ToolCard rendering", () => {
+  it("renders canonical Codex file changes as an open, syntax-highlighted patch", () => {
+    const args = {
+      changes: [
+        {
+          path: "/workspace/greeting.ts",
+          kind: { type: "update" },
+          diff: "@@ -1 +1 @@\n-console.log('old');\n+console.log('new');",
+        },
+      ],
+    };
+    expect(fileChangesFromArguments(args)).toHaveLength(1);
+    expect(isFileChangeToolCall("apply_patch", args)).toBe(true);
+    expect(isFileChangeToolCall("apply_patch", { patch: "*** Begin Patch" })).toBe(false);
+
+    renderCard({
+      name: "apply_patch",
+      arguments: args,
+      output: "update /workspace/greeting.ts",
+      state: "output-available",
+    });
+
+    expect(screen.getByText("Patch")).toBeInTheDocument();
+    expect(screen.getByText("--- /workspace/greeting.ts")).toBeInTheDocument();
+    expect(screen.getByText("+console.log('new');")).toBeInTheDocument();
+    expect(screen.queryByText("Parameters")).toBeNull();
+  });
+
   it("renders the tool title and duration in the collapsed trigger row", () => {
     // WHY: the trigger row is the always-visible summary; an unknown tool name
     // falls back to `name(argsSummary)`, and a completed duration renders.
