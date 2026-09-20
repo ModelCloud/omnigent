@@ -286,7 +286,10 @@ async def _localdex_runtime_settings_overrides(
     if not isinstance(target_model, str) or not target_model:
         target_model = current_model
     try:
-        localdex = load_localdex_config()
+        # Official models do not need the local endpoint's bearer token. Read
+        # the additive registration first, then require that token only when
+        # the target is the LocalDex model.
+        localdex = load_localdex_config(require_token=False)
     except (FileNotFoundError, ValueError) as exc:
         # A normal Codex session never needs LocalDex registration.  An
         # explicitly selected LocalDex model must fail closed instead of
@@ -296,6 +299,9 @@ async def _localdex_runtime_settings_overrides(
         localdex = None
 
     if localdex is not None and localdex_model_selected(localdex, target_model):
+        # Validate the local bearer only for the one model owned by LocalDex.
+        localdex = load_localdex_config()
+        overrides["model_provider"] = localdex.provider
         try:
             capabilities = await fetch_localdex_runtime_capabilities(localdex)
         except RuntimeError:
@@ -306,6 +312,11 @@ async def _localdex_runtime_settings_overrides(
             _logger.warning("LocalDex capability discovery failed; using conservative fallback")
         else:
             write_localdex_runtime_capabilities(Path(state.codex_home), localdex, capabilities)
+    elif localdex is not None:
+        # A model picker change must move both pieces of routing state. The
+        # model alone is insufficient: leaving ``localdex`` selected sends an
+        # official model to the local OpenAI-compatible endpoint.
+        overrides["model_provider"] = "openai"
     return overrides
 
 

@@ -62,7 +62,7 @@ def test_localdex_turn_refreshes_runtime_context_capability(
     ) -> None:
         writes.append((home, capabilities.context_window))
 
-    monkeypatch.setattr(localdex_config, "load_localdex_config", lambda: registration)
+    monkeypatch.setattr(localdex_config, "load_localdex_config", lambda **_kwargs: registration)
     monkeypatch.setattr(localdex_config, "fetch_localdex_runtime_capabilities", _capabilities)
     monkeypatch.setattr(localdex_config, "write_localdex_runtime_capabilities", _write)
     state = CodexNativeBridgeState(
@@ -78,7 +78,7 @@ def test_localdex_turn_refreshes_runtime_context_capability(
         )
     )
 
-    assert actual == {"model": "QB/DSV4.1-Flash"}
+    assert actual == {"model": "QB/DSV4.1-Flash", "model_provider": "localdex"}
     assert writes == [(tmp_path / "codex-home", 262_144)]
 
 
@@ -137,7 +137,7 @@ def test_localdex_discovery_failure_discards_a_stale_larger_limit(
     ) -> localdex_config.LocalDexRuntimeCapabilities:
         raise RuntimeError("endpoint unavailable")
 
-    monkeypatch.setattr(localdex_config, "load_localdex_config", lambda: registration)
+    monkeypatch.setattr(localdex_config, "load_localdex_config", lambda **_kwargs: registration)
     monkeypatch.setattr(localdex_config, "fetch_localdex_runtime_capabilities", _unavailable)
     state = CodexNativeBridgeState(
         session_id="session_123",
@@ -152,8 +152,37 @@ def test_localdex_discovery_failure_discards_a_stale_larger_limit(
         )
     )
 
-    assert actual == {"model": "QB/DSV4.1-Flash"}
+    assert actual == {"model": "QB/DSV4.1-Flash", "model_provider": "localdex"}
     assert not (tmp_path / localdex_config.LOCALDEX_RUNTIME_CAPABILITIES_FILE).exists()
+
+
+def test_localdex_turn_routes_official_model_to_openai(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An official model must replace LocalDex's provider as well as its slug."""
+    from omnigent.harnesses.localdex_native import config as localdex_config
+
+    registration = localdex_config.LocalDexConfig(
+        local_model="QB/DSV4.1-Flash",
+        provider="localdex",
+        base_url="http://127.0.0.1:2120/v1",
+        env_key="BEARER_TOKEN",
+    )
+    monkeypatch.setattr(localdex_config, "load_localdex_config", lambda **_kwargs: registration)
+    state = CodexNativeBridgeState(
+        session_id="session_123",
+        socket_path=str(tmp_path / "app-server.sock"),
+        thread_id="thread_123",
+        codex_home=str(tmp_path / "codex-home"),
+    )
+
+    actual = asyncio.run(
+        codex_native_executor._localdex_runtime_settings_overrides(
+            state, {"model": "gpt-5.6-sol"}
+        )
+    )
+
+    assert actual == {"model": "gpt-5.6-sol", "model_provider": "openai"}
 
 
 class _FakeCodexNativeClient:
