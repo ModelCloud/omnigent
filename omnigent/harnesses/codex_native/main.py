@@ -1268,6 +1268,7 @@ async def _prepare_codex_terminal(
             ap_server_url=base_url,
             ap_auth_headers=headers,
             developer_instructions=developer_instructions,
+            terminal_launch_args=codex_args,
         )
         app_server.listen_url = codex_ws_url
         event_client: CodexAppServerClient | None = None
@@ -1286,6 +1287,7 @@ async def _prepare_codex_terminal(
                     codex_ws_url,
                     thread_id,
                     terminal_launch_args=codex_args,
+                    cwd=Path.cwd(),
                     retain_client=codex_remote_resume_omits_permission_args(
                         app_server.codex_cli_version
                     ),
