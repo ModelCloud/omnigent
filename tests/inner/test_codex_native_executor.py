@@ -34,6 +34,128 @@ _PNG_B64 = (
 _PNG_DATA_URI = f"data:image/png;base64,{_PNG_B64}"
 
 
+def test_localdex_turn_refreshes_runtime_context_capability(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A LocalDex turn must use the endpoint's live, not bundled, window."""
+    from omnigent.harnesses.localdex_native import config as localdex_config
+
+    registration = localdex_config.LocalDexConfig(
+        local_model="QB/DSV4.1-Flash",
+        provider="localdex",
+        base_url="http://127.0.0.1:2120/v1",
+        env_key="BEARER_TOKEN",
+    )
+    writes: list[tuple[Path, int]] = []
+
+    async def _capabilities(
+        _config: localdex_config.LocalDexConfig,
+    ) -> localdex_config.LocalDexRuntimeCapabilities:
+        return localdex_config.LocalDexRuntimeCapabilities(
+            context_window=262_144, max_prompt_tokens=262_142
+        )
+
+    def _write(
+        home: Path,
+        _config: localdex_config.LocalDexConfig,
+        capabilities: localdex_config.LocalDexRuntimeCapabilities,
+    ) -> None:
+        writes.append((home, capabilities.context_window))
+
+    monkeypatch.setattr(localdex_config, "load_localdex_config", lambda: registration)
+    monkeypatch.setattr(localdex_config, "fetch_localdex_runtime_capabilities", _capabilities)
+    monkeypatch.setattr(localdex_config, "write_localdex_runtime_capabilities", _write)
+    state = CodexNativeBridgeState(
+        session_id="session_123",
+        socket_path=str(tmp_path / "app-server.sock"),
+        thread_id="thread_123",
+        codex_home=str(tmp_path / "codex-home"),
+    )
+
+    actual = asyncio.run(
+        codex_native_executor._localdex_runtime_settings_overrides(
+            state, {"model": "QB/DSV4.1-Flash"}
+        )
+    )
+
+    assert actual == {"model": "QB/DSV4.1-Flash"}
+    assert writes == [(tmp_path / "codex-home", 262_144)]
+
+
+def test_localdex_runtime_capability_snapshot_is_session_private(tmp_path: Path) -> None:
+    """The live endpoint limit must not become shared global configuration."""
+    from omnigent.harnesses.localdex_native import config as localdex_config
+
+    registration = localdex_config.LocalDexConfig(
+        local_model="QB/DSV4.1-Flash",
+        provider="localdex",
+        base_url="http://127.0.0.1:2120/v1",
+        env_key="BEARER_TOKEN",
+    )
+    localdex_config.write_localdex_runtime_capabilities(
+        tmp_path,
+        registration,
+        localdex_config.LocalDexRuntimeCapabilities(
+            context_window=262_144, max_prompt_tokens=262_142
+        ),
+    )
+
+    snapshot = tmp_path / localdex_config.LOCALDEX_RUNTIME_CAPABILITIES_FILE
+    assert json.loads(snapshot.read_text()) == {
+        "model": "QB/DSV4.1-Flash",
+        "context_window": 262_144,
+        "max_prompt_tokens": 262_142,
+    }
+    assert snapshot.stat().st_mode & 0o777 == 0o600
+
+    localdex_config.clear_localdex_runtime_capabilities(tmp_path)
+    assert not snapshot.exists()
+
+
+def test_localdex_discovery_failure_discards_a_stale_larger_limit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A failed refresh must not admit a turn using an old endpoint limit."""
+    from omnigent.harnesses.localdex_native import config as localdex_config
+
+    registration = localdex_config.LocalDexConfig(
+        local_model="QB/DSV4.1-Flash",
+        provider="localdex",
+        base_url="http://127.0.0.1:2120/v1",
+        env_key="BEARER_TOKEN",
+    )
+    localdex_config.write_localdex_runtime_capabilities(
+        tmp_path,
+        registration,
+        localdex_config.LocalDexRuntimeCapabilities(
+            context_window=524_288, max_prompt_tokens=524_286
+        ),
+    )
+
+    async def _unavailable(
+        _config: localdex_config.LocalDexConfig,
+    ) -> localdex_config.LocalDexRuntimeCapabilities:
+        raise RuntimeError("endpoint unavailable")
+
+    monkeypatch.setattr(localdex_config, "load_localdex_config", lambda: registration)
+    monkeypatch.setattr(localdex_config, "fetch_localdex_runtime_capabilities", _unavailable)
+    state = CodexNativeBridgeState(
+        session_id="session_123",
+        socket_path=str(tmp_path / "app-server.sock"),
+        thread_id="thread_123",
+        codex_home=str(tmp_path),
+    )
+
+    actual = asyncio.run(
+        codex_native_executor._localdex_runtime_settings_overrides(
+            state, {"model": "QB/DSV4.1-Flash"}
+        )
+    )
+
+    assert actual == {"model": "QB/DSV4.1-Flash"}
+    assert not (tmp_path / localdex_config.LOCALDEX_RUNTIME_CAPABILITIES_FILE).exists()
+
+
 class _FakeCodexNativeClient:
     """
     Fake Codex app-server client for native executor tests.
