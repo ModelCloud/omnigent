@@ -5035,6 +5035,7 @@ async def _auto_create_codex_terminal(
         ap_auth_headers=policy_headers,
         bypass_sandbox=launch_config.bypass_sandbox,
         developer_instructions=_codex_developer_instructions,
+        terminal_launch_args=launch_config.terminal_launch_args or (),
         reasoning_effort=launch_config.reasoning_effort,
         model_catalog_rows=_fresh_codex_catalog,
         # Codex can show project-trust and legacy-model migration prompts before
@@ -5092,7 +5093,7 @@ async def _auto_create_codex_terminal(
 
     event_client = CodexAppServerClient(
         ws_url=codex_ws_url,
-        client_name=app_server.client_identity,
+        client_name=getattr(app_server, "client_identity", "omnigent-codex-native-auto"),
     )
     retained_resume_client: CodexAppServerClient | None = None
     if launch_config.external_session_id is not None:
@@ -5101,6 +5102,7 @@ async def _auto_create_codex_terminal(
                 codex_ws_url,
                 launch_config.external_session_id,
                 terminal_launch_args=launch_config.terminal_launch_args,
+                cwd=Path(workspace),
                 retain_client=codex_remote_resume_omits_permission_args(
                     app_server.codex_cli_version
                 ),
@@ -5380,6 +5382,19 @@ async def _auto_create_codex_terminal(
 
     # Adopt the thread the fresh TUI creates and run the forwarder in the
     # background, so session creation never blocks on TUI startup.
+    known_thread_forwarder_kwargs: dict[str, object] = {
+        "session_id": session_id,
+        "bridge_dir": bridge_dir,
+        "codex_ws_url": codex_ws_url,
+        "thread_id": launch_config.external_session_id,
+        "client": retained_resume_client,
+        "subagent_router": _codex_router,
+        "turn_router": _codex_turn_router,
+    }
+    if _restart_continuation_turn_id is not None:
+        known_thread_forwarder_kwargs["localdex_restart_recovery_turn_id"] = (
+            _restart_continuation_turn_id
+        )
     _forwarder_task = asyncio.create_task(
         (
             _codex_discover_thread_and_forward(
@@ -5396,16 +5411,7 @@ async def _auto_create_codex_terminal(
                 turn_router=_codex_turn_router,
             )
             if launch_config.external_session_id is None
-            else _codex_forward_known_thread(
-                session_id=session_id,
-                bridge_dir=bridge_dir,
-                codex_ws_url=codex_ws_url,
-                thread_id=launch_config.external_session_id,
-                client=retained_resume_client,
-                subagent_router=_codex_router,
-                turn_router=_codex_turn_router,
-                localdex_restart_recovery_turn_id=_restart_continuation_turn_id,
-            )
+            else _codex_forward_known_thread(**known_thread_forwarder_kwargs)
         ),
         name=f"codex-forwarder-{session_id}",
     )
