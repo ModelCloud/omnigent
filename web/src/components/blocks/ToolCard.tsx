@@ -47,6 +47,71 @@ const OUTPUT_PREVIEW_CHAR_LIMIT = 12_000;
  */
 const FILE_PATH_TOOLS = new Set(["sys_os_read", "sys_os_write", "sys_os_edit"]);
 
+type FileChangeKind = "add" | "delete" | "update";
+
+interface FileChange {
+  path: string;
+  kind: FileChangeKind;
+  diff: string;
+  movePath: string | null;
+}
+
+/** Read Codex's canonical fileChange payload from its persisted tool envelope. */
+export function fileChangesFromArguments(args: Record<string, unknown>): FileChange[] {
+  if (!Array.isArray(args.changes)) return [];
+  const changes: FileChange[] = [];
+  for (const entry of args.changes) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const raw = entry as Record<string, unknown>;
+    const path = raw.path;
+    const kind = raw.kind;
+    if (
+      typeof path !== "string" ||
+      path.length === 0 ||
+      typeof kind !== "object" ||
+      kind === null
+    ) {
+      continue;
+    }
+    const type = (kind as Record<string, unknown>).type;
+    if (type !== "add" && type !== "delete" && type !== "update") continue;
+    const movePath = (kind as Record<string, unknown>).movePath;
+    changes.push({
+      path,
+      kind: type,
+      diff: typeof raw.diff === "string" ? raw.diff : "",
+      movePath: typeof movePath === "string" && movePath.length > 0 ? movePath : null,
+    });
+  }
+  return changes;
+}
+
+export function isFileChangeToolCall(name: string, args: Record<string, unknown>): boolean {
+  return name === "apply_patch" && fileChangesFromArguments(args).length > 0;
+}
+
+function formatFileChangePatch(changes: FileChange[]): string {
+  return changes
+    .map(({ path, kind, diff, movePath }) => {
+      const before = kind === "add" ? "/dev/null" : path;
+      const after = kind === "delete" ? "/dev/null" : (movePath ?? path);
+      const body =
+        kind === "add"
+          ? diff
+              .split("\n")
+              .map((line) => `+${line}`)
+              .join("\n")
+          : kind === "delete"
+            ? diff
+                .split("\n")
+                .map((line) => `-${line}`)
+                .join("\n")
+            : diff;
+      return `--- ${before}\n+++ ${after}${body.length > 0 ? `\n${body}` : ""}`;
+    })
+    .join("\n\n");
+}
+
 /**
  * If the string is valid JSON, return its 2-space-indented form.
  * Otherwise return the string verbatim. The code block renders inside a
@@ -179,6 +244,12 @@ export function ToolCard({
   duration,
 }: ToolCardProps) {
   const title = useMemo(() => formatToolTitle(name, args, argsSummary), [name, args, argsSummary]);
+  const fileChanges = useMemo(() => fileChangesFromArguments(args), [args]);
+  const fileChangePatch = useMemo(
+    () =>
+      name === "apply_patch" && fileChanges.length > 0 ? formatFileChangePatch(fileChanges) : null,
+    [fileChanges, name],
+  );
   const inputJson = useMemo(() => JSON.stringify(args, null, 2), [args]);
   const formattedOutput = useMemo(
     () => (output === null ? null : prettyPrintIfJson(output)),
@@ -200,7 +271,7 @@ export function ToolCard({
   const onBodyClick = openFile && rawPath ? () => openFile(rawPath) : undefined;
 
   return (
-    <Collapsible defaultOpen={false} className="group not-prose w-full">
+    <Collapsible defaultOpen={fileChangePatch !== null} className="group not-prose w-full">
       <ToolTriggerRow
         title={title}
         name={name}
@@ -210,20 +281,32 @@ export function ToolCard({
         onBodyClick={onBodyClick}
       />
       <CollapsibleContent className="mt-1 ml-2 space-y-2 border-l pl-3 py-1 data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:animate-out data-[state=open]:animate-in">
-        <CodePanel
-          title="Parameters"
-          text={inputJson}
-          copyText={inputJson}
-          copyLabel="Copy parameters"
-        />
-        {formattedOutput !== null && <OutputSection output={formattedOutput} />}
-        {formattedOutput === null && state === "input-available" && (
-          <ToolPendingOutput duration={displayDuration} />
+        {fileChangePatch !== null ? (
+          <CodePanel
+            title="Patch"
+            text={fileChangePatch}
+            copyText={fileChangePatch}
+            copyLabel="Copy patch"
+            language="diff"
+          />
+        ) : (
+          <>
+            <CodePanel
+              title="Parameters"
+              text={inputJson}
+              copyText={inputJson}
+              copyLabel="Copy parameters"
+            />
+            {formattedOutput !== null && <OutputSection output={formattedOutput} />}
+            {formattedOutput === null && state === "input-available" && (
+              <ToolPendingOutput duration={displayDuration} />
+            )}
+            {formattedOutput === null &&
+              (state === "output-error" || state === "cancelled" || state === "no-output") && (
+                <EmptyOutputState state={state} />
+              )}
+          </>
         )}
-        {formattedOutput === null &&
-          (state === "output-error" || state === "cancelled" || state === "no-output") && (
-            <EmptyOutputState state={state} />
-          )}
       </CollapsibleContent>
     </Collapsible>
   );
@@ -395,18 +478,20 @@ function CodePanel({
   text,
   copyText,
   copyLabel,
+  language = "json",
 }: {
   title: string;
   text: string;
   copyText: string;
   copyLabel: string;
+  language?: "diff" | "json";
 }) {
   // Soft-wrap long lines by default so the panel never needs horizontal
   // scrolling to read; the toggle restores the scrolling view for when
   // column alignment matters (same affordance as chat code blocks).
   const [wrap, setWrap] = useState(true);
   return (
-    <CodeBlock code={text} language="json" wrap={wrap}>
+    <CodeBlock code={text} language={language} wrap={wrap}>
       <CodeBlockHeader>
         <CodeBlockTitle className="min-w-0">
           <span className="truncate font-medium uppercase tracking-wide">{title}</span>

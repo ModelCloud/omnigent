@@ -11,6 +11,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RenderItem } from "@/lib/renderItems";
 import { ConversationScrollLockContext } from "@/components/ai-elements/conversation";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { FileViewerContext } from "@/shell/FileViewerContext";
 import { normalizeExplicitMathDelimiters } from "@/components/ai-elements/mathMarkdown";
 import { BlockRenderer } from "./BlockRenderer";
@@ -110,6 +111,50 @@ describe("BlockRenderer dispatch", () => {
     render(<BlockRenderer items={items} sessionStatus="idle" />);
     const card = screen.getByTestId("terminal-command-card");
     expect(card.getAttribute("data-terminal-kind")).toBe("output");
+  });
+
+  it("renders a canonical Codex file change as a persistent syntax-highlighted patch", () => {
+    // The native forwarder persists fileChange items as apply_patch calls.
+    // It must not reduce the structured diff to a generic tool row or fold it
+    // into the worked/reasoning disclosure after the final answer lands.
+    const items: RenderItem[] = [
+      {
+        kind: "tool",
+        itemId: "fc_1",
+        execution: {
+          name: "apply_patch",
+          arguments: {
+            changes: [
+              {
+                path: "/workspace/src/greeting.ts",
+                kind: { type: "update" },
+                diff: "-old\n+new",
+              },
+            ],
+          },
+          argsSummary: "",
+          callId: "call_1",
+          agentName: "codex",
+          executedBy: "server",
+          output: "update /workspace/src/greeting.ts",
+        },
+        output: "update /workspace/src/greeting.ts",
+        state: "output-available",
+        startedAt: null,
+        duration: undefined,
+      },
+      { kind: "text", itemId: "m_1", text: "Done.", final: true },
+    ];
+
+    render(
+      <TooltipProvider>
+        <BlockRenderer items={items} sessionStatus="idle" />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByText("Patch")).toBeInTheDocument();
+    expect(screen.getByText("+new")).toBeInTheDocument();
+    expect(screen.getByText("Done.")).toBeInTheDocument();
   });
 
   it("renders error diagnostics with local wrapping and preserved line breaks", () => {

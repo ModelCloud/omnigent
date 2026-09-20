@@ -41,7 +41,7 @@ import { SlashCommandCard } from "./SlashCommandCard";
 import { SmartRoutingCard } from "./SmartRoutingCard";
 import { TerminalCommandCard } from "./TerminalCommandCard";
 import { ErrorBanner, PolicyDeniedBanner, RetryIndicator } from "./StatusBlocks";
-import { ToolCard, ToolGroupSummary } from "./ToolCard";
+import { ToolCard, ToolGroupSummary, isFileChangeToolCall } from "./ToolCard";
 
 // Re-exported for the existing import sites; it lives in ./ChatMarkdown so
 // surfaces rendered *by* this module can use it without an import cycle.
@@ -728,7 +728,9 @@ const SESSION_SEND_NAMES = new Set(["sys_session_send", "mcp__omnigent__sys_sess
 function isPersistentToolCard(item: RenderItem): boolean {
   return (
     item.kind === "tool" &&
-    (ADVISE_MODELS_NAMES.has(item.execution.name) || SESSION_SEND_NAMES.has(item.execution.name))
+    (ADVISE_MODELS_NAMES.has(item.execution.name) ||
+      SESSION_SEND_NAMES.has(item.execution.name) ||
+      isFileChangeToolCall(item.execution.name, item.execution.arguments))
   );
 }
 
