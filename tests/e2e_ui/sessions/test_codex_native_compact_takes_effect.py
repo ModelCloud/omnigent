@@ -3,21 +3,17 @@ r"""E2E: ``/compact`` on a codex-native session must actually compact.
 Guarded hazard: after a Codex (codex-native) session runs a turn to
 completion, ``/compact`` from the web composer can silently do nothing — no
 "Compacting conversation…" spinner, no "Conversation compacted" marker, no
-error. The compact POST 200s: the server forwards the control to the runner,
-whose ``_inject_codex_compact`` (``omnigent/runner/app.py``) types
-``/compact`` into the Codex TUI's tmux pane and presses Enter. Codex's
-slash-command popup renders asynchronously, so an Enter sent back-to-back
-with the typed command is swallowed by the still-opening popup and the
-command never submits — the TUI is left with ``/compact`` sitting
-un-submitted in its composer. The injector must settle between typing and
-submitting (the same race its sibling ``_inject_codex_permission_mode``
-documents and settles around).
+error. The compact control must call the resident app-server's
+``thread/compact/start`` operation and wait for acceptance. Sending
+``/compact`` through tmux is not reliable: Codex's slash-command popup draws
+asynchronously, so tmux can accept Enter while Codex leaves the command
+unsubmitted in its composer.
 
 This test drives the real user journey end to end against a live Codex TUI:
 run one composer turn to completion, run ``/compact``, and require the
 compaction to become user-visible — either the in-progress
 ``compacting-indicator`` or the durable "Conversation compacted" marker. If
-the injection races the popup, neither ever appears and this fails.
+the app-server does not accept compaction, neither ever appears and this fails.
 
 Codex is launched against the session-scoped mock LLM server (which serves the
 OpenAI Responses API the ``codex-native`` harness speaks). The runner resolves
@@ -83,13 +79,9 @@ _log = logging.getLogger(__name__)
 # The compact must surface *something* user-visible within this budget: the
 # forwarder's "Compacting conversation…" spinner (compaction_in_progress) or
 # the persisted "Conversation compacted" marker. The mock LLM answers Codex's
-# summarization request instantly, so this is generous headroom for the tmux
-# inject + Codex compaction + forwarder round-trip.
+# summarization request instantly, so this is generous headroom for the
+# app-server call + Codex compaction + forwarder round-trip.
 _COMPACTION_FEEDBACK_TIMEOUT_MS = 90_000
-
-# Give the runner's /compact tmux injection time to land in the TUI before the
-# terminal-view peek below films the pane state.
-_INJECT_SETTLE_MS = 8_000
 
 
 @pytest.fixture
@@ -105,8 +97,8 @@ def codex_native_mock_session(
     openai/responses provider — the shared runner's config home is read-only
     and gateway-only, which parks Codex on its sign-in screen. The runner
     auto-launches Codex in the session terminal on bind, routed to the mock
-    LLM, so a real turn runs to completion and ``/compact`` injects into a live
-    Codex TUI.
+    LLM, so a real turn runs to completion and ``/compact`` invokes the live
+    Codex app-server.
 
     :param built_spa: Ensures the SPA bundle is on disk before the server boots.
     :param mock_llm_server_url: Session-scoped mock LLM (Responses) base URL.
@@ -267,8 +259,8 @@ def test_codex_native_compact_compacts_after_completed_turn(
 
     Journey: run a Codex session turn to completion → run ``/compact`` from
     the web composer → the compaction must become user-visible. If the
-    injected command never submits in the Codex TUI (the popup swallowed the
-    Enter), nothing at all happens and the final expectation times out.
+    app-server never accepts the compaction request, nothing at all happens
+    and the final expectation times out.
 
     :param page: Playwright page fixture.
     :param codex_native_mock_session: ``(base_url, session_id)`` for a
@@ -323,23 +315,14 @@ def test_codex_native_compact_compacts_after_completed_turn(
     composer.fill("/compact")
     composer.press("Enter")
 
-    # The bug is *silence*, not an error: the POST 200s (tmux send-keys
-    # succeeded), so no inline composer error may appear on either build.
+    # The bug is *silence*, not an error. A 200 means the app-server accepted
+    # the operation, so no inline composer error may appear.
     expect(page.get_by_text("Compact failed", exact=False)).to_have_count(0)
-
-    # Peek at the TUI pane so a video of this run shows the pane state (a
-    # lost submit leaves "/compact" sitting un-submitted in Codex's composer),
-    # then return to the chat view for the decisive assertion.
-    page.wait_for_timeout(_INJECT_SETTLE_MS)
-    _open_terminal_view(page)
-    _wait_terminal_connected(page)
-    page.wait_for_timeout(2_000)
-    _ensure_chat_view(page)
 
     # Step 4 — the observable failure: the compaction must become
     # user-visible, as the in-progress spinner or the durable completed
-    # marker. If the TUI never submits the command (swallowed Enter), then
-    # neither ever appears and this times out.
+    # marker. If Codex does not start the accepted operation, neither ever
+    # appears and this times out.
     compaction_feedback = page.get_by_test_id("compacting-indicator").or_(
         page.get_by_text("Conversation compacted", exact=False)
     )

@@ -234,6 +234,11 @@ _CLAUDE_PANE_READY_POLL_S = 0.25
 # submits).
 _CODEX_POPUP_RENDER_S = 0.7
 
+# ``thread/compact/start`` only accepts an operation; it must never hold the
+# runner's control endpoint hostage if a stale app-server transport stops
+# responding. Completion itself is observed asynchronously by the forwarder.
+_CODEX_COMPACT_START_TIMEOUT_S = 10.0
+
 # Budget for confirming an approval switch actually landed. Codex echoes
 # "Permissions updated to <label>" once the popup applies; we poll the pane for
 # it so a no-op (e.g. a preset this codex build's /permissions doesn't offer)
@@ -6713,6 +6718,8 @@ def create_runner_app(
         return Response(status_code=200)
 
     async def _handle_codex_native_compact(conv_id: str) -> Response:
+        from omnigent.harnesses.codex_native.app_server import client_for_transport
+
         registry = resource_registry.terminal_registry
         instance = registry.get(conv_id, "codex", "main") if registry is not None else None
         if instance is None or not instance.running:
@@ -6724,12 +6731,39 @@ def create_runner_app(
                 },
             )
 
-        socket_path = str(instance.socket_path)
-        target = instance.tmux_target
+        state = await _codex_native_bridge_state_for_session(conv_id, action="compact")
+        if state is None:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": "codex_native_compact_failed",
+                    "detail": "Codex-native compaction requires a loaded Codex bridge.",
+                },
+            )
 
+        # Never drive /compact through the TUI. The slash-command popup draws
+        # asynchronously, so a successful tmux send-keys call can still leave
+        # the command sitting in the composer. The app-server owns the thread
+        # and confirms that it accepted the operation before we return 200.
+        codex_client = client_for_transport(
+            state.socket_path,
+            client_name="omnigent-codex-native-runner",
+        )
         try:
-            await asyncio.to_thread(_inject_codex_compact, socket_path, target)
-        except (RuntimeError, ValueError) as exc:
+            async with asyncio.timeout(_CODEX_COMPACT_START_TIMEOUT_S):
+                await codex_client.connect()
+                await codex_client.request(
+                    "thread/compact/start",
+                    {"threadId": state.thread_id},
+                )
+        except Exception as exc:  # noqa: BLE001 - surface app-server failures to the control caller.
+            _logger.warning(
+                "Codex-native thread/compact/start failed for session=%s thread=%s",
+                conv_id,
+                state.thread_id,
+                exc_info=True,
+                extra={"session_id": conv_id},
+            )
             return JSONResponse(
                 status_code=503,
                 content={
@@ -6737,6 +6771,9 @@ def create_runner_app(
                     "detail": _client_safe_error_detail(exc, context="codex-native compact"),
                 },
             )
+        finally:
+            with contextlib.suppress(Exception):
+                await codex_client.close()
         return Response(status_code=200)
 
     async def _handle_opencode_native_compact(conv_id: str) -> Response:
@@ -6927,17 +6964,6 @@ def create_runner_app(
                 },
             )
         return Response(status_code=200)
-
-    def _inject_codex_compact(socket_path: str, target: str) -> None:
-        # Typing "/compact" opens Codex's slash-command popup, which draws
-        # asynchronously: an Enter sent back-to-back is swallowed by the
-        # still-opening popup and the command never submits, so settle first.
-        from omnigent.harnesses.claude_native.bridge import _run_tmux
-
-        _run_tmux(socket_path, "send-keys", "-t", target, "C-u")
-        _run_tmux(socket_path, "send-keys", "-l", "-t", target, "/compact")
-        time.sleep(_CODEX_POPUP_RENDER_S)
-        _run_tmux(socket_path, "send-keys", "-t", target, "Enter")
 
     def _inject_codex_permission_mode(
         socket_path: str,
@@ -10031,7 +10057,7 @@ def create_runner_app(
         if body_type == "compact":
             if _session_harness_name(conversation_id) == "claude-native":
                 return await _handle_claude_native_compact(conversation_id)
-            if _session_harness_name(conversation_id) == "codex-native":
+            if _session_harness_name(conversation_id) in {"codex-native", "localdex-native"}:
                 return await _handle_codex_native_compact(conversation_id)
             if _session_harness_name(conversation_id) == "opencode-native":
                 return await _handle_opencode_native_compact(conversation_id)
