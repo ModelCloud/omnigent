@@ -36,6 +36,7 @@ from omnigent.harnesses.codex_native.bridge import (
     update_active_turn_id,
     write_codex_config_effort,
     write_codex_config_model,
+    write_codex_config_model_provider,
 )
 from omnigent.inner.codex_goal_command import (
     goal_objective_from_content,
@@ -139,6 +140,13 @@ async def _start_codex_turn(
                 _logger.warning(
                     "Failed to mirror codex model switch into config.toml: model=%s",
                     switched_model,
+                )
+        switched_provider = settings_overrides.get("model_provider")
+        if isinstance(switched_provider, str) and switched_provider:
+            if not write_codex_config_model_provider(bridge_dir, switched_provider):
+                _logger.warning(
+                    "Failed to mirror codex provider switch into config.toml: provider=%s",
+                    switched_provider,
                 )
         # Mirror an applied effort the same way (after the model write, whose
         # clamp may have rewritten the stale effort line): the forwarder's

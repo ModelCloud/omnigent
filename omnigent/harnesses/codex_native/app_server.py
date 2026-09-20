@@ -346,6 +346,46 @@ def _pin_codex_config_model(codex_home: Path, model: str) -> None:
     config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _model_provider_override(config_overrides: Sequence[str]) -> str | None:
+    """Return the effective explicit ``model_provider`` override, if any."""
+    for override in reversed(config_overrides):
+        key, separator, value = override.partition("=")
+        if key != "model_provider" or not separator:
+            continue
+        try:
+            provider = json.loads(value)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(provider, str) and provider:
+            return provider
+    return None
+
+
+def _pin_codex_config_model_provider(codex_home: Path, provider: str) -> None:
+    """Write the explicit launch provider into the private session config.
+
+    A session copied from a LocalDex default may otherwise pair an official
+    model with the stale ``localdex`` provider after ``thread/resume``. The
+    app-server's ``-c`` value alone is insufficient because the remote TUI
+    restores this file as thread state.
+    """
+    config_path = codex_home / "config.toml"
+    _materialize_config_symlink(config_path)
+    existing = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+    pin_line = f"model_provider = {json.dumps(provider)}"
+    lines = existing.splitlines()
+    replaced = False
+    for i, line in enumerate(lines):
+        if line.startswith("["):
+            break
+        if re.match(r"^model_provider\s*=", line):
+            lines[i] = pin_line
+            replaced = True
+    if not replaced:
+        lines.insert(0, pin_line)
+    config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def _pin_codex_config_effort(codex_home: Path, effort: str, model: str | None) -> None:
     """
     Write *effort* as the top-level ``model_reasoning_effort`` in the session config.
@@ -1673,6 +1713,8 @@ class CodexNativeAppServer:
             self.python_executable,
             routed_spawns=routed_spawns,
         )
+        if provider := _model_provider_override(self.config_overrides):
+            _pin_codex_config_model_provider(self.codex_home, provider)
         if self.pinned_model:
             _pin_codex_config_model(self.codex_home, self.pinned_model)
             if model_migration_target is not None:
