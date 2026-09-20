@@ -517,6 +517,7 @@ async def test_localdex_model_passes_only_declared_bearer_key(
 
     build = harness.builds[0]
     assert build["isolated_env_keys"] == ("BEARER_TOKEN",)
+    assert build["bridge_openai_auth"] is True
     assert build["config_source"] == tmp_path / "localdex-home"
     assert 'model_provider="localdex"' in build["extra_config_overrides"]
     assert "show_raw_agent_reasoning=true" in build["extra_config_overrides"]

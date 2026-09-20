@@ -1599,6 +1599,11 @@ class CodexNativeAppServer:
     # Authless OpenAI-compatible providers receive only these declared bearer
     # variables, never ambient OpenAI or Databricks credentials.
     isolated_env_keys: tuple[str, ...] = ()
+    # LocalDex is additive: its local bearer provider and Codex's built-in
+    # OpenAI provider coexist in one runtime.  Preserve the user's shared
+    # auth.json so a live thread can switch from the local model to an
+    # official model without restarting or falling back to the local URL.
+    bridge_openai_auth: bool = False
     process_registry_path: Path | None = None
     process_tag_prefix: str = "codex-native"
     client_identity: str = "omnigent-codex-native-auto"
@@ -1696,12 +1701,30 @@ class CodexNativeAppServer:
             supported_efforts=CODEX_NATIVE_EFFORTS,
         )
         if self.isolated_env_keys:
-            # Prevent fallback to $HOME/.codex/auth.json.  The provider's
-            # configured bearer env-key is the only credential this runtime
-            # may consult.
             auth_path = self.codex_home / "auth.json"
-            auth_path.write_text("{}\n", encoding="utf-8")
-            os.chmod(auth_path, 0o600)
+            if auth_path.exists() or auth_path.is_symlink():
+                auth_path.unlink()
+            if self.bridge_openai_auth:
+                # LocalDex's provider registration lives in a separate config
+                # home, but official models still need the user's normal
+                # Codex login.  Symlink it so token refreshes remain shared.
+                source_auth = _codex_home_config_source_from_env() / "auth.json"
+                if source_auth.is_file():
+                    try:
+                        auth_path.symlink_to(source_auth.resolve())
+                    except OSError:
+                        import shutil
+
+                        shutil.copy2(source_auth, auth_path)
+                else:
+                    auth_path.write_text("{}\n", encoding="utf-8")
+                    os.chmod(auth_path, 0o600)
+            else:
+                # Prevent fallback to $HOME/.codex/auth.json.  The provider's
+                # configured bearer env-key is the only credential this
+                # runtime may consult.
+                auth_path.write_text("{}\n", encoding="utf-8")
+                os.chmod(auth_path, 0o600)
         if self.trust_project:
             _trust_codex_project(self.codex_home, self.cwd)
         # Write the MCP server config into config.toml so the app-server
@@ -2775,6 +2798,7 @@ def build_codex_native_server(
     model_catalog_rows: list[_JsonObject] | None = None,
     config_source: Path | None = None,
     isolated_env_keys: tuple[str, ...] = (),
+    bridge_openai_auth: bool = False,
     process_registry_path: Path | None = None,
     process_tag_prefix: str = "codex-native",
     client_identity: str = "omnigent-codex-native-auto",
@@ -2832,6 +2856,9 @@ def build_codex_native_server(
         the copied config's value.
     :param model_catalog_rows: Fresh rows from the shared launch-shaped
         ``model/list`` catalog, used to avoid a redundant migration probe.
+    :param bridge_openai_auth: Preserve the user's normal Codex ``auth.json``
+        alongside an additive bearer-authenticated provider. LocalDex enables
+        this so one live thread can switch between local and official models.
     :param reconcile_process_registry: Whether startup performs the global
         crash registry sweep. Runner-owned launches disable this because the
         host janitor owns it; standalone callers keep the
@@ -2868,7 +2895,8 @@ def build_codex_native_server(
         # It is not needed for a profile that explicitly routes all inference
         # through a local/provider-specific credential, and must not refresh
         # an ambient ChatGPT token during terminal startup or a turn.
-        env["CODEX_DISABLE_CLOUD_CONFIG"] = "1"
+        if not bridge_openai_auth:
+            env["CODEX_DISABLE_CLOUD_CONFIG"] = "1"
     config_overrides: list[str] = []
     pinned_model = model
     if profile is not None:
@@ -2915,6 +2943,7 @@ def build_codex_native_server(
         config_profile=config_profile,
         config_source=config_source,
         isolated_env_keys=authless_profile_env,
+        bridge_openai_auth=bridge_openai_auth,
         process_registry_path=process_registry_path,
         process_tag_prefix=process_tag_prefix,
         client_identity=client_identity,

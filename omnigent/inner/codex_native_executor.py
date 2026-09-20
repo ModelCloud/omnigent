@@ -141,7 +141,11 @@ async def _start_codex_turn(
                     "Failed to mirror codex model switch into config.toml: model=%s",
                     switched_model,
                 )
-        switched_provider = settings_overrides.get("model_provider")
+        # The app-server JSON-RPC protocol is camelCase.  Using the TOML key
+        # spelling (``model_provider``) here is silently ignored by clients
+        # that tolerate unknown request fields, leaving the prior provider in
+        # place even though the model itself changed.
+        switched_provider = settings_overrides.get("modelProvider")
         if isinstance(switched_provider, str) and switched_provider:
             if not write_codex_config_model_provider(bridge_dir, switched_provider):
                 _logger.warning(
@@ -309,7 +313,7 @@ async def _localdex_runtime_settings_overrides(
     if localdex is not None and localdex_model_selected(localdex, target_model):
         # Validate the local bearer only for the one model owned by LocalDex.
         localdex = load_localdex_config()
-        overrides["model_provider"] = localdex.provider
+        overrides["modelProvider"] = localdex.provider
         try:
             capabilities = await fetch_localdex_runtime_capabilities(localdex)
         except RuntimeError:
@@ -324,7 +328,7 @@ async def _localdex_runtime_settings_overrides(
         # A model picker change must move both pieces of routing state. The
         # model alone is insufficient: leaving ``localdex`` selected sends an
         # official model to the local OpenAI-compatible endpoint.
-        overrides["model_provider"] = "openai"
+        overrides["modelProvider"] = "openai"
     return overrides
 
 

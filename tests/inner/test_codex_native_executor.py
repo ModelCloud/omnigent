@@ -78,7 +78,7 @@ def test_localdex_turn_refreshes_runtime_context_capability(
         )
     )
 
-    assert actual == {"model": "QB/DSV4.1-Flash", "model_provider": "localdex"}
+    assert actual == {"model": "QB/DSV4.1-Flash", "modelProvider": "localdex"}
     assert writes == [(tmp_path / "codex-home", 262_144)]
 
 
@@ -152,7 +152,7 @@ def test_localdex_discovery_failure_discards_a_stale_larger_limit(
         )
     )
 
-    assert actual == {"model": "QB/DSV4.1-Flash", "model_provider": "localdex"}
+    assert actual == {"model": "QB/DSV4.1-Flash", "modelProvider": "localdex"}
     assert not (tmp_path / localdex_config.LOCALDEX_RUNTIME_CAPABILITIES_FILE).exists()
 
 
@@ -182,7 +182,9 @@ def test_localdex_turn_routes_official_model_to_openai(
         )
     )
 
-    assert actual == {"model": "gpt-5.6-sol", "model_provider": "openai"}
+    # ThreadSettingsUpdateParams is serialized with camelCase.  A snake_case
+    # key is accepted as an unknown JSON field but does not switch providers.
+    assert actual == {"model": "gpt-5.6-sol", "modelProvider": "openai"}
 
 
 class _FakeCodexNativeClient:
