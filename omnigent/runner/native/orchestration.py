@@ -5016,6 +5016,10 @@ async def _auto_create_codex_terminal(
             if selected_local_model and _localdex_config is not None
             else ()
         ),
+        # LocalDex is one additive provider in a full Codex runtime. Keep the
+        # shared official login available so an in-session model switch to an
+        # OpenAI model also switches credentials and endpoint correctly.
+        bridge_openai_auth=selected_local_model,
         process_registry_path=(bridge_dir.parent / "process-registry.json") if localdex else None,
         process_tag_prefix="localdex-native" if localdex else "codex-native",
         client_identity=(

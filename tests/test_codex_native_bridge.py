@@ -38,6 +38,7 @@ from omnigent.harnesses.codex_native.bridge import (
     write_bridge_state,
     write_codex_config_effort,
     write_codex_config_model,
+    write_codex_config_model_provider,
     write_policy_hook_config,
 )
 
@@ -265,6 +266,22 @@ def test_write_codex_config_model_creates_missing_file(bridge_dir: Path) -> None
     """No codex-home/config.toml yet → the writer creates it (best-effort)."""
     assert write_codex_config_model(bridge_dir, "gpt-5.6-luna") is True
     assert read_codex_config_model(bridge_dir) == "gpt-5.6-luna"
+
+
+def test_write_codex_config_model_provider_replaces_top_level_key(bridge_dir: Path) -> None:
+    """A model switch's provider must persist across thread resume."""
+    _write_config(
+        bridge_dir,
+        'model = "gpt-5.6-sol"\n'
+        'model_provider = "localdex"\n'
+        "[model_providers.localdex]\n"
+        'model_provider = "section-value-not-touched"\n',
+    )
+
+    assert write_codex_config_model_provider(bridge_dir, "openai") is True
+    body = (codex_home_for_bridge_dir(bridge_dir) / "config.toml").read_text()
+    assert 'model_provider = "openai"' in body
+    assert 'model_provider = "section-value-not-touched"' in body
 
 
 def test_write_codex_config_effort_replaces_top_level_key(bridge_dir: Path) -> None:

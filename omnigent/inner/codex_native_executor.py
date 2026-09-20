@@ -36,6 +36,7 @@ from omnigent.harnesses.codex_native.bridge import (
     update_active_turn_id,
     write_codex_config_effort,
     write_codex_config_model,
+    write_codex_config_model_provider,
 )
 from omnigent.inner.codex_goal_command import (
     goal_objective_from_content,
@@ -139,6 +140,17 @@ async def _start_codex_turn(
                 _logger.warning(
                     "Failed to mirror codex model switch into config.toml: model=%s",
                     switched_model,
+                )
+        # The app-server JSON-RPC protocol is camelCase.  Using the TOML key
+        # spelling (``model_provider``) here is silently ignored by clients
+        # that tolerate unknown request fields, leaving the prior provider in
+        # place even though the model itself changed.
+        switched_provider = settings_overrides.get("modelProvider")
+        if isinstance(switched_provider, str) and switched_provider:
+            if not write_codex_config_model_provider(bridge_dir, switched_provider):
+                _logger.warning(
+                    "Failed to mirror codex provider switch into config.toml: provider=%s",
+                    switched_provider,
                 )
         # Mirror an applied effort the same way (after the model write, whose
         # clamp may have rewritten the stale effort line): the forwarder's
@@ -286,7 +298,10 @@ async def _localdex_runtime_settings_overrides(
     if not isinstance(target_model, str) or not target_model:
         target_model = current_model
     try:
-        localdex = load_localdex_config()
+        # Official models do not need the local endpoint's bearer token. Read
+        # the additive registration first, then require that token only when
+        # the target is the LocalDex model.
+        localdex = load_localdex_config(require_token=False)
     except (FileNotFoundError, ValueError) as exc:
         # A normal Codex session never needs LocalDex registration.  An
         # explicitly selected LocalDex model must fail closed instead of
@@ -296,6 +311,9 @@ async def _localdex_runtime_settings_overrides(
         localdex = None
 
     if localdex is not None and localdex_model_selected(localdex, target_model):
+        # Validate the local bearer only for the one model owned by LocalDex.
+        localdex = load_localdex_config()
+        overrides["modelProvider"] = localdex.provider
         try:
             capabilities = await fetch_localdex_runtime_capabilities(localdex)
         except RuntimeError:
@@ -306,6 +324,11 @@ async def _localdex_runtime_settings_overrides(
             _logger.warning("LocalDex capability discovery failed; using conservative fallback")
         else:
             write_localdex_runtime_capabilities(Path(state.codex_home), localdex, capabilities)
+    elif localdex is not None:
+        # A model picker change must move both pieces of routing state. The
+        # model alone is insufficient: leaving ``localdex`` selected sends an
+        # official model to the local OpenAI-compatible endpoint.
+        overrides["modelProvider"] = "openai"
     return overrides
 
 
@@ -372,13 +395,15 @@ class CodexNativeExecutor(Executor):
                 # A steer can become a fresh sampling step after LocalDex
                 # preempts the in-flight request, so refresh its live capacity
                 # before handing the input to app-server as well.
-                await _localdex_runtime_settings_overrides(state, {})
+                runtime_settings_overrides = await _localdex_runtime_settings_overrides(
+                    state, {}
+                )
                 await _inject_codex_turn(
                     client,
                     bridge_dir=self._bridge_dir,
                     state=state,
                     input_items=input_items,
-                    settings_overrides={},
+                    settings_overrides=runtime_settings_overrides,
                 )
             except Exception:  # noqa: BLE001 - steering is best-effort from the runner facade.
                 _logger.warning("Codex native turn/steer failed", exc_info=True)
