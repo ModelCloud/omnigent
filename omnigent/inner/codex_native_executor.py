@@ -31,6 +31,7 @@ from omnigent.harnesses.codex_native.bridge import (
     read_bridge_startup_error,
     read_bridge_startup_timeout,
     read_bridge_state,
+    read_codex_home_config_model,
     read_mcp_startup,
     update_active_turn_id,
     write_codex_config_effort,
@@ -258,6 +259,56 @@ async def _inject_codex_turn(
     )
 
 
+async def _localdex_runtime_settings_overrides(
+    state: CodexNativeBridgeState,
+    settings_overrides: Mapping[str, object],
+) -> dict[str, object]:
+    """Attach a freshly-discovered LocalDex context budget to a new turn.
+
+    LocalDex deployments can change their serving context window without a
+    client upgrade.  Query only when the target is the configured local model;
+    the app-server uses this runtime value for pre-turn compaction instead of
+    trusting bundled metadata. Official Codex models never read this
+    LocalDex-specific session file, so their routing and limits stay intact.
+    """
+    from omnigent.harnesses.localdex_native.config import (
+        LOCALDEX_MODEL,
+        clear_localdex_runtime_capabilities,
+        fetch_localdex_runtime_capabilities,
+        load_localdex_config,
+        localdex_model_selected,
+        write_localdex_runtime_capabilities,
+    )
+
+    overrides = dict(settings_overrides)
+    current_model = read_codex_home_config_model(Path(state.codex_home))
+    target_model = overrides.get("model")
+    if not isinstance(target_model, str) or not target_model:
+        target_model = current_model
+    try:
+        localdex = load_localdex_config()
+    except (FileNotFoundError, ValueError) as exc:
+        # A normal Codex session never needs LocalDex registration.  An
+        # explicitly selected LocalDex model must fail closed instead of
+        # silently using fallback metadata or another provider.
+        if target_model == LOCALDEX_MODEL:
+            raise RuntimeError("LocalDex local-provider configuration is unavailable") from exc
+        localdex = None
+
+    if localdex is not None and localdex_model_selected(localdex, target_model):
+        try:
+            capabilities = await fetch_localdex_runtime_capabilities(localdex)
+        except RuntimeError:
+            # Do not keep a possibly larger cached limit when discovery is
+            # temporarily unavailable. The conservative bundled fallback plus
+            # LocalDex's overflow retry keeps the session recoverable.
+            clear_localdex_runtime_capabilities(Path(state.codex_home))
+            _logger.warning("LocalDex capability discovery failed; using conservative fallback")
+        else:
+            write_localdex_runtime_capabilities(Path(state.codex_home), localdex, capabilities)
+    return overrides
+
+
 class CodexNativeExecutor(Executor):
     """
     Harness-side executor for ``omnigent codex`` web UI turns.
@@ -318,6 +369,10 @@ class CodexNativeExecutor(Executor):
             )
             await client.connect()
             try:
+                # A steer can become a fresh sampling step after LocalDex
+                # preempts the in-flight request, so refresh its live capacity
+                # before handing the input to app-server as well.
+                await _localdex_runtime_settings_overrides(state, {})
                 await _inject_codex_turn(
                     client,
                     bridge_dir=self._bridge_dir,
@@ -565,12 +620,17 @@ class CodexNativeExecutor(Executor):
                                         "objective": goal_objective,
                                     },
                                 )
+                            runtime_settings_overrides = (
+                                await _localdex_runtime_settings_overrides(
+                                    state, settings_overrides
+                                )
+                            )
                             await _inject_codex_turn(
                                 client,
                                 bridge_dir=self._bridge_dir,
                                 state=state,
                                 input_items=input_items,
-                                settings_overrides=settings_overrides,
+                                settings_overrides=runtime_settings_overrides,
                             )
                     except Exception as exc:
                         _logger.exception(
