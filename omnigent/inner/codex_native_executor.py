@@ -391,13 +391,15 @@ class CodexNativeExecutor(Executor):
                 # A steer can become a fresh sampling step after LocalDex
                 # preempts the in-flight request, so refresh its live capacity
                 # before handing the input to app-server as well.
-                await _localdex_runtime_settings_overrides(state, {})
+                runtime_settings_overrides = await _localdex_runtime_settings_overrides(
+                    state, {}
+                )
                 await _inject_codex_turn(
                     client,
                     bridge_dir=self._bridge_dir,
                     state=state,
                     input_items=input_items,
-                    settings_overrides={},
+                    settings_overrides=runtime_settings_overrides,
                 )
             except Exception:  # noqa: BLE001 - steering is best-effort from the runner facade.
                 _logger.warning("Codex native turn/steer failed", exc_info=True)
