@@ -5759,10 +5759,10 @@ async def _codex_forward_known_thread(
         await _shutdown_session_turn_router_async(session_id, turn_router)
 
 
-_LOCALDEX_HOST_RESTART_CONTINUATION_PROMPT = (
-    "[System: The Omnigent host restarted while your previous LocalDex response "
-    "was in progress. Continue the previous task from the existing conversation. "
-    "Do not repeat completed work; continue from the last confirmed state.]"
+_RESTART_RECOVERY_CONTINUATION_PROMPT = (
+    "[System: The previous response was interrupted before completion. Continue "
+    "the task from the existing conversation. Do not repeat completed work; "
+    "continue from the last confirmed state.]"
 )
 
 
@@ -5807,7 +5807,7 @@ async def _start_localdex_host_restart_continuation(
         "turn/start",
         {
             "threadId": thread_id,
-            "input": [{"type": "text", "text": _LOCALDEX_HOST_RESTART_CONTINUATION_PROMPT}],
+            "input": [{"type": "text", "text": _RESTART_RECOVERY_CONTINUATION_PROMPT}],
             "environments": [
                 {
                     "environmentId": "local",
