@@ -3347,13 +3347,16 @@ async def test_localdex_host_restart_continuation_starts_once_on_idle_bridge(
                 "input": [
                     {
                         "type": "text",
-                        "text": orchestration._LOCALDEX_HOST_RESTART_CONTINUATION_PROMPT,
+                        "text": orchestration._RESTART_RECOVERY_CONTINUATION_PROMPT,
                     }
                 ],
                 "environments": [{"environmentId": "local", "cwd": "/workspace"}],
             },
         )
     ]
+    prompt = calls[0][1]["input"][0]["text"]  # type: ignore[index]
+    assert "omnigent" not in prompt.lower()
+    assert "localdex" not in prompt.lower()
     assert codex_native_bridge.read_bridge_state(tmp_path).active_turn_id == "turn_recovered"  # type: ignore[union-attr]
 
 
