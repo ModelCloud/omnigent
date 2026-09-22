@@ -3894,6 +3894,30 @@ def test_materialize_codex_provider_config_applies_custom_retry_policy(tmp_path:
     assert provider["stream_idle_timeout_ms"] == 300_000
 
 
+def test_materialize_localdex_provider_enables_responses_continuation(tmp_path: Path) -> None:
+    """Stale private LocalDex homes retain server-side Responses continuation."""
+    import tomllib
+
+    from omnigent.inner.codex_executor import materialize_codex_provider_config
+
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_text(
+        """[model_providers.localdex]
+name = "LocalDex"
+base_url = "http://10.0.13.33:2120/v1"
+env_key = "LOCALDEX_API_KEY"
+wire_api = "responses"
+requires_openai_auth = false
+"""
+    )
+
+    materialize_codex_provider_config(codex_home, [])
+
+    config = tomllib.loads((codex_home / "config.toml").read_text())
+    assert config["model_providers"]["localdex"]["supports_responses_continuation"] is True
+
+
 # ---------------------------------------------------------------------------
 # _clean_codex_env tests
 # ---------------------------------------------------------------------------

@@ -1277,6 +1277,15 @@ def materialize_codex_provider_config(
         provider_config["stream_max_retries"] = policy.max_retries
         if policy.timeout_per_request_s is not None:
             provider_config["stream_idle_timeout_ms"] = int(policy.timeout_per_request_s * 1000)
+        # LocalDex's configured Responses endpoint retains completed response
+        # items and supports `previous_response_id`.  A session-private
+        # CODEX_HOME can outlive an older registration that predates this
+        # capability field; without restamping it here Codex defaults to
+        # `store=false` and replays the full transcript on every tool round.
+        # Keep this narrowly scoped to the ModelCloud LocalDex provider so
+        # generic custom providers retain their explicit continuation policy.
+        if provider_name == "localdex":
+            provider_config["supports_responses_continuation"] = True
 
     fd, tmp_name = tempfile.mkstemp(prefix="config.toml.", dir=str(codex_home))
     try:
