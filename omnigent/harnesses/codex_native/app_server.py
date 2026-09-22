@@ -15,7 +15,7 @@ import sys
 import tempfile
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeAlias, cast
 
@@ -51,6 +51,11 @@ from omnigent.harnesses.codex_native.process_registry import (
     register_codex_native_process,
     unregister_codex_native_process,
 )
+from omnigent.harnesses.codex_native.stderr_diagnostics import (
+    MAX_STDERR_RECORD_BYTES,
+    CodexStderrDiagnostics,
+    report_capture_start_failure,
+)
 from omnigent.inner import _proc
 from omnigent.inner.codex_executor import (
     _CODEX_ROUTER_HOOK_MODULE,
@@ -77,7 +82,12 @@ from omnigent.inner.databricks_executor import (
     _read_databrickscfg_host,
 )
 from omnigent.models.codex_model_vocabulary import codex_reachable_model_slug, codex_spawn_model
-from omnigent.process_logging import log_info_once, log_once, redact_log_text
+from omnigent.process_logging import (
+    harness_stderr_capture_enabled,
+    log_info_once,
+    log_once,
+    redact_log_text,
+)
 from omnigent.util.reasoning_effort import CODEX_NATIVE_EFFORTS
 
 _logger = logging.getLogger(__name__)
@@ -1035,16 +1045,28 @@ class CodexAppServerClient:
         loop = asyncio.get_running_loop()
         future: asyncio.Future[CodexMessage] = loop.create_future()
         self._pending_requests[request_id] = future
-        await self._ws.send(
-            json.dumps(
-                {
-                    "id": request_id,
-                    "method": method,
-                    "params": params,
-                }
+        try:
+            await self._ws.send(
+                json.dumps(
+                    {
+                        "id": request_id,
+                        "method": method,
+                        "params": params,
+                    }
+                )
             )
-        )
-        response = await future
+            if self._reader_task is not None:
+                await asyncio.wait(
+                    (future, self._reader_task), return_when=asyncio.FIRST_COMPLETED
+                )
+                if not future.done():
+                    raise ConnectionError(
+                        f"Codex app-server disconnected before responding to {method}"
+                    )
+            response = await future
+        finally:
+            self._pending_requests.pop(request_id, None)
+            future.cancel()
         error = response.get("error")
         if error:
             exc = CodexAppServerResponseError(error)
@@ -1735,12 +1757,9 @@ def _build_native_codex_app_server_argv(
     tagged_argv0: str,
     listen_url: str,
     config_overrides: Sequence[str],
-    config_profile: str | None = None,
 ) -> list[str]:
     """Build argv for the native Codex app-server subprocess."""
     argv = [tagged_argv0]
-    if config_profile:
-        argv.extend(["--profile", config_profile])
     argv.extend(["app-server", "--listen", listen_url])
     for override in config_overrides:
         argv.extend(["-c", override])
@@ -1814,7 +1833,8 @@ class CodexNativeAppServer:
         host-global crash registry maintenance. Runner-owned launches delegate
         it to the host janitor; standalone callers keep the safe default.
     :param config_profile: Codex user config-file profile materialized into
-        the private user layer before app-server and terminal startup.
+        the private user layer before terminal startup. The app-server reads
+        that isolated configuration directly; it is never passed ``--profile``.
     """
 
     codex_path: str
@@ -1860,6 +1880,9 @@ class CodexNativeAppServer:
     trust_all_hooks: bool = False
     router_hooks_registered: bool = False
     reconcile_process_registry: bool = True
+    session_id: str | None = None
+    stderr_capture_error_type: str | None = field(default=None, init=False)
+    _stderr_diagnostics: CodexStderrDiagnostics | None = field(default=None, init=False)
 
     async def start(self) -> None:
         """
@@ -2039,10 +2062,9 @@ class CodexNativeAppServer:
         )
         argv = _build_native_codex_app_server_argv(
             tagged_argv0=tagged_argv0,
-            listen_url=resolved_listen,
-            config_overrides=self.config_overrides,
-            config_profile=self.config_profile,
-        )
+        listen_url=resolved_listen,
+        config_overrides=self.config_overrides,
+    )
         proc_env = {**self.env, "CODEX_HOME": str(self.codex_home)}
         self.process_owner_lock = acquire_codex_native_process_owner_lock()
         try:
@@ -2265,14 +2287,27 @@ class CodexNativeAppServer:
             )
         if self.process_owner_lock is not None:
             self.process_owner_lock.close()
-        if self.stderr_task is not None:
-            self.stderr_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self.stderr_task
-        self.proc = None
-        self.stderr_task = None
-        self.process_registry_tag = None
-        self.process_owner_lock = None
+        try:
+            if self.stderr_task is not None and self._stderr_diagnostics is not None:
+                # The process has exited; allow buffered output to reach EOF.
+                # A descendant can still hold the pipe open, so bound the wait.
+                await asyncio.wait({self.stderr_task}, timeout=1.0)
+        finally:
+            try:
+                if self.stderr_task is not None:
+                    self.stderr_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await self.stderr_task
+            finally:
+                diagnostics, self._stderr_diagnostics = self._stderr_diagnostics, None
+                self.proc = None
+                self.stderr_task = None
+                self.process_registry_tag = None
+                self.process_owner_lock = None
+                if diagnostics is not None:
+                    diagnostics.finish()
+                    with contextlib.suppress(Exception):
+                        await asyncio.to_thread(diagnostics.close)
 
     async def _wait_until_ready(self) -> CodexAppServerClient:
         """
@@ -2331,18 +2366,62 @@ class CodexNativeAppServer:
         :returns: None.
         """
         assert self.proc is not None and self.proc.stderr is not None
-        while True:
-            line = await self.proc.stderr.readline()
-            if not line:
-                return
-            text = line.decode("utf-8", errors="replace").rstrip()
-            if len(text) >= _STDERR_CHUNK_LIMIT:
-                text = f"{text[:_STDERR_CHUNK_LIMIT]}...[truncated]"
+        diagnostics = None
+        capture_enabled = harness_stderr_capture_enabled()
+        self.stderr_capture_error_type = None
+        if capture_enabled:
+            try:
+                diagnostics = CodexStderrDiagnostics(
+                    session_id=self.session_id, bridge_dir=self.bridge_dir, pid=self.proc.pid
+                )
+            except Exception as exc:  # noqa: BLE001 - capture must never stop pipe draining
+                self.stderr_capture_error_type = type(exc).__name__[:128]
+                report_capture_start_failure(
+                    session_id=self.session_id,
+                    pid=self.proc.pid,
+                    error_type=self.stderr_capture_error_type,
+                )
+        self._stderr_diagnostics = diagnostics
+        pending = bytearray()
+        omitted_bytes = 0
+        record_limit = MAX_STDERR_RECORD_BYTES if diagnostics is not None else _STDERR_CHUNK_LIMIT
+
+        def record_line(*, newline: bool = False) -> None:
+            text = pending[:_STDERR_CHUNK_LIMIT].decode("utf-8", errors="replace").rstrip()
+            if omitted_bytes or len(pending) > _STDERR_CHUNK_LIMIT:
+                text = f"{text}...[truncated]"
             if self.recent_stderr is not None:
                 self.recent_stderr.append(text)
                 if len(self.recent_stderr) > 20:
                     self.recent_stderr.pop(0)
-            _logger.debug("codex-native app-server stderr: %s", text)
+            if diagnostics is not None:
+                diagnostics.submit(
+                    bytes(pending) + (b"\n" if newline else b""), bytes_omitted=omitted_bytes
+                )
+            elif not capture_enabled:
+                _logger.debug("codex-native app-server stderr: %s", text)
+
+        try:
+            # readline() raises on long diagnostics. Keep draining the pipe even
+            # after truncating a line, or stderr backpressure can stall Codex.
+            while chunk := await self.proc.stderr.read(8 * 1024):
+                parts = chunk.split(b"\n")
+                for index, part in enumerate(parts):
+                    remaining = record_limit - len(pending)
+                    pending.extend(part[:remaining])
+                    omitted_bytes += max(0, len(part) - remaining)
+                    if index < len(parts) - 1:
+                        record_line(newline=True)
+                        pending.clear()
+                        omitted_bytes = 0
+        except Exception:
+            _logger.exception("Codex app-server stderr drain failed")
+            raise
+        finally:
+            if pending or omitted_bytes:
+                record_line()
+            if diagnostics is not None:
+                diagnostics.finish()
 
 
 def _codex_policy_hook_command(bridge_dir: Path, python_executable: str | None) -> str:
@@ -3026,6 +3105,7 @@ def build_codex_native_server(
     profile: str | None,
     bridge_dir: Path,
     config_profile: str | None = None,
+    session_id: str | None = None,
     ap_server_url: str | None = None,
     ap_auth_headers: dict[str, str] | None = None,
     python_executable: str | None = None,
@@ -3057,9 +3137,11 @@ def build_codex_native_server(
         ``"<your-profile>"``.
     :param config_profile: Optional named Codex configuration profile, e.g.
         ``"local"`` for ``$CODEX_HOME/local.config.toml``. This is distinct
-        from a Databricks profile and is passed to both app-server and TUI.
+        from a Databricks profile and is materialized into the private
+        app-server home; only the TUI receives it as a CLI profile argument.
     :param bridge_dir: Native Codex bridge directory; the policy hook is
         pointed at it and reads the session id + Omnigent coordinates from it.
+    :param session_id: Owning session for diagnostics before bridge state exists.
     :param ap_server_url: Omnigent server base URL the policy hook POSTs tool
         calls to, e.g. ``"http://127.0.0.1:8787"``. ``None`` registers
         the hook but writes no Omnigent coordinates (hook no-ops).
@@ -3204,6 +3286,7 @@ def build_codex_native_server(
         client_identity=client_identity,
         cwd=cwd,
         bridge_dir=bridge_dir,
+        session_id=session_id,
         developer_instructions=developer_instructions,
         ap_server_url=ap_server_url,
         ap_auth_headers=ap_auth_headers,

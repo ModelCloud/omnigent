@@ -2666,15 +2666,14 @@ def test_remote_codex_rejects_unmaterialized_provider_config() -> None:
         )
 
 
-def test_native_codex_profile_is_passed_to_app_server_and_remote_tui() -> None:
-    """A named profile is global CLI state for both native processes."""
+def test_native_codex_profile_is_materialized_for_app_server_and_passed_to_remote_tui() -> None:
+    """The app-server reads its private config; the TUI receives the named profile."""
     from omnigent.harnesses.codex_native import app_server as codex_native_app_server
 
     app_server_argv = _build_native_codex_app_server_argv(
         tagged_argv0="codex session-tag",
         listen_url="ws://127.0.0.1:9876",
         config_overrides=['model_provider="local-openai"'],
-        config_profile="local",
     )
     remote_argv = codex_native_app_server.build_codex_remote_args(
         codex_args=(),
@@ -2684,7 +2683,8 @@ def test_native_codex_profile_is_passed_to_app_server_and_remote_tui() -> None:
         config_profile="local",
     )
 
-    assert app_server_argv[:4] == ["codex session-tag", "--profile", "local", "app-server"]
+    assert app_server_argv[:2] == ["codex session-tag", "app-server"]
+    assert "--profile" not in app_server_argv
     assert remote_argv[:2] == ["--profile", "local"]
 
 
