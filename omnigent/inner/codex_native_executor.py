@@ -54,9 +54,11 @@ from omnigent.inner.executor import (
 )
 from omnigent.inner.native_attachments import (
     FRAMEWORK_NOTICE_BLOCK_TYPE,
+    attachment_reference_line,
     codex_resize_metadata_path,
     materialize_attachment,
     parse_data_uri,
+    requires_filesystem,
     unresolved_attachment_marker,
 )
 from omnigent.util.reasoning_effort import (
@@ -797,7 +799,7 @@ def _content_to_input_items(content: object, bridge_dir: Path) -> list[dict[str,
     :param content: Message content, e.g. a string or a list of content
         blocks like ``{"type": "input_text", "text": "..."}`` and
         ``{"type": "input_image", "image_url": "data:image/png;base64,..."}``.
-    :param bridge_dir: Bridge directory for materializing attachments.
+    :param bridge_dir: Session bridge path identifying the attachment cache.
     :returns: Codex input item dicts.
     """
     if isinstance(content, str):
@@ -816,6 +818,16 @@ def _content_to_input_items(content: object, bridge_dir: Path) -> list[dict[str,
                 text = block.get("text")
                 if isinstance(text, str) and text:
                     items.append({"type": "text", "text": text})
+            elif _requires_filesystem(block):
+                # Delivery follows the stored filename, whichever block type the
+                # client chose: a zip declared image/png still needs filesystem tools,
+                # never a localImage codex would fail to open.
+                items.append(
+                    {
+                        "type": "text",
+                        "text": attachment_reference_line(block, bridge_dir),
+                    }
+                )
             elif block_type == "input_image":
                 path = materialize_attachment(block, bridge_dir)
                 if path is not None:
@@ -830,6 +842,12 @@ def _content_to_input_items(content: object, bridge_dir: Path) -> list[dict[str,
     if content is None:
         return []
     return [{"type": "text", "text": json.dumps(content, ensure_ascii=True)}]
+
+
+def _requires_filesystem(block: Mapping[str, object]) -> bool:
+    """Whether *block* names a file that requires filesystem tools."""
+    filename = block.get("filename")
+    return requires_filesystem(filename if isinstance(filename, str) else None)
 
 
 def _apply_resize_notice_to_latest_image(
@@ -860,7 +878,7 @@ def _file_block_to_input_item(
     :param block: An ``input_file`` content block, expected to carry a
         ``file_data`` data URI, e.g.
         ``"data:text/plain;base64,aGVsbG8="``.
-    :param bridge_dir: Bridge directory for materializing the file.
+    :param bridge_dir: Session bridge path identifying the attachment cache.
     :returns: A Codex ``text`` input item; a visible could-not-load
         marker item when the file failed to materialize; or ``None``
         for an empty text file.

@@ -28,9 +28,10 @@ import {
   FolderIcon,
   Loader2Icon,
   MessagesSquareIcon,
+  TriangleAlertIcon,
   XIcon,
 } from "lucide-react";
-import { Tooltip, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   composerSendShortcutKeys,
   KeyboardShortcutTooltipContent,
@@ -45,6 +46,7 @@ import {
 } from "@/components/composer/ChatComposer";
 import { ComposerAddMenu } from "@/components/composer/ComposerAddMenu";
 import { BackgroundTaskIndicator } from "@/components/composer/BackgroundTaskIndicator";
+import { SubagentTaskIndicator } from "@/components/composer/SubagentTaskIndicator";
 import { ReplyDraftBlocks } from "@/components/composer/ReplyDraftBlocks";
 import {
   ComposerWorkspaceBar,
@@ -224,7 +226,9 @@ import { ComposerWorkspaceStatus } from "@/components/composer/ComposerWorkspace
 import { ComposerPrLink } from "@/components/composer/ComposerPrLink";
 import { ComposerContextRing } from "@/components/composer/ComposerContextRing";
 import { useComposerGitStatus } from "@/hooks/useComposerGitStatus";
+import { composerContextFromLabels } from "@/lib/composerContextAdapters";
 import {
+  compactModelTriggerLabel,
   formatStatusModelLabel,
   formatStatusEffortLabel,
   formatModelEffortStatusLabel,
@@ -235,6 +239,7 @@ import { MainTerminalView } from "@/shell/MainTerminalView";
 import { UNTITLED_CONVERSATION_LABEL } from "@/shell/sidebarNav";
 import { ComposerAgentIcon, NewChatLandingScreen } from "@/shell/NewChatDialog";
 import { ResumeWithDirectoryDialog } from "@/shell/ResumeWithDirectoryDialog";
+import { useSessionReconnect } from "@/hooks/useSessionReconnect";
 import { ReconnectSessionDialog } from "@/shell/ReconnectSessionDialog";
 import { useTerminalFirst } from "@/shell/TerminalFirstContext";
 import { supportsEffortControl } from "@/lib/sessionCapabilities";
@@ -668,10 +673,6 @@ export function ChatPage() {
     void useChatStore.getState().send(text, agentId, files, { replyDraft });
   }, [pendingResumePrompt, runnerOnline, agentId, urlConvId]);
 
-  // Opened when the user tries to interact with an unreachable session
-  // (host offline, or not host-bound with the runner down).
-  const [reconnectDialogOpen, setReconnectDialogOpen] = useState(false);
-
   // Pending elicitation = parked on user input — suppress shimmer. Must
   // sit before the early-return guards below (Rules of Hooks). Read through
   // a boolean selector (not the whole `blocks` array): Zustand bails out when
@@ -923,6 +924,23 @@ export function ChatPage() {
   const isUnreachable =
     !sandboxLaunching && (liveness.kind === "host_offline" || liveness.kind === "local_stranded");
 
+  // Sub-agent (child) sessions aren't returned by the sidebar list, so
+  // ``activeConv`` is null for them — the snapshot (fetched above as
+  // ``activeSession``) is the only place we can learn the user's
+  // effective permission level for a child.
+  const permissionLevel = derivePermissionLevel(
+    activeSession,
+    sessionLoading,
+    activeConv,
+    urlConvId,
+    conversationsData !== undefined,
+  );
+  const { reconnect, dialogOpen, setDialogOpen, localReconnect } = useSessionReconnect({
+    sessionId: urlConvId ?? null,
+    hostId: activeSession?.hostId ?? activeConv?.host_id ?? null,
+    isOwner: isOwnerLevel(permissionLevel),
+  });
+
   const onSend = useCallback(
     (text: string, files?: File[], replyDraft?: StoredReplyDraft) => {
       if (!agentId) return;
@@ -938,11 +956,9 @@ export function ChatPage() {
         setResumeDirDialogOpen(true);
         return;
       }
-      // Unreachable → no executor to dispatch this turn to, and no host to
-      // wake. Surface the reconnect dialog instead of POSTing into
-      // a void.
+      // Recover the unreachable host before dispatching another turn.
       if (urlConvId && isUnreachable) {
-        setReconnectDialogOpen(true);
+        void reconnect();
         return;
       }
       // Queue instead of POSTing now (see shouldQueueSend). enqueueMessage flushes
@@ -987,6 +1003,7 @@ export function ChatPage() {
       isUnboundFork,
       canResumeOnLocalHost,
       isUnreachable,
+      reconnect,
       navigate,
     ],
   );
@@ -1001,7 +1018,7 @@ export function ChatPage() {
         return;
       }
       if (urlConvId && isUnreachable) {
-        setReconnectDialogOpen(true);
+        void reconnect();
         return;
       }
       void useChatStore.getState().sendSlashCommand(name, args, agentId, {
@@ -1017,6 +1034,7 @@ export function ChatPage() {
       isUnboundFork,
       canResumeOnLocalHost,
       isUnreachable,
+      reconnect,
       navigate,
     ],
   );
@@ -1025,17 +1043,6 @@ export function ChatPage() {
     useChatStore.getState().stop();
   }, []);
 
-  // Sub-agent (child) sessions aren't returned by the sidebar list, so
-  // ``activeConv`` is null for them — the snapshot (fetched above as
-  // ``activeSession``) is the only place we can learn the user's
-  // effective permission level for a child.
-  const permissionLevel = derivePermissionLevel(
-    activeSession,
-    sessionLoading,
-    activeConv,
-    urlConvId,
-    conversationsData !== undefined,
-  );
   // A client-only conversation has no server session to POST to yet. Keep the
   // composer editable so the user can draft the next message during creation,
   // but gate submission until the temp id is promoted below.
@@ -1117,18 +1124,20 @@ export function ChatPage() {
   );
 
   const onShowReconnectHelp = useCallback(() => {
-    // Route the banner to the SAME dialog typing a message would: an
-    // unbound coding clone or a host-less session the caller can resume
-    // in-app opens the directory picker (bind + launch), everything else
-    // gets the reconnect dialog.
+    // Unbound sessions need a directory; a bound local host can reconnect directly.
     if (isUnboundFork || canResumeOnLocalHost) setResumeDirDialogOpen(true);
-    else setReconnectDialogOpen(true);
-  }, [isUnboundFork, canResumeOnLocalHost]);
+    else void reconnect();
+  }, [isUnboundFork, canResumeOnLocalHost, reconnect]);
 
   // Loading + error gates for `/c/:id` hydration. Placed after all hooks so the
   // early return can't change the hook order between renders.
   if (urlConvId) {
-    if (loadingConversation || activeConversationId !== urlConvId) return <HydratingPlaceholder />;
+    const promotingTempConversation =
+      isTempConvId(urlConvId) &&
+      activeConversationId !== null &&
+      !isTempConvId(activeConversationId);
+    if (loadingConversation || (activeConversationId !== urlConvId && !promotingTempConversation))
+      return <HydratingPlaceholder />;
     if (conversationLoadError) {
       return <ConversationLoadError conversationId={urlConvId} error={conversationLoadError} />;
     }
@@ -1197,8 +1206,9 @@ export function ChatPage() {
     <SessionSharedContext.Provider value={isSessionShared}>
       <SessionLayout mainAgent={mainAgent} />
       <ReconnectSessionDialog
-        open={reconnectDialogOpen}
-        onOpenChange={setReconnectDialogOpen}
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        localReconnect={localReconnect}
         conversationId={urlConvId}
         serverUrl={getCliServerUrl()}
         wrapper={activeConv?.labels?.["omnigent.wrapper"]}
@@ -2382,12 +2392,10 @@ function ComposerImpl(
     runnerStarting = false,
     showClaudeGoalControl = false,
     showPollyCodexGoalControl = false,
-    isTerminalFirst = false,
     isNativeWrapper = false,
     unreachable = false,
     onShowReconnectHelp,
     costRoutingEligible = false,
-    subagentRoutingEligible = false,
     subAgentLabel = null,
     wrapperLabel = null,
     onViewportShrinkPinScroll,
@@ -2583,7 +2591,16 @@ function ComposerImpl(
     () => setPickerOpenNonce((n) => n + 1),
     showModels && codexModelOptions.length > 0 && !isReadOnly && !unreachable && !configBusy,
   );
-  const composerWorkspace = composerSession?.workspace;
+  const hydratedComposerContext = useMemo(
+    () => composerContextFromLabels(composerSession?.labels),
+    [composerSession?.labels],
+  );
+  const sessionWorkspace = composerSession?.workspace;
+  const composerWorkspace = sessionWorkspace?.trim()
+    ? sessionWorkspace
+    : hydratedComposerContext.workingDirectory.kind === "selected"
+      ? hydratedComposerContext.workingDirectory.path
+      : undefined;
   // Live workspace/branch/PR status for the workspace bar (lane-3 shared hook):
   // the branch comes from the host's `git worktree list`, never a PR head.
   const composerGit = useComposerGitStatus({
@@ -2592,6 +2609,10 @@ function ComposerImpl(
     workspace: composerWorkspace ?? null,
     creationBranch: composerSession?.gitBranch ?? composerBranch ?? null,
   });
+  const composerQueuedMessages = queuedMessages.filter(
+    (message) => message.conversationId === conversationId,
+  );
+  const hasQueuedComposerMessages = composerQueuedMessages.length > 0;
   const composerContextWindow = useChatStore((s) => s.contextWindow);
   const composerTokensUsed = useChatStore((s) => s.tokensUsed);
   const openComposerGithubTab = useOpenGithubTab();
@@ -3597,17 +3618,14 @@ function ComposerImpl(
   return (
     <form
       onSubmit={handleSubmit}
-      className={cn(
-        "chat-composer-form relative px-4 md:px-6",
-        isTerminalFirst ? "pb-1.5" : "pb-3",
-      )}
+      className="chat-composer-form relative px-4 pb-[max(20px,env(safe-area-inset-bottom))] md:px-6"
     >
       {/* Hidden file input for the attach button */}
       <input
         ref={fileInputRef}
         type="file"
         multiple
-        accept="image/*,application/pdf,text/*,application/json"
+        accept="image/*,application/pdf,text/*,application/json,.zip,.docx,.xlsx,.pptx,.db,.sqlite,.sqlite3"
         className="hidden"
         onChange={(e) => {
           if (e.target.files) {
@@ -3630,7 +3648,7 @@ function ComposerImpl(
             drains FIFO on idle. Scope to this conversation so a queue held
             elsewhere never leaks in. */}
         <QueuedMessagesStrip
-          messages={queuedMessages.filter((m) => m.conversationId === conversationId)}
+          messages={composerQueuedMessages}
           onDelete={dequeueMessage}
           onEdit={(queueId) => {
             // Pull the queued message back into the composer for editing:
@@ -3657,7 +3675,19 @@ function ComposerImpl(
             SubagentComposerTray). Truthy (not just non-null) so an empty
             label never peeks a nameless tray. */}
         {subAgentLabel ? <SubagentComposerTray label={subAgentLabel} /> : null}
-        <ComposerWorkspaceBar data-testid="composer-workspace-controls">
+        <ComposerWorkspaceBar
+          data-testid="composer-workspace-controls"
+          className={cn(
+            hasQueuedComposerMessages &&
+              "rounded-t-none border-t-0 border-border/50 pl-2.5 before:pointer-events-none before:absolute before:inset-x-4 before:top-0 before:h-px before:bg-border/50 before:content-['']",
+          )}
+        >
+          <ComposerPrLink
+            state={composerGit.githubState}
+            prCount={composerGit.prCount}
+            prNumber={composerGit.prNumber}
+            onOpen={openComposerGithubTab}
+          />
           <ComposerWorkspaceStatus
             workspacePath={composerWorkspace ?? null}
             worktreePath={composerGit.worktreePath}
@@ -3665,24 +3695,20 @@ function ComposerImpl(
             branch={composerGit.branch}
             branchState={composerGit.branchState}
             creationBranch={composerGit.creationBranch}
-            onRefreshBranch={composerGit.refresh}
-            refreshing={composerGit.refreshing}
+            showWorktree={composerGit.isWorktree === true}
           />
-          {/* Reserve two workspace triggers' icon-safe minima and two gaps;
-              only PR text truncates when the remaining status space runs out. */}
-          <div className="ml-auto flex min-w-0 max-w-[calc(100%-5.25rem)] shrink-0 items-center gap-1 md:max-w-[calc(100%-6.5rem)]">
-            <div className="flex min-w-0 items-center gap-2 empty:hidden">
-              <ComposerPrLink
-                prCount={composerGit.prCount}
-                prNumber={composerGit.prNumber}
-                onOpen={openComposerGithubTab}
-              />
-              <ComposerContextRing
-                contextWindow={composerContextWindow}
-                tokensUsed={composerTokensUsed}
-              />
+          <div className="ml-auto flex min-w-0 shrink-0 items-center gap-1">
+            <div
+              data-testid="composer-task-indicators"
+              className="flex items-center gap-0 empty:hidden"
+            >
+              <BackgroundTaskIndicator />
+              <SubagentTaskIndicator conversationId={conversationId} />
             </div>
-            <BackgroundTaskIndicator />
+            <ComposerContextRing
+              contextWindow={composerContextWindow}
+              tokensUsed={composerTokensUsed}
+            />
           </div>
         </ComposerWorkspaceBar>
       </div>
@@ -3976,6 +4002,10 @@ function ComposerImpl(
                 <ComposerPermissionPicker
                   label="Permission mode"
                   value={permissionLabel || "Permission mode"}
+                  harness={sessionHarness}
+                  selectedValue={
+                    showClaudePermissionMode ? claudePermissionMode : codexApprovalMode
+                  }
                   options={permissionOptions}
                   disabled={isReadOnly || unreachable || configBusy}
                   onSelect={(mode) => void changePermission(mode)}
@@ -3999,8 +4029,6 @@ function ComposerImpl(
                   harnessLabel={harnessLabel}
                   showModels={showModels}
                   showEffort={showEffort}
-                  showClaudePermissionMode={showClaudePermissionMode}
-                  showCodexApprovalMode={showCodexApprovalMode}
                   effortLevels={effortLevels}
                   modelPickerKind={modelPickerKind}
                   supportsModelReset={supportsModelReset}
@@ -4010,7 +4038,6 @@ function ComposerImpl(
                   modelLabelOptions={modelLabelOptions}
                   modelLabelHostId={composerSession?.hostId}
                   costRoutingEligible={costRoutingEligible}
-                  subagentRoutingEligible={subagentRoutingEligible}
                   // Config changes persist server-side and apply on the next
                   // wake/turn (the runner forward is best-effort), so the gear
                   // stays live wherever a message could be sent — including
@@ -4616,16 +4643,11 @@ export function shouldShowPollyCodexGoalControl(
 function hasSessionConfig({
   showModels,
   showEffort,
-  costRoutingEligible,
 }: {
   showModels: boolean;
   showEffort: boolean;
-  costRoutingEligible: boolean;
-  subagentRoutingEligible: boolean;
-  showClaudePermissionMode: boolean;
-  showCodexApprovalMode: boolean;
 }): boolean {
-  return showModels || showEffort || costRoutingEligible;
+  return showModels || showEffort;
 }
 
 function SessionHarnessPicker({
@@ -4636,8 +4658,6 @@ function SessionHarnessPicker({
   harnessLabel,
   showModels,
   showEffort,
-  showClaudePermissionMode = false,
-  showCodexApprovalMode = false,
   effortLevels,
   modelPickerKind,
   supportsModelReset,
@@ -4647,7 +4667,6 @@ function SessionHarnessPicker({
   modelLabelOptions,
   modelLabelHostId,
   costRoutingEligible,
-  subagentRoutingEligible,
   disabled,
   openNonce = 0,
 }: {
@@ -4658,8 +4677,6 @@ function SessionHarnessPicker({
   harnessLabel: string | null;
   showModels: boolean;
   showEffort: boolean;
-  showClaudePermissionMode?: boolean;
-  showCodexApprovalMode?: boolean;
   effortLevels: readonly string[];
   modelPickerKind: NativeModelPickerKind | null;
   supportsModelReset: boolean;
@@ -4669,7 +4686,6 @@ function SessionHarnessPicker({
   modelLabelOptions: readonly NativeModelOption[];
   modelLabelHostId: string | null | undefined;
   costRoutingEligible: boolean;
-  subagentRoutingEligible: boolean;
   disabled: boolean;
   openNonce?: number;
 }) {
@@ -4723,17 +4739,15 @@ function SessionHarnessPicker({
   const configurable = hasSessionConfig({
     showModels,
     showEffort,
-    costRoutingEligible,
-    subagentRoutingEligible,
-    showClaudePermissionMode,
-    showCodexApprovalMode,
   });
   const effortLabel = showEffort && !routingOn ? formatStatusEffortLabel(selectedEffort) : null;
   const label = routingOn
     ? SMART_ROUTING_LABEL
     : modelLabelLoading
       ? ""
-      : (modelSummary ?? nativeAgent?.displayName ?? harnessLabel ?? "Session");
+      : compactModelTriggerLabel(
+          modelSummary ?? nativeAgent?.displayName ?? harnessLabel ?? "Session",
+        );
   const availableEfforts =
     modelPickerKind === "codex"
       ? codexEffortLevelsForModel(codexModelOptions, pickerSelectedModel)
@@ -5001,9 +5015,30 @@ function SessionHarnessPicker({
         )}
       </HarnessPicker>
       {error && (
-        <span role="alert" className="max-w-40 text-xs text-destructive">
-          {error}
-        </span>
+        <TooltipProvider delayDuration={0}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label={`Couldn't update configuration: ${error}`}
+                className="flex size-7 shrink-0 items-center justify-center rounded-lg text-destructive hover:bg-destructive/10"
+                data-testid="composer-config-error"
+              >
+                <TriangleAlertIcon className="size-4" aria-hidden="true" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent
+              side="top"
+              className="w-72 max-w-[calc(100vw-2rem)] flex-col items-start gap-1 rounded-lg border border-border bg-popover p-3 text-popover-foreground shadow-menu"
+              data-testid="composer-config-error-tooltip"
+            >
+              <strong className="font-medium">Couldn’t update configuration</strong>
+              <span className="text-xs leading-5 text-muted-foreground">
+                {error} Try again, or reconnect the session if the problem continues.
+              </span>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       )}
     </>
   );
