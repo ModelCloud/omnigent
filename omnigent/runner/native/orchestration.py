@@ -14,6 +14,7 @@ import dataclasses
 import json
 import logging
 import os
+import shlex
 import shutil
 import sys
 import time
@@ -4459,6 +4460,7 @@ async def _auto_create_codex_terminal(
         _MIN_BYPASS_HOOK_TRUST_CODEX_VERSION,
         CodexAppServerClient,
         CodexAppServerResponseError,
+        _format_codex_version,
         apply_codex_thread_effort,
         build_codex_native_server,
         build_codex_remote_args,
@@ -4480,6 +4482,7 @@ async def _auto_create_codex_terminal(
         socket_path_for_bridge_dir,
         write_bridge_state,
     )
+    from omnigent.harnesses.codex_native.launch_args import redact_codex_launch_args
     from omnigent.inner.codex_executor import codex_extended_catalog_env
     from omnigent.inner.datamodel import OSEnvSpec, TerminalEnvSpec
 
@@ -5315,6 +5318,25 @@ async def _auto_create_codex_terminal(
             tuple(codex_remote_args),
             cfg=_codex_harness_cfg,
         )
+        # One row per launch with the argv the TUI actually receives, so a
+        # dead terminal can be tied to its flags, wrapper and probed version.
+        loggable_launch_args = shlex.join(redact_codex_launch_args(codex_launch_args))
+        _logger.info(
+            "Codex terminal launch: session=%s command=%s codex_cli_version=%s resume=%s args=%s",
+            session_id,
+            codex_command,
+            _format_codex_version(app_server.codex_cli_version),
+            launch_config.external_session_id is not None,
+            loggable_launch_args,
+            extra=debug_event(
+                "codex_terminal_launch",
+                session_id=session_id,
+                command=codex_command,
+                codex_cli_version=_format_codex_version(app_server.codex_cli_version),
+                resume=launch_config.external_session_id is not None,
+                args=loggable_launch_args,
+            ),
+        )
         terminal_view = await resource_registry.launch_auxiliary_terminal(
             session_id=session_id,
             terminal_name="localdex" if localdex else "codex",
@@ -5347,6 +5369,10 @@ async def _auto_create_codex_terminal(
                 # in the detached tmux pane (no tunnel traffic) and create its
                 # thread before anyone attaches.
                 tmux_start_on_attach=False,
+                # Keep the private tmux server alive after the TUI exits so the
+                # exit event carries the exit status and final screen instead
+                # of a bare "no server running" probe failure (claude/pi parity).
+                keep_alive_after_exit=True,
             ),
         )
         publish_event(
