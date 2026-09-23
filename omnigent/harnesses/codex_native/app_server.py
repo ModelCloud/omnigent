@@ -1852,6 +1852,9 @@ class CodexNativeAppServer:
     # Authless OpenAI-compatible providers receive only these declared bearer
     # variables, never ambient OpenAI or Databricks credentials.
     isolated_env_keys: tuple[str, ...] = ()
+    # Provider-specific bearer keys are added without changing Codex's normal
+    # OpenAI, Databricks, or ChatGPT auth environment.
+    provider_env_keys: tuple[str, ...] = ()
     # LocalDex is additive: its local bearer provider and Codex's built-in
     # OpenAI provider coexist in one runtime.  Preserve the user's shared
     # auth.json so a live thread can switch from the local model to an
@@ -1956,7 +1959,7 @@ class CodexNativeAppServer:
             config_profile=self.config_profile,
             supported_efforts=CODEX_NATIVE_EFFORTS,
         )
-        if self.isolated_env_keys:
+        if self.isolated_env_keys or self.bridge_openai_auth:
             auth_path = self.codex_home / "auth.json"
             if auth_path.exists() or auth_path.is_symlink():
                 auth_path.unlink()
@@ -1975,7 +1978,7 @@ class CodexNativeAppServer:
                 else:
                     auth_path.write_text("{}\n", encoding="utf-8")
                     os.chmod(auth_path, 0o600)
-            else:
+            elif self.isolated_env_keys:
                 # Prevent fallback to $HOME/.codex/auth.json.  The provider's
                 # configured bearer env-key is the only credential this
                 # runtime may consult.
@@ -2062,9 +2065,9 @@ class CodexNativeAppServer:
         )
         argv = _build_native_codex_app_server_argv(
             tagged_argv0=tagged_argv0,
-        listen_url=resolved_listen,
-        config_overrides=self.config_overrides,
-    )
+            listen_url=resolved_listen,
+            config_overrides=self.config_overrides,
+        )
         proc_env = {**self.env, "CODEX_HOME": str(self.codex_home)}
         self.process_owner_lock = acquire_codex_native_process_owner_lock()
         try:
@@ -3119,6 +3122,7 @@ def build_codex_native_server(
     model_catalog_rows: list[_JsonObject] | None = None,
     config_source: Path | None = None,
     isolated_env_keys: tuple[str, ...] = (),
+    provider_env_keys: tuple[str, ...] = (),
     bridge_openai_auth: bool = False,
     process_registry_path: Path | None = None,
     process_tag_prefix: str = "codex-native",
@@ -3180,6 +3184,10 @@ def build_codex_native_server(
         the copied config's value.
     :param model_catalog_rows: Fresh rows from the shared launch-shaped
         ``model/list`` catalog, used to avoid a redundant migration probe.
+    :param provider_env_keys: Explicitly configured provider credential names
+        to pass alongside normal Codex credentials, without auth isolation.
+    :param isolated_env_keys: Credential names for a selected authless profile;
+        this enables strict OpenAI/Databricks environment isolation.
     :param bridge_openai_auth: Preserve the user's normal Codex ``auth.json``
         alongside an additive bearer-authenticated provider. LocalDex enables
         this so one live thread can switch between local and official models.
@@ -3215,7 +3223,8 @@ def build_codex_native_server(
     authless_profile_env = _authless_codex_profile_env_passthrough(effective_config_profile)
     if isolated_env_keys:
         authless_profile_env = tuple(sorted(set(isolated_env_keys)))
-    env = _clean_codex_env(authless_profile_env)
+    explicit_provider_env = tuple(sorted(set(provider_env_keys)))
+    env = _clean_codex_env((*authless_profile_env, *explicit_provider_env))
     if authless_profile_env:
         # ``codex-modelcloud`` is deliberately an authless, OpenAI-compatible
         # runtime.  Do not let an ambient OpenAI or Databricks credential make
@@ -3280,6 +3289,7 @@ def build_codex_native_server(
         config_profile=effective_config_profile,
         config_source=config_source,
         isolated_env_keys=authless_profile_env,
+        provider_env_keys=explicit_provider_env,
         bridge_openai_auth=bridge_openai_auth,
         process_registry_path=process_registry_path,
         process_tag_prefix=process_tag_prefix,
@@ -4476,6 +4486,7 @@ def codex_terminal_env(app_server: CodexNativeAppServer) -> dict[str, str]:
     profile_credentials = set(getattr(app_server, "isolated_env_keys", ())) or set(
         _authless_codex_profile_env_passthrough(getattr(app_server, "config_profile", None))
     )
+    provider_credentials = set(getattr(app_server, "provider_env_keys", ()))
     authless_profile = bool(profile_credentials)
     allowed_exact = {
         "CODEX_HOME",
@@ -4489,6 +4500,7 @@ def codex_terminal_env(app_server: CodexNativeAppServer) -> dict[str, str]:
         for key, value in {**app_server.env, "CODEX_HOME": str(app_server.codex_home)}.items()
         if key in allowed_exact
         or key in profile_credentials
+        or key in provider_credentials
         or (
             not authless_profile
             and key.startswith(("OPENAI_", "HTTP_", "HTTPS_", "NO_PROXY", "ALL_PROXY"))

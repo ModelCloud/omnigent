@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -61,7 +62,15 @@ def run_localdex_native(
         raise ValueError("LocalDex requires a resolved Omnigent server URL")
     # Validate the dedicated host-only provider contract before a session is
     # created. Server seeding deliberately does not call this helper.
-    load_localdex_config()
+    localdex_config = load_localdex_config(require_token=False)
+    if model:
+        from omnigent.harnesses.localdex_native.config import localdex_model_for_selection
+
+        registration = localdex_model_for_selection(localdex_config, model)
+        if registration is not None and not os.environ.get(registration.env_key):
+            raise ValueError(
+                f"LocalDex bearer environment variable {registration.env_key!r} is not set"
+            )
     if Path(command) != LOCALDEX_BINARY:
         raise ValueError("LocalDex must use its pinned localdex executable")
     if not LOCALDEX_BINARY.is_file():

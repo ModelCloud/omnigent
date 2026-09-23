@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import dataclasses
 import json
 import logging
 import math
@@ -32,6 +33,7 @@ from omnigent.harnesses.codex_native.bridge import (
     read_bridge_startup_timeout,
     read_bridge_state,
     read_codex_home_config_model,
+    read_codex_home_config_model_provider,
     read_mcp_startup,
     update_active_turn_id,
     write_codex_config_effort,
@@ -290,7 +292,8 @@ async def _localdex_runtime_settings_overrides(
         clear_localdex_runtime_capabilities,
         fetch_localdex_runtime_capabilities,
         load_localdex_config,
-        localdex_model_selected,
+        localdex_model_for_selection,
+        localdex_runtime_provider_id,
         write_localdex_runtime_capabilities,
     )
 
@@ -312,25 +315,44 @@ async def _localdex_runtime_settings_overrides(
             raise RuntimeError("LocalDex local-provider configuration is unavailable") from exc
         localdex = None
 
-    if localdex is not None and localdex_model_selected(localdex, target_model):
-        # Validate the local bearer only for the one model owned by LocalDex.
-        localdex = load_localdex_config()
-        overrides["modelProvider"] = localdex.provider
-        try:
-            capabilities = await fetch_localdex_runtime_capabilities(localdex)
-        except RuntimeError:
-            # Do not keep a possibly larger cached limit when discovery is
-            # temporarily unavailable. The conservative bundled fallback plus
-            # LocalDex's overflow retry keeps the session recoverable.
-            clear_localdex_runtime_capabilities(Path(state.codex_home))
-            _logger.warning("LocalDex capability discovery failed; using conservative fallback")
+    if localdex is not None:
+        registration = localdex_model_for_selection(localdex, target_model)
+        if registration is not None:
+            if not os.environ.get(registration.env_key):
+                raise RuntimeError(
+                    f"LocalDex bearer environment variable {registration.env_key!r} is not set"
+                )
+            overrides["modelProvider"] = localdex_runtime_provider_id(registration.provider)
+            if registration.discover_capabilities or registration.model == LOCALDEX_MODEL:
+                selected_config = dataclasses.replace(
+                    localdex,
+                    local_model=registration.model,
+                    provider=registration.provider,
+                    base_url=registration.base_url,
+                    env_key=registration.env_key,
+                )
+                try:
+                    capabilities = await fetch_localdex_runtime_capabilities(selected_config)
+                except RuntimeError:
+                    clear_localdex_runtime_capabilities(Path(state.codex_home))
+                    _logger.warning(
+                        "LocalDex capability discovery failed; using conservative fallback"
+                    )
+                else:
+                    write_localdex_runtime_capabilities(
+                        Path(state.codex_home), selected_config, capabilities
+                    )
         else:
-            write_localdex_runtime_capabilities(Path(state.codex_home), localdex, capabilities)
-    elif localdex is not None:
-        # A model picker change must move both pieces of routing state. The
-        # model alone is insufficient: leaving ``localdex`` selected sends an
-        # official model to the local OpenAI-compatible endpoint.
-        overrides["modelProvider"] = "openai"
+            # A model picker change must move both pieces of routing state.
+            # Restore the provider resolved for the non-LocalDex model.
+            if "modelProvider" not in overrides:
+                provider = state.default_model_provider or read_codex_home_config_model_provider(
+                    Path(state.codex_home)
+                )
+                local_provider_names = {item.provider for item in localdex.models}
+                if provider in local_provider_names or provider == "localdex":
+                    provider = None
+                overrides["modelProvider"] = provider or "openai"
     return overrides
 
 
@@ -397,9 +419,7 @@ class CodexNativeExecutor(Executor):
                 # A steer can become a fresh sampling step after LocalDex
                 # preempts the in-flight request, so refresh its live capacity
                 # before handing the input to app-server as well.
-                runtime_settings_overrides = await _localdex_runtime_settings_overrides(
-                    state, {}
-                )
+                runtime_settings_overrides = await _localdex_runtime_settings_overrides(state, {})
                 await _inject_codex_turn(
                     client,
                     bridge_dir=self._bridge_dir,

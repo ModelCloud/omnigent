@@ -140,23 +140,11 @@ export const NATIVE_CODING_AGENTS = [
     harness: "codex-native",
     wrapperLabel: "codex-native-ui",
     subagentWrapperLabel: "codex-native-ui-subagent",
-    displayName: "Codex",
+    displayName: "LocalDex",
     iconKind: "codex",
     sortRank: 20,
     capabilities: ["approvalMode"],
     fullySupported: true,
-  },
-  {
-    // LocalDex is separately isolated, while its binary keeps the upstream
-    // Codex/ChatGPT catalog alongside the registered local model.
-    key: "localdex",
-    agentName: "localdex-native-ui",
-    harness: "localdex-native",
-    wrapperLabel: "localdex-native-ui",
-    displayName: "LocalDex",
-    iconKind: "codex",
-    sortRank: 21,
-    capabilities: ["approvalMode"],
   },
   {
     key: "opencode",
@@ -337,7 +325,16 @@ const HARNESS_ALIASES: Record<string, string> = {
   "native-kimi": "kimi-native",
   "native-hermes": "hermes-native",
   "native-opencode": "opencode-native",
-  "native-localdex": "localdex-native",
+  localdex: "codex-native",
+  "localdex-native": "codex-native",
+  "native-localdex": "codex-native",
+};
+
+const LEGACY_AGENT_NAME_ALIASES: Record<string, string> = {
+  "localdex-native-ui": "codex-native-ui",
+};
+const LEGACY_WRAPPER_ALIASES: Record<string, string> = {
+  "localdex-native-ui": "codex-native-ui",
 };
 
 // Vendors whose elicitation wire prefix differs from their registry `key`:
@@ -398,7 +395,7 @@ export function isNativePolicyName(policyName: string): boolean {
 export function nativeCodingAgentForAgentName(
   name: string | null | undefined,
 ): NativeCodingAgentSpec | undefined {
-  return name == null ? undefined : BY_AGENT_NAME.get(name);
+  return name == null ? undefined : BY_AGENT_NAME.get(LEGACY_AGENT_NAME_ALIASES[name] ?? name);
 }
 
 /**
@@ -429,7 +426,7 @@ export function nativeCodingAgentForHarness(
 export function nativeCodingAgentForWrapper(
   wrapper: string | null | undefined,
 ): NativeCodingAgentSpec | undefined {
-  return wrapper == null ? undefined : BY_WRAPPER.get(wrapper);
+  return wrapper == null ? undefined : BY_WRAPPER.get(LEGACY_WRAPPER_ALIASES[wrapper] ?? wrapper);
 }
 
 /**

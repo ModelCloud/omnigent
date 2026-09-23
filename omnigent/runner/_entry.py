@@ -1618,6 +1618,7 @@ def create_app(
             teardown_all_codex_native_app_servers,
             teardown_all_opencode_native_servers,
         )
+
         with contextlib.suppress(Exception):
             await teardown_all_codex_native_app_servers()
         with contextlib.suppress(Exception):

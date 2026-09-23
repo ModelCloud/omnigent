@@ -168,6 +168,10 @@ _DEVIN_INSTALL_HINT = "curl -fsSL https://cli.devin.ai/install.sh | bash"
 # EACCES failure on a root-owned npm global prefix.
 # See https://code.claude.com/docs/en/setup#native-install-recommended
 _CLAUDE_INSTALL_HINT = "curl -fsSL https://claude.ai/install.sh | bash"
+_LOCALDEX_INSTALL_HINT = (
+    "curl -fsSL https://github.com/ModelCloud/LocalDex/releases/latest/download/"
+    "install-localdex.sh | sh"
+)
 
 
 # Keyed by harness family (Claude=anthropic, Codex=openai) plus the pi
@@ -195,12 +199,14 @@ _HARNESS_INSTALL: dict[str, HarnessInstallSpec] = {
         min_version=_CLAUDE_MIN_VERSION,
     ),
     OPENAI_FAMILY: HarnessInstallSpec(
-        "Codex",
+        "LocalDex (Codex-compatible)",
         "codex",
-        "@openai/codex",
+        package=None,
         login_args=("login",),
         logout_args=("logout",),
         status_args=("login", "status"),
+        install_hint=_LOCALDEX_INSTALL_HINT,
+        install_command=("bash", "-c", _LOCALDEX_INSTALL_HINT),
         # The native Codex policy hook requires ``codex >= 0.129.0``;
         # anything older silently disables tool-call enforcement. Setup
         # enforces the same floor up-front. Smart Routing's spawn hook wants

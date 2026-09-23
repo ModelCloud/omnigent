@@ -6036,12 +6036,12 @@ def create_runner_app(
         # very same live picker.  It is deliberately not a second harness or
         # a provider-derived replacement for the account rows.
         if _session_harness_name(conv_id) == "codex-native":
-            try:
-                from omnigent.harnesses.localdex_native.config import (
-                    load_localdex_config,
-                    with_localdex_model_picker_row,
-                )
+            from omnigent.harnesses.localdex_native.config import (
+                load_localdex_config,
+                with_localdex_model_picker_row,
+            )
 
+            try:
                 localdex = await asyncio.to_thread(load_localdex_config)
             except (FileNotFoundError, ValueError):
                 localdex = None

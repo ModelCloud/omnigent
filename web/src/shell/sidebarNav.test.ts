@@ -203,13 +203,13 @@ describe("getConversationAgentType", () => {
     expect(getConversationAgentType(conv)).toBe("Claude Code");
   });
 
-  it("returns 'Codex' for codex-native-ui sessions", () => {
+  it("returns 'LocalDex' for codex-native-ui sessions", () => {
     const conv = conversation("conv_codex", null, new Date(2026, 4, 14, 9), {
       labels: { "omnigent.wrapper": "codex-native-ui" },
     });
     // codex-native-ui is the wrapper label assigned to sessions started
     // via `omnigent codex`. It gets its own filter bucket and row icon.
-    expect(getConversationAgentType(conv)).toBe("Codex");
+    expect(getConversationAgentType(conv)).toBe("LocalDex");
   });
 
   it("returns 'Pi' for pi-native-ui sessions", () => {
@@ -275,7 +275,7 @@ describe("getConversationAgentType", () => {
       agent_name: "some_agent",
     };
     expect(getConversationAgentType(claudeConv)).toBe("Claude Code");
-    expect(getConversationAgentType(codexConv)).toBe("Codex");
+    expect(getConversationAgentType(codexConv)).toBe("LocalDex");
     expect(getConversationAgentType(piConv)).toBe("Pi");
   });
 
@@ -369,14 +369,14 @@ describe("conversationDisplayLabel", () => {
     ).toBe("Claude Code");
   });
 
-  it("falls back to 'Codex' for codex-native sessions with no title", () => {
+  it("falls back to 'LocalDex' for codex-native sessions with no title", () => {
     expect(
       conversationDisplayLabel(
         conversation("conv_abcdefghijklmnopqrstuvwxyz", null, new Date(2026, 4, 14, 9), {
           labels: { "omnigent.wrapper": "codex-native-ui" },
         }),
       ),
-    ).toBe("Codex");
+    ).toBe("LocalDex");
   });
 
   it("falls back to 'Pi' for pi-native sessions with no title", () => {

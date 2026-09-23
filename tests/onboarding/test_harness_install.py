@@ -46,7 +46,6 @@ def _stub_cli_fallback_dirs(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.parametrize(
     "key,binary,package",
     [
-        (OPENAI_FAMILY, "codex", "@openai/codex"),
         (hi.PI_KEY, "pi", "@earendil-works/pi-coding-agent"),
         (hi.QWEN_KEY, "qwen", "@qwen-code/qwen-code"),
     ],
@@ -82,11 +81,25 @@ def test_claude_installs_via_anthropic_native_installer() -> None:
     ]
 
 
+def test_codex_installs_only_the_modelcloud_localdex_distribution() -> None:
+    spec = hi.harness_install_spec(OPENAI_FAMILY)
+    assert spec is not None
+    assert spec.binary == "codex"
+    assert spec.package is None
+    assert "ModelCloud/LocalDex" in spec.install_hint
+    assert "install-localdex.sh" in spec.install_hint
+    assert hi.harness_install_command(OPENAI_FAMILY) == ["bash", "-c", spec.install_hint]
+
+
 @pytest.mark.parametrize(
     "key,expected",
     [
         (ANTHROPIC_FAMILY, "curl -fsSL https://claude.ai/install.sh | bash"),
-        (OPENAI_FAMILY, "npm install -g @openai/codex"),
+        (
+            OPENAI_FAMILY,
+            "curl -fsSL https://github.com/ModelCloud/LocalDex/releases/latest/download/"
+            "install-localdex.sh | sh",
+        ),
     ],
 )
 def test_install_display_hides_the_bash_c_wrapper(key: str, expected: str) -> None:
@@ -587,8 +600,8 @@ def test_cli_installed_finds_binary_off_path(
     assert hi.missing_harness_cli("claude-native") is None
 
 
-def test_install_harness_cli_requires_npm(monkeypatch: pytest.MonkeyPatch) -> None:
-    """No npm on PATH → install short-circuits to False without shelling out."""
+def test_install_harness_cli_requires_bash_for_codex(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No bash on PATH → install short-circuits without shelling out."""
     monkeypatch.setattr(hi.shutil, "which", lambda name: None)
 
     def _explode(*a: object, **k: object) -> None:
@@ -598,11 +611,11 @@ def test_install_harness_cli_requires_npm(monkeypatch: pytest.MonkeyPatch) -> No
     assert hi.install_harness_cli(OPENAI_FAMILY) is False
 
 
-def test_try_install_harness_cli_missing_npm(monkeypatch: pytest.MonkeyPatch) -> None:
-    """No npm on PATH → ``(False, reason)`` naming the missing installer.
+def test_try_install_harness_cli_missing_installer_shell(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No bash on PATH → ``(False, reason)`` naming the missing installer.
 
     The UI-driven install shows this reason instead of a bare failure, so the
-    user knows the host lacks npm rather than guessing.
+    user knows the host lacks the installer shell rather than guessing.
     """
     monkeypatch.setattr(hi.shutil, "which", lambda name: None)
     monkeypatch.setattr(
@@ -612,8 +625,8 @@ def test_try_install_harness_cli_missing_npm(monkeypatch: pytest.MonkeyPatch) ->
     )
     installed, reason = hi.try_install_harness_cli(OPENAI_FAMILY)
     assert installed is False
-    assert reason is not None and "npm" in reason
-    # Claude's installer is bash-based, so its reason names bash, not npm.
+    assert reason is not None and "bash" in reason
+    # Claude also uses bash.
     installed, reason = hi.try_install_harness_cli(ANTHROPIC_FAMILY)
     assert installed is False
     assert reason is not None and "bash" in reason
@@ -637,7 +650,7 @@ def test_try_install_harness_cli_nonzero_exit(monkeypatch: pytest.MonkeyPatch) -
     """
 
     def _which(name: str) -> str | None:
-        return "/usr/bin/npm" if name == "npm" else None
+        return "/usr/bin/bash" if name == "bash" else None
 
     monkeypatch.setattr(hi.shutil, "which", _which)
     monkeypatch.setattr(
@@ -655,8 +668,8 @@ def test_try_install_harness_cli_success(monkeypatch: pytest.MonkeyPatch) -> Non
     state = {"installed": False}
 
     def _which(name: str) -> str | None:
-        if name == "npm":
-            return "/usr/bin/npm"
+        if name == "bash":
+            return "/usr/bin/bash"
         if name == "codex":
             return "/usr/bin/codex" if state["installed"] else None
         return None
@@ -676,8 +689,8 @@ def test_try_install_harness_cli_success_when_binary_off_path(
     """A binary installed into a global dir but off bare ``PATH`` reads success.
 
     Regression: the install verdict and the readiness badge must use the SAME
-    resolver. On a host whose frozen ``PATH`` omits the npm/nvm/homebrew bin dir,
-    npm lands the binary there — off ``PATH`` but on ``resolve_cli_binary``'s
+    resolver. On a host whose frozen ``PATH`` omits the LocalDex bin dir, the
+    installer lands the binary there — off ``PATH`` but on ``resolve_cli_binary``'s
     fallback ladder. Judging install success with bare ``shutil.which`` reported
     a spurious "not found" failure (red toast) while readiness resolved it via
     the ladder (green tick) — the two verdicts disagreeing on one install.
@@ -688,8 +701,10 @@ def test_try_install_harness_cli_success_when_binary_off_path(
     codex.write_text("#!/bin/sh\n")
     codex.chmod(0o755)
 
-    # npm is on PATH; the installed codex binary never is — only the ladder finds it.
-    monkeypatch.setattr(hi.shutil, "which", lambda name: "/usr/bin/npm" if name == "npm" else None)
+    # bash is on PATH; the installed codex binary never is — only the ladder finds it.
+    monkeypatch.setattr(
+        hi.shutil, "which", lambda name: "/usr/bin/bash" if name == "bash" else None
+    )
     monkeypatch.setattr(_platform, "_cli_fallback_dirs", lambda: (fallback_dir,))
 
     def _run(argv: list[str], **k: object) -> subprocess.CompletedProcess[str]:
@@ -724,12 +739,12 @@ def test_try_install_prepends_resolved_dir_so_login_can_find_binary(
     codex.write_text("#!/bin/sh\n")
     codex.chmod(0o755)
 
-    # A PATH that has npm but NOT the fallback dir; use the REAL shutil.which so
+    # A PATH that has bash but NOT the fallback dir; use the REAL shutil.which so
     # the prepend is observable via a genuine PATH lookup (what login does).
-    npm_dir = tmp_path / "npmhome"
+    npm_dir = tmp_path / "shellhome"
     npm_dir.mkdir()
-    (npm_dir / "npm").write_text("#!/bin/sh\n")
-    (npm_dir / "npm").chmod(0o755)
+    (npm_dir / "bash").write_text("#!/bin/sh\n")
+    (npm_dir / "bash").chmod(0o755)
     monkeypatch.setenv("PATH", str(npm_dir))
     monkeypatch.setattr(_platform, "_cli_fallback_dirs", lambda: (fallback_dir,))
     monkeypatch.setattr(
@@ -747,16 +762,17 @@ def test_try_install_prepends_resolved_dir_so_login_can_find_binary(
     assert str(fallback_dir) in os.environ["PATH"].split(os.pathsep)
 
 
-def test_install_harness_cli_runs_npm_then_rechecks(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Installs via ``npm install -g <package>`` and reports the post-install
-    PATH state (True once the binary appears)."""
+def test_install_harness_cli_runs_localdex_installer_then_rechecks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Runs the LocalDex installer and verifies the resulting codex command."""
     calls: list[list[str]] = []
-    # npm present; the target binary appears only after the install runs.
+    # bash present; the target binary appears only after the install runs.
     state = {"installed": False}
 
     def _which(name: str) -> str | None:
-        if name == "npm":
-            return "/usr/bin/npm"
+        if name == "bash":
+            return "/usr/bin/bash"
         if name == "codex":
             return "/usr/bin/codex" if state["installed"] else None
         return None
@@ -770,7 +786,9 @@ def test_install_harness_cli_runs_npm_then_rechecks(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(hi.subprocess, "run", _run)
 
     assert hi.install_harness_cli(OPENAI_FAMILY) is True
-    assert calls == [["npm", "install", "-g", "@openai/codex"]]
+    spec = hi.harness_install_spec(OPENAI_FAMILY)
+    assert spec is not None
+    assert calls == [["bash", "-c", spec.install_hint]]
 
 
 def test_install_harness_cli_runs_hermes_installer_then_rechecks(

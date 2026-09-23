@@ -384,6 +384,7 @@ def _localdex_interrupted_turn_id(
         return None
     return previous_state.active_turn_id
 
+
 # Background OpenCode ``opencode serve`` instances for host-spawned
 # opencode-native runners, kept referenced so they aren't garbage-collected
 # mid-run (mirrors ``_AUTO_CODEX_APP_SERVERS``).
@@ -4516,41 +4517,53 @@ async def _auto_create_codex_terminal(
     # machine-level config, parity with the in-process harness (#2744).
     _launch_spec = agent_spec.spec if isinstance(agent_spec, ResolvedSpec) else agent_spec
     _codex_launch = resolve_native_codex_launch(model=default_model, spec=_launch_spec)
+    default_model_provider = codex_session_meta_model_provider(_codex_launch)
     from omnigent.inference_config import binding_for_harness, load_runtime_inference_config
 
     codex_binding = binding_for_harness(load_runtime_inference_config(), "codex-native")
     from omnigent.inner.codex_executor import _find_codex_cli
 
     _localdex_config = None
+    _localdex_provider_overrides: tuple[str, ...] = ()
     selected_local_model = False
+    from omnigent.harnesses.localdex_native.config import (
+        LOCALDEX_BINARY,
+        LOCALDEX_MODEL,
+        load_localdex_config,
+        localdex_model_for_selection,
+        localdex_model_selected,
+        localdex_models,
+        localdex_provider_config_overrides,
+        localdex_runtime_provider_id,
+    )
+
     # LocalDex is an upstream-compatible Codex binary with one additive local
     # provider.  When it is installed, codex-native is the *only* harness: the
     # selected model decides the provider, never a harness/agent swap.
     # ``localdex`` remains solely as a compatibility path for pre-existing
     # sessions created by the now-retired separate wrapper.
     try:
-        from omnigent.harnesses.localdex_native.config import (
-            LOCALDEX_BINARY,
-            LOCALDEX_CONFIG_ROOT,
-            LOCALDEX_MODEL,
-            load_localdex_config,
-            localdex_model_selected,
-        )
-
         _localdex_config = load_localdex_config(require_token=False)
+        _localdex_provider_overrides = localdex_provider_config_overrides(_localdex_config)
         if not LOCALDEX_BINARY.is_file():
             raise FileNotFoundError(f"LocalDex binary is missing: {LOCALDEX_BINARY}")
         selected_model = default_model
-        selected_local_model = localdex_model_selected(_localdex_config, selected_model)
+        _selected_local_registration = localdex_model_for_selection(
+            _localdex_config, selected_model
+        )
+        selected_local_model = _selected_local_registration is not None
         if selected_local_model:
-            # Reject a local pick with no simple bearer credential while still
-            # allowing ChatGPT/Codex launches on this same binary.
-            load_localdex_config()
+            if not os.environ.get(_selected_local_registration.env_key):
+                raise ValueError(
+                    "LocalDex bearer environment variable "
+                    f"{_selected_local_registration.env_key!r} is not set"
+                )
         if selected_local_model:
             _codex_launch = dataclasses.replace(
                 _codex_launch,
                 config_overrides=[
-                    f"model_provider={json.dumps(_localdex_config.provider)}",
+                    "model_provider="
+                    f"{json.dumps(localdex_runtime_provider_id(_selected_local_registration.provider))}",
                     f"model={json.dumps(selected_model)}",
                     # LocalDex consumes native raw reasoning deltas. Its
                     # OpenAI-compatible endpoint has no separate summary
@@ -4566,13 +4579,24 @@ async def _auto_create_codex_terminal(
     except FileNotFoundError:
         # A stock Codex installation remains useful on hosts that have not
         # received LocalDex yet; it has no local row in the host picker.
+        if (
+            default_model
+            and _localdex_config is not None
+            and localdex_model_selected(_localdex_config, default_model)
+        ):
+            raise
         _localdex_config = None
+        _localdex_provider_overrides = ()
     except ValueError:
         # Registration is optional for ordinary Codex sessions.  A bad stale
         # registration must not turn it into a system-wide launch failure, but
         # an explicit local-model session must surface the repairable config
         # error instead of silently sending it to another provider.
-        if default_model == LOCALDEX_MODEL:
+        if default_model == LOCALDEX_MODEL or (
+            default_model
+            and _localdex_config is not None
+            and localdex_model_selected(_localdex_config, default_model)
+        ):
             raise
         _logger.warning(
             "LocalDex registration is invalid; falling back to stock Codex", exc_info=True
@@ -4591,9 +4615,11 @@ async def _auto_create_codex_terminal(
     if not selected_local_model:
         _codex_reasoning_trace_overrides.append('model_reasoning_summary="auto"')
 
-    _codex_cli_path = (
-        str(LOCALDEX_BINARY) if _localdex_config is not None else _find_codex_cli()
-    )
+    # The single registered Omnigent Codex-compatible agent is LocalDex. Use
+    # its pinned binary even when no custom provider registry is configured;
+    # provider registration controls model availability, not which runtime is
+    # installed for official OpenAI/ChatGPT sessions.
+    _codex_cli_path = str(LOCALDEX_BINARY) if LOCALDEX_BINARY.is_file() else _find_codex_cli()
     _catalog_launch = None
     _fresh_codex_catalog: list[_JsonObject] | None = None
     try:
@@ -5025,16 +5051,14 @@ async def _auto_create_codex_terminal(
         # and can incorrectly require a ChatGPT login even when the selected
         # local provider explicitly has requires_openai_auth = false.
         config_profile=_codex_launch.config_profile,
-        config_source=LOCALDEX_CONFIG_ROOT if selected_local_model else None,
-        # Only the local provider is authless: hand its app-server the one
-        # declared bearer key and let build_codex_native_server strip ambient
-        # OpenAI/Databricks credentials. Every other Codex launch keeps its
-        # original auth and provider-routing contract unchanged.
-        isolated_env_keys=(
-            (_localdex_config.env_key,)
-            if selected_local_model and _localdex_config is not None
+        # Keep LocalDex providers available for in-session switching while
+        # preserving Codex's normal credentials and cloud auth lifecycle.
+        provider_env_keys=(
+            tuple(dict.fromkeys(item.env_key for item in localdex_models(_localdex_config)))
+            if _localdex_config is not None
             else ()
         ),
+        isolated_env_keys=(),
         # LocalDex is one additive provider in a full Codex runtime. Keep the
         # shared official login available so an in-session model switch to an
         # OpenAI model also switches credentials and endpoint correctly.
@@ -5045,6 +5069,7 @@ async def _auto_create_codex_terminal(
             "omnigent-localdex-native-auto" if localdex else "omnigent-codex-native-auto"
         ),
         extra_config_overrides=[
+            *_localdex_provider_overrides,
             *_codex_launch.config_overrides,
             *_codex_reasoning_trace_overrides,
             *mcp_overrides,
@@ -5204,6 +5229,7 @@ async def _auto_create_codex_terminal(
                     # The session workspace: without it the executor falls back
                     # to the runner process's own cwd when starting turns.
                     cwd=workspace,
+                    default_model_provider=default_model_provider,
                 ),
             )
             if launch_config.reasoning_effort:
@@ -5435,38 +5461,45 @@ async def _auto_create_codex_terminal(
 
     # Adopt the thread the fresh TUI creates and run the forwarder in the
     # background, so session creation never blocks on TUI startup.
-    known_thread_forwarder_kwargs: dict[str, object] = {
-        "session_id": session_id,
-        "bridge_dir": bridge_dir,
-        "codex_ws_url": codex_ws_url,
-        "thread_id": launch_config.external_session_id,
-        "client": retained_resume_client,
-        "subagent_router": _codex_router,
-        "turn_router": _codex_turn_router,
-    }
-    if _restart_continuation_turn_id is not None:
-        known_thread_forwarder_kwargs["localdex_restart_recovery_turn_id"] = (
-            _restart_continuation_turn_id
+    if launch_config.external_session_id is None:
+        forwarder_coro = _codex_discover_thread_and_forward(
+            session_id=session_id,
+            bridge_dir=bridge_dir,
+            codex_ws_url=codex_ws_url,
+            codex_home=codex_home,
+            workspace=workspace,
+            event_client=event_client,
+            app_server=app_server,
+            routing_summary=_codex_launch.summary,
+            default_model_provider=default_model_provider,
+            login_required=_codex_launch.login_required,
+            thread_start_timeout_seconds=thread_start_timeout_seconds,
+            subagent_router=_codex_router,
+            turn_router=_codex_turn_router,
+        )
+    elif _restart_continuation_turn_id is None:
+        forwarder_coro = _codex_forward_known_thread(
+            session_id=session_id,
+            bridge_dir=bridge_dir,
+            codex_ws_url=codex_ws_url,
+            thread_id=launch_config.external_session_id,
+            client=retained_resume_client,
+            subagent_router=_codex_router,
+            turn_router=_codex_turn_router,
+        )
+    else:
+        forwarder_coro = _codex_forward_known_thread(
+            session_id=session_id,
+            bridge_dir=bridge_dir,
+            codex_ws_url=codex_ws_url,
+            thread_id=launch_config.external_session_id,
+            client=retained_resume_client,
+            subagent_router=_codex_router,
+            turn_router=_codex_turn_router,
+            localdex_restart_recovery_turn_id=_restart_continuation_turn_id,
         )
     _forwarder_task = asyncio.create_task(
-        (
-            _codex_discover_thread_and_forward(
-                session_id=session_id,
-                bridge_dir=bridge_dir,
-                codex_ws_url=codex_ws_url,
-                codex_home=codex_home,
-                workspace=workspace,
-                event_client=event_client,
-                app_server=app_server,
-                routing_summary=_codex_launch.summary,
-                login_required=_codex_launch.login_required,
-                thread_start_timeout_seconds=thread_start_timeout_seconds,
-                subagent_router=_codex_router,
-                turn_router=_codex_turn_router,
-            )
-            if launch_config.external_session_id is None
-            else _codex_forward_known_thread(**known_thread_forwarder_kwargs)
-        ),
+        forwarder_coro,
         name=f"codex-forwarder-{session_id}",
     )
     _register_auto_forwarder_task(session_id, _forwarder_task)
@@ -5511,6 +5544,7 @@ async def _codex_discover_thread_and_forward(
     workspace: str,
     event_client: CodexAppServerClient,
     routing_summary: str,
+    default_model_provider: str | None = None,
     app_server: CodexNativeAppServer | None = None,
     login_required: bool = False,
     thread_start_timeout_seconds: float | None = None,
@@ -5543,6 +5577,9 @@ async def _codex_discover_thread_and_forward(
         routing (provider / profile / model, or the login-fallback state),
         threaded into the startup-timeout error so hosted users can diagnose
         without runner-log access (see #2745).
+    :param default_model_provider: Provider configured for this session before
+        any per-model LocalDex routing override, persisted so switching back to
+        the session's original provider restores its routing.
     :param app_server: This launch's process, retained for failure diagnostics
         before cleanup. A later launch may replace the session registry entry.
     :param login_required: ``True`` when the resolved launch defers to
@@ -5686,6 +5723,7 @@ async def _codex_discover_thread_and_forward(
                 # The session workspace: without it the executor falls back
                 # to the runner process's own cwd when starting turns.
                 cwd=workspace,
+                default_model_provider=default_model_provider,
             ),
         )
 

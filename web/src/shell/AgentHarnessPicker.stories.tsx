@@ -24,10 +24,10 @@ const claude = agent({
   display_name: "Claude Code",
   harness: "claude-native",
 });
-const codex = agent({
-  id: "agent-codex",
+const localdex = agent({
+  id: "agent-localdex",
   name: "codex-native-ui",
-  display_name: "Codex",
+  display_name: "LocalDex",
   harness: "codex-native",
 });
 const cursor = agent({
@@ -84,7 +84,7 @@ const meta = {
   tags: ["visual-snapshot"],
   args: {
     agentEntries: [polly, debby],
-    harnessEntries: [claude, codex, cursor],
+    harnessEntries: [claude, localdex, cursor],
     effectiveAgentId: claude.id,
     agentLabel: "Claude Code",
     hasAgents: true,
@@ -134,7 +134,7 @@ export const NeedsSetupBadges: Story = {
       ...readyHost,
       configured_harnesses: {
         // SDK agents (polly/debby) stay available; the intended badges here are
-        // the native codex/cursor rows below.
+        // the native LocalDex/Cursor rows below.
         "claude-sdk": true,
         "claude-native": true,
         "codex-native": "needs-auth",

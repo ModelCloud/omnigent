@@ -2224,7 +2224,7 @@ export function composerHarnessLabel(
   const nativeSubagent = nativeCodingAgentForSubagentWrapper(wrapper);
   if (nativeSubagent) return nativeSubagent.displayName;
   if (modelPickerKind === "claude") return "Claude";
-  if (modelPickerKind === "codex") return "Codex";
+  if (modelPickerKind === "codex") return "LocalDex";
   if (modelPickerKind === "cursor") return "Cursor";
   if (modelPickerKind === "kiro") return "Kiro";
   if (modelPickerKind === "opencode") return "OpenCode";
@@ -4118,7 +4118,7 @@ function ComposerImpl(
             onOpenChange={setGoalDialogOpen}
             readOnly={isReadOnly}
             onStartGoal={(condition) => onSend(`/goal ${condition}`)}
-            backendLabel={showClaudeGoalControl ? "Claude" : "Codex"}
+            backendLabel={showClaudeGoalControl ? "Claude" : "LocalDex"}
           />
         )
       )}

@@ -1157,6 +1157,36 @@ def test_native_codex_resource_attributes_reach_server_and_terminal(
         }
 
 
+def test_declared_local_provider_key_keeps_standard_codex_auth_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A custom provider key is additive and does not trigger authless isolation."""
+    monkeypatch.setenv("BEARER_TOKEN", "local-provider-secret")
+    monkeypatch.setenv("OPENAI_ORG_ID", "official-openai-org")
+    monkeypatch.delenv("CODEX_DISABLE_CLOUD_CONFIG", raising=False)
+
+    server = build_codex_native_server(
+        socket_path=tmp_path / "codex.sock",
+        codex_home=tmp_path / "codex-home",
+        cwd=tmp_path,
+        model="gpt-6-sol",
+        profile=None,
+        bridge_dir=tmp_path / "bridge",
+        codex_path=sys.executable,
+        provider_env_keys=("BEARER_TOKEN",),
+        bridge_openai_auth=True,
+    )
+
+    assert server.isolated_env_keys == ()
+    assert server.provider_env_keys == ("BEARER_TOKEN",)
+    assert server.env["BEARER_TOKEN"] == "local-provider-secret"
+    assert server.env["OPENAI_ORG_ID"] == "official-openai-org"
+    assert "CODEX_DISABLE_CLOUD_CONFIG" not in server.env
+    terminal_env = codex_terminal_env(server)
+    assert terminal_env["BEARER_TOKEN"] == "local-provider-secret"
+    assert terminal_env["OPENAI_ORG_ID"] == "official-openai-org"
+
+
 def test_build_codex_native_server_without_bypass_emits_no_bypass_config(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1897,6 +1927,8 @@ async def test_start_reuses_initialized_readiness_client_for_hook_trust(
 
     source_home = tmp_path / "source-codex-home"
     source_home.mkdir()
+    source_auth = source_home / "auth.json"
+    source_auth.write_text('{"tokens":"keep-shared"}\n', encoding="utf-8")
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     monkeypatch.setenv("CODEX_HOME", str(source_home))
@@ -1924,11 +1956,15 @@ async def test_start_reuses_initialized_readiness_client_for_hook_trust(
         tmp_path / "bridge",
         workspace,
     )
+    server.bridge_openai_auth = True
+    server.provider_env_keys = ("BEARER_TOKEN",)
 
     await server.start()
     try:
         assert trusted_with == [startup_client]
         assert startup_client.close_calls == 1
+        assert (server.codex_home / "auth.json").is_symlink()
+        assert (server.codex_home / "auth.json").resolve() == source_auth.resolve()
     finally:
         await server.close()
 
@@ -2705,32 +2741,32 @@ def test_native_codex_profile_and_history_are_bridged(tmp_path: Path) -> None:
     source_home = tmp_path / "source-codex-home"
     source_home.mkdir()
     (source_home / "config.toml").write_text(
-        '\n'.join(
+        "\n".join(
             [
                 'model = "base"',
                 'model_provider = "databricks"',
-                '',
-                '[model_providers.databricks]',
+                "",
+                "[model_providers.databricks]",
                 'base_url = "https://databricks.invalid/v1"',
                 'env_key = "DATABRICKS_CODEX_TOKEN"',
-                '',
+                "",
             ]
         ),
         encoding="utf-8",
     )
     (source_home / "local.config.toml").write_text(
-        '\n'.join(
+        "\n".join(
             [
                 'model = "local"',
                 'model_provider = "local-openai"',
                 'model_catalog_json = "/models/local.json"',
-                '',
-                '[model_providers.local-openai]',
+                "",
+                "[model_providers.local-openai]",
                 'base_url = "http://local.invalid/v1"',
                 'env_key = "LOCAL_KEY"',
                 'wire_api = "responses"',
-                'requires_openai_auth = false',
-                '',
+                "requires_openai_auth = false",
+                "",
             ]
         ),
         encoding="utf-8",
@@ -2745,7 +2781,9 @@ def test_native_codex_profile_and_history_are_bridged(tmp_path: Path) -> None:
     bridged_config = tomllib.loads((target_home / "config.toml").read_text(encoding="utf-8"))
     assert bridged_config["model_provider"] == "local-openai"
     assert bridged_config["model_catalog_json"] == "/models/local.json"
-    assert bridged_config["model_providers"]["local-openai"]["base_url"] == "http://local.invalid/v1"
+    assert (
+        bridged_config["model_providers"]["local-openai"]["base_url"] == "http://local.invalid/v1"
+    )
     assert "databricks" not in bridged_config["model_providers"]
     assert (target_home / "auth.json").read_text(encoding="utf-8") == "{}\n"
     assert not (target_home / "auth.json").is_symlink()

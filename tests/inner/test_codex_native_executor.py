@@ -35,6 +35,17 @@ _PNG_B64 = (
 _PNG_DATA_URI = f"data:image/png;base64,{_PNG_B64}"
 
 
+@pytest.fixture(autouse=True)
+def _hide_machine_localdex_registration(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep native executor tests independent of the developer's LocalDex config."""
+    from omnigent.harnesses.localdex_native import config as localdex_config
+
+    def _missing_config(**_kwargs: object) -> None:
+        raise FileNotFoundError("LocalDex configuration is not part of this test")
+
+    monkeypatch.setattr(localdex_config, "load_localdex_config", _missing_config)
+
+
 def test_localdex_turn_refreshes_runtime_context_capability(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -64,6 +75,7 @@ def test_localdex_turn_refreshes_runtime_context_capability(
         writes.append((home, capabilities.context_window))
 
     monkeypatch.setattr(localdex_config, "load_localdex_config", lambda **_kwargs: registration)
+    monkeypatch.setenv(registration.env_key, "test-token")
     monkeypatch.setattr(localdex_config, "fetch_localdex_runtime_capabilities", _capabilities)
     monkeypatch.setattr(localdex_config, "write_localdex_runtime_capabilities", _write)
     state = CodexNativeBridgeState(
@@ -79,7 +91,10 @@ def test_localdex_turn_refreshes_runtime_context_capability(
         )
     )
 
-    assert actual == {"model": "QB/DSV4.1-Flash", "modelProvider": "localdex"}
+    assert actual == {
+        "model": "QB/DSV4.1-Flash",
+        "modelProvider": localdex_config.localdex_runtime_provider_id("localdex"),
+    }
     assert writes == [(tmp_path / "codex-home", 262_144)]
 
 
@@ -139,6 +154,7 @@ def test_localdex_discovery_failure_discards_a_stale_larger_limit(
         raise RuntimeError("endpoint unavailable")
 
     monkeypatch.setattr(localdex_config, "load_localdex_config", lambda **_kwargs: registration)
+    monkeypatch.setenv(registration.env_key, "test-token")
     monkeypatch.setattr(localdex_config, "fetch_localdex_runtime_capabilities", _unavailable)
     state = CodexNativeBridgeState(
         session_id="session_123",
@@ -153,7 +169,10 @@ def test_localdex_discovery_failure_discards_a_stale_larger_limit(
         )
     )
 
-    assert actual == {"model": "QB/DSV4.1-Flash", "modelProvider": "localdex"}
+    assert actual == {
+        "model": "QB/DSV4.1-Flash",
+        "modelProvider": localdex_config.localdex_runtime_provider_id("localdex"),
+    }
     assert not (tmp_path / localdex_config.LOCALDEX_RUNTIME_CAPABILITIES_FILE).exists()
 
 
@@ -178,14 +197,92 @@ def test_localdex_turn_routes_official_model_to_openai(
     )
 
     actual = asyncio.run(
-        codex_native_executor._localdex_runtime_settings_overrides(
-            state, {"model": "gpt-5.6-sol"}
-        )
+        codex_native_executor._localdex_runtime_settings_overrides(state, {"model": "gpt-5.6-sol"})
     )
 
     # ThreadSettingsUpdateParams is serialized with camelCase.  A snake_case
     # key is accepted as an unknown JSON field but does not switch providers.
     assert actual == {"model": "gpt-5.6-sol", "modelProvider": "openai"}
+
+
+def test_localdex_switch_restores_the_resolved_non_local_provider(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Leaving a LocalDex model restores the session's configured provider."""
+    from omnigent.harnesses.localdex_native import config as localdex_config
+
+    registration = localdex_config.LocalDexConfig(
+        local_model="QB/DSV4.1-Flash",
+        provider="localdex",
+        base_url="http://127.0.0.1:2120/v1",
+        env_key="BEARER_TOKEN",
+    )
+    monkeypatch.setattr(localdex_config, "load_localdex_config", lambda **_kwargs: registration)
+    state = CodexNativeBridgeState(
+        session_id="session_123",
+        socket_path=str(tmp_path / "app-server.sock"),
+        thread_id="thread_123",
+        codex_home=str(tmp_path / "codex-home"),
+        default_model_provider="gateway",
+    )
+
+    actual = asyncio.run(
+        codex_native_executor._localdex_runtime_settings_overrides(state, {"model": "gpt-5.6-sol"})
+    )
+
+    assert actual == {"model": "gpt-5.6-sol", "modelProvider": "gateway"}
+
+
+def test_named_localdex_provider_routes_its_model_without_capability_probe(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Each registry model selects only its declared provider and token key."""
+    from omnigent.harnesses.localdex_native import config as localdex_config
+
+    registration = localdex_config.LocalDexConfig(
+        local_model="vendor/model-a",
+        provider="provider_a",
+        base_url="https://a.example/v1",
+        env_key="PROVIDER_A_TOKEN",
+        models=(
+            localdex_config.LocalDexModelRegistration(
+                model="vendor/model-a",
+                provider="provider_a",
+                display_name="Model A",
+                base_url="https://a.example/v1",
+                env_key="PROVIDER_A_TOKEN",
+            ),
+            localdex_config.LocalDexModelRegistration(
+                model="vendor/model-b",
+                provider="provider_b",
+                display_name="Model B",
+                base_url="https://b.example/v1",
+                env_key="PROVIDER_B_TOKEN",
+            ),
+        ),
+    )
+    monkeypatch.setattr(localdex_config, "load_localdex_config", lambda **_kwargs: registration)
+    monkeypatch.setenv("PROVIDER_B_TOKEN", "selected-token")
+    monkeypatch.delenv("PROVIDER_A_TOKEN", raising=False)
+
+    state = CodexNativeBridgeState(
+        session_id="session_123",
+        socket_path=str(tmp_path / "app-server.sock"),
+        thread_id="thread_123",
+        codex_home=str(tmp_path / "codex-home"),
+    )
+    actual = asyncio.run(
+        codex_native_executor._localdex_runtime_settings_overrides(
+            state, {"model": "vendor/model-b"}
+        )
+    )
+
+    from omnigent.harnesses.localdex_native.config import localdex_runtime_provider_id
+
+    assert actual == {
+        "model": "vendor/model-b",
+        "modelProvider": localdex_runtime_provider_id("provider_b"),
+    }
 
 
 class _FakeCodexNativeClient:

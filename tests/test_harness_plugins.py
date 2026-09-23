@@ -224,13 +224,22 @@ def test_builtin_background_title_generators_are_registered() -> None:
     assert set(generators) >= {
         "claude-sdk",
         "claude-native",
-        "codex",
         "codex-native",
     }
     assert generators["claude-sdk"].generator.endswith("sdk:generate_background_title")
-    assert generators["codex"].generator == generators["claude-sdk"].generator
     assert generators["claude-native"].resolver_harness == "claude-sdk"
     assert generators["codex-native"].resolver_harness is None
+
+
+def test_localdex_is_the_only_registered_codex_compatible_harness() -> None:
+    """LocalDex owns the native Codex runtime; legacy ids remain aliases."""
+    assert "codex-native" in hp.valid_harnesses()
+    assert "codex" not in hp.valid_harnesses()
+    assert "codex" not in hp.harness_labels()
+    assert hp.harness_aliases()["codex"] == "codex-native"
+    assert hp.harness_modules()["codex"] == "omnigent.inner.codex_native_harness"
+    assert {row["id"] for row in hp.harness_catalog()} >= {"codex-native"}
+    assert "codex" not in {row["id"] for row in hp.harness_catalog()}
 
 
 def test_community_harness_can_register_background_title_generator(
