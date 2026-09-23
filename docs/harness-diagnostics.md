@@ -96,6 +96,33 @@ exception class, session ID, and PID. If no reporting thread can start, the
 exception class remains available as `stderr_capture_error_type` in the startup
 failure snapshot; warning delivery is best effort.
 
+## Codex terminal launch and exit
+
+Every runner-owned Codex TUI launch logs one `codex_terminal_launch` event with
+the launched `command`, the probed `codex_cli_version`, whether the launch is a
+`resume`, and the resolved `args` after the host's `harness.codex-native.args`
+are merged. Values are redacted before logging: `NAME=value` environment
+assignments and every `-c` override outside the permission and model keys are
+masked, and URLs lose their userinfo and query string.
+
+The TUI's private tmux server keeps its pane after the process exits
+(`keep_alive_after_exit`), so once the terminal has started, its exit is
+captured by the watcher's pane-dead path instead of collapsing into a bare "no
+server running" probe failure. The Codex terminal's `terminal_exit_observed`
+event then records the inner exit status (`terminal_exit_status`) and a bounded,
+redacted excerpt of the pane's final screen (`terminal_last_output`, stripped of
+terminal control sequences and known credential patterns). This excerpt is
+scoped to the Codex terminal — other terminals keep the guarantee that
+lifecycle-event attributes carry no pane contents (see
+`terminal-lifecycle-diagnostics.md`). Codex's exit is auxiliary, so its
+`last_output` never reaches the terminal failure display (that path is
+required-terminal only); the event excerpt is its durable record.
+
+An exit that happens before the terminal is registered (e.g. the app-server
+dies during startup) still takes the launch-failure path and does not produce
+a `terminal_exit_observed` event; the Codex startup failure snapshot below
+covers that window.
+
 ## Codex startup failure snapshot
 
 When a fresh native Codex session times out waiting for its first thread, or

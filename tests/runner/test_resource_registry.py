@@ -385,8 +385,77 @@ async def test_auxiliary_terminal_exit_publishes_resource_exit_only(
     assert record.attributes["terminal_instance_id"] == instance.diagnostic_id
     assert record.attributes["session_status_before_exit"] == "unknown"
     assert record.attributes["superseded"] is False
+    # A non-Codex terminal keeps the guarantee: no pane contents, no cwd in
+    # the lifecycle-event attributes.
+    assert record.attributes["terminal_last_output"] is None
     assert "startup failed" not in str(record.attributes)
     assert str(tmp_path) not in str(record.attributes)
+
+
+@pytest.mark.asyncio
+async def test_auxiliary_codex_exit_persists_redacted_final_screen(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A Codex (auxiliary) exit records a redacted final-screen excerpt on the event.
+
+    The exit publisher drops ``last_output`` for auxiliary terminals, so the
+    ``terminal_exit_observed`` debug event is the only durable path to the final
+    screen; it must carry a credential-redacted excerpt.
+    """
+    caplog.set_level(logging.INFO, logger="omnigent.runner.resource_registry")
+    terminal_registry = TerminalRegistry()
+    registry = SessionResourceRegistry(terminal_registry=terminal_registry)
+    instance = make_test_terminal_instance("codex", "main", tmp_path)
+    instance._remember_pane_snapshot(
+        "gateway ready\napi_key=sk-supersecretvalue1234\n> Ask Codex to do anything"
+    )
+    terminal_registry._by_conversation.setdefault("conv_codex", {})[("codex", "main")] = instance
+    exits: list[TerminalExitEvent] = []
+    exit_published = asyncio.Event()
+    callbacks: dict[str, object] = {}
+
+    def _publish_exit(event: TerminalExitEvent) -> None:
+        exits.append(event)
+        exit_published.set()
+
+    def _capture_watcher(
+        on_idle: object | None = None,
+        *,
+        on_activity: object | None = None,
+        on_exit: object | None = None,
+        on_tick: object | None = None,
+        idle_threshold_s: float | None = None,
+        poll_interval_s: float | None = None,
+        replace: bool = False,
+    ) -> None:
+        del on_idle, on_activity, on_tick, idle_threshold_s, poll_interval_s, replace
+        callbacks["on_exit"] = on_exit
+
+    instance.start_idle_watcher_thread = _capture_watcher  # type: ignore[method-assign]
+    registry.set_terminal_exit_publisher(_publish_exit)
+
+    await registry.observe_auxiliary_terminal(
+        "conv_codex", "codex", "main", instance, resource_role=CODEX_NATIVE_TERMINAL_ROLE
+    )
+    on_exit = callbacks["on_exit"]
+    assert callable(on_exit)
+    on_exit()
+    await asyncio.wait_for(exit_published.wait(), timeout=1.0)
+
+    # The published event is dropped for auxiliary terminals and still carries
+    # the raw screen; the persisted debug event must carry a redacted excerpt.
+    assert exits[0].lifecycle == TerminalLifecycle.AUXILIARY
+    assert "sk-supersecretvalue1234" in (exits[0].last_output or "")
+    record = next(
+        record
+        for record in caplog.records
+        if getattr(record, "event_name", None) == "terminal_exit_observed"
+    )
+    excerpt = record.attributes["terminal_last_output"]
+    assert "gateway ready" in excerpt
+    assert "Ask Codex to do anything" in excerpt
+    assert "sk-supersecretvalue1234" not in excerpt
+    assert "[REDACTED]" in excerpt
 
 
 async def _observe_native_agent_terminal_and_capture(
