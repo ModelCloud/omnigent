@@ -409,7 +409,7 @@ describe("Composer status line (branch + context ring)", () => {
 describe("composerHarnessLabel", () => {
   it("reads native wrappers as the bare vendor name", () => {
     expect(composerHarnessLabel("claude", null, "claude-native")).toBe("Claude");
-    expect(composerHarnessLabel("codex", null, "codex-native")).toBe("Codex");
+    expect(composerHarnessLabel("codex", null, "codex-native")).toBe("LocalDex");
   });
 
   it("reads SDK agents as '<Agent> (<Harness>)'", () => {
@@ -438,7 +438,7 @@ describe("composerHarnessLabel", () => {
         BRAIN_HARNESS_LABELS,
         "codex-native-ui-subagent",
       ),
-    ).toBe("Codex");
+    ).toBe("LocalDex");
   });
 
   it("falls back to the agent name alone when the harness is unmapped", () => {

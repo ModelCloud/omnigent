@@ -1155,6 +1155,7 @@ async def test_codex_native_model_options_enriches_stale_localdex_row(
             }
         }
     ]
+
     def _fake_client_for_transport(
         transport: str, *, client_name: str = "omnigent"
     ) -> _RecordingCodexAppServerClient:

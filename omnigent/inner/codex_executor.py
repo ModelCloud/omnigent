@@ -1196,9 +1196,7 @@ def _populate_codex_home_config(
                 profile_document = tomlkit.parse(profile_file.read_text(encoding="utf-8"))
                 raw_profile_provider = profile_document.get("model_provider")
                 profile_provider = (
-                    str(raw_profile_provider).strip()
-                    if raw_profile_provider is not None
-                    else None
+                    str(raw_profile_provider).strip() if raw_profile_provider is not None else None
                 )
                 profile_providers = profile_document.get("model_providers")
                 provider_config = (
@@ -1206,7 +1204,7 @@ def _populate_codex_home_config(
                     if profile_provider and profile_providers is not None
                     else None
                 )
-                if provider_config is not None:
+                if profile_provider is not None and provider_config is not None:
                     base_document = tomlkit.parse(config_path.read_text(encoding="utf-8"))
                     providers = base_document.get("model_providers")
                     if providers is None:
@@ -1253,7 +1251,8 @@ def materialize_codex_provider_config(
     provider_overrides: list[str] = []
     argv_overrides: list[str] = []
     for override in config_overrides:
-        if override.lstrip().startswith(_CODEX_PROVIDER_CONFIG_PREFIX):
+        normalized = override.lstrip()
+        if normalized.startswith((_CODEX_PROVIDER_CONFIG_PREFIX, "[model_providers.")):
             provider_overrides.append(override)
         else:
             argv_overrides.append(override)

@@ -841,18 +841,20 @@ def _build_runner_env(
     except (OSError, _OmnigentError):
         config_env_vars = frozenset()
     # LocalDex is an additive provider under the native Codex harness. Its
-    # bearer key is deliberately named by the LocalDex registration rather
-    # than by a global credential convention, so it is not part of
-    # ``HARNESS_CREDENTIAL_ENV_VARS``. Forward exactly that declared key to a
-    # Codex runner. The runner later isolates it to the selected local
-    # provider; no other harness receives it here.
+    # bearer keys are deliberately named by the LocalDex registrations rather
+    # than by a global credential convention, so they are not part of
+    # ``HARNESS_CREDENTIAL_ENV_VARS``. Forward only those declared keys to a
+    # LocalDex runner; the runner strips ambient OpenAI/Databricks credentials.
     localdex_env_vars: frozenset[str] = frozenset()
     if harness in {"codex-native", "localdex-native"}:
         try:
-            from omnigent.harnesses.localdex_native.config import load_localdex_config
+            from omnigent.harnesses.localdex_native.config import (
+                load_localdex_config,
+                localdex_models,
+            )
 
             localdex_env_vars = frozenset(
-                {load_localdex_config(require_token=False).env_key}
+                item.env_key for item in localdex_models(load_localdex_config(require_token=False))
             )
         except (OSError, ValueError):
             # A missing or stale optional LocalDex registration must not make
@@ -3129,26 +3131,32 @@ class HostProcess:
                 # provider contributes one additional row while the app-server
                 # account rows remain available for switching/resuming in the
                 # shared conversation UI.
-                try:
-                    from omnigent.harnesses.localdex_native.config import (
-                        load_localdex_config,
-                        with_localdex_model_picker_row,
-                    )
+                from omnigent.harnesses.localdex_native.config import (
+                    load_localdex_config,
+                    localdex_models,
+                    with_localdex_model_picker_row,
+                )
 
+                try:
                     localdex = await asyncio.to_thread(load_localdex_config, require_token=False)
                 except FileNotFoundError:
                     localdex = None
                 except ValueError:
                     _logger.warning("LocalDex provider registration is invalid", exc_info=True)
                     localdex = None
-                if localdex is not None and os.environ.get(localdex.env_key):
+                available_local_models = (
+                    [item for item in localdex_models(localdex) if os.environ.get(item.env_key)]
+                    if localdex is not None
+                    else []
+                )
+                if localdex is not None and available_local_models:
                     rows = with_localdex_model_picker_row(probed.models, localdex)
                     routable = [
-                        localdex.local_model,
+                        *(item.model for item in available_local_models),
                         *(
                             model
                             for model in probed.routable_models
-                            if model != localdex.local_model
+                            if model not in {item.model for item in localdex_models(localdex)}
                         ),
                     ]
                 else:

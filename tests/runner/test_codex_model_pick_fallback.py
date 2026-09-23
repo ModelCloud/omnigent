@@ -34,6 +34,20 @@ _PROVIDER_DEFAULT = "gpt-5.6-terra"
 _RETIRED_PICK = "gpt-5.4-retired"
 
 
+@pytest.fixture(autouse=True)
+def _isolate_machine_localdex_installation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Tests must not inherit the developer's installed LocalDex config or CLI."""
+    from omnigent.harnesses.localdex_native import config as localdex_config
+
+    def _missing_config(**_kwargs: object) -> None:
+        raise FileNotFoundError("LocalDex configuration is not part of this test")
+
+    monkeypatch.setattr(localdex_config, "LOCALDEX_BINARY", tmp_path / "missing-localdex")
+    monkeypatch.setattr(localdex_config, "load_localdex_config", _missing_config)
+
+
 @dataclass
 class _LaunchHarness:
     """A real runner launch with scripted provider configuration and processes."""
@@ -488,15 +502,17 @@ async def test_localdex_install_preserves_nonlocal_codex_launch(
     assert 'model_provider="localdex"' not in build["extra_config_overrides"]
     assert "show_raw_agent_reasoning=true" in build["extra_config_overrides"]
     assert 'model_reasoning_summary="auto"' in build["extra_config_overrides"]
+    # The registered LocalDex key is available for an in-session model switch;
+    # ordinary Codex routing remains on the resolved gateway provider.
     assert build["isolated_env_keys"] == ()
-    assert build["config_source"] is None
+    assert build["provider_env_keys"] == ("BEARER_TOKEN",)
 
 
 @pytest.mark.asyncio
 async def test_localdex_model_passes_only_declared_bearer_key(
     codex_launch_harness: _LaunchHarness, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The local provider receives its declared bearer key through isolation."""
+    """The local provider receives its declared key without disabling Codex auth."""
     from omnigent.harnesses.localdex_native import config as localdex_config
 
     harness = codex_launch_harness
@@ -511,16 +527,20 @@ async def test_localdex_model_passes_only_declared_bearer_key(
     monkeypatch.setattr(localdex_config, "LOCALDEX_BINARY", binary)
     monkeypatch.setattr(localdex_config, "LOCALDEX_CONFIG_ROOT", tmp_path / "localdex-home")
     monkeypatch.setattr(localdex_config, "load_localdex_config", lambda **_kwargs: local)
+    monkeypatch.setenv("BEARER_TOKEN", "test-localdex-token")
     harness.app_server.client_identity = "test-codex"
     harness.snapshot["model_override"] = local.local_model
 
     await harness.launch()
 
     build = harness.builds[0]
-    assert build["isolated_env_keys"] == ("BEARER_TOKEN",)
+    assert build["isolated_env_keys"] == ()
+    assert build["provider_env_keys"] == ("BEARER_TOKEN",)
     assert build["bridge_openai_auth"] is True
-    assert build["config_source"] == tmp_path / "localdex-home"
-    assert 'model_provider="localdex"' in build["extra_config_overrides"]
+    assert any("omnigent-localdex-localdex-" in value for value in build["extra_config_overrides"])
+    assert 'model_provider="omnigent-localdex-localdex-' in "\n".join(
+        build["extra_config_overrides"]
+    )
     assert "show_raw_agent_reasoning=true" in build["extra_config_overrides"]
     assert 'model_reasoning_summary="none"' in build["extra_config_overrides"]
     assert 'model_reasoning_summary="auto"' not in build["extra_config_overrides"]

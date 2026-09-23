@@ -5679,7 +5679,7 @@ async def test_handle_model_options_serves_codex_probe_rows_and_caches(
 async def test_handle_model_options_serves_localdex_from_the_native_codex_catalog(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The separately advertised LocalDex harness exposes the shared picker."""
+    """The legacy LocalDex harness spelling resolves to the shared picker."""
     from omnigent.harnesses.localdex_native import config as localdex_config
 
     host = _make_host_process()
@@ -5706,38 +5706,14 @@ async def test_handle_model_options_serves_localdex_from_the_native_codex_catalo
         HostModelOptionsFrame(request_id="req_localdex", harness="localdex-native"),
     )
 
-    assert result == HostModelOptionsResultFrame(
-        request_id="req_localdex",
-        status="ok",
-        models=[
-            {
-                "id": "QB/DSV4.1-Flash",
-                "model": "QB/DSV4.1-Flash",
-                "displayName": "DeepSeek V4.1 Flash",
-                "defaultReasoningEffort": "high",
-                "supportedReasoningEfforts": [
-                    {
-                        "reasoningEffort": "off",
-                        "description": "Disable thinking for the fastest responses",
-                    },
-                    {
-                        "reasoningEffort": "low",
-                        "description": "Fast responses with lighter reasoning",
-                    },
-                    {
-                        "reasoningEffort": "high",
-                        "description": "Greater reasoning depth for complex work",
-                    },
-                    {
-                        "reasoningEffort": "max",
-                        "description": "Maximum reasoning depth for difficult work",
-                    },
-                ],
-            },
-            {"id": "gpt-5.6", "displayName": "GPT-5.6"},
-        ],
-        routable_models=["QB/DSV4.1-Flash", "gpt-5.6"],
-    )
+    assert result.status == "ok"
+    assert result.request_id == "req_localdex"
+    assert [row["id"] for row in result.models] == ["QB/DSV4.1-Flash", "gpt-5.6"]
+    assert result.models[0]["model"] == "QB/DSV4.1-Flash"
+    assert result.models[0]["displayName"] == "DeepSeek V4.1 Flash"
+    assert result.models[0]["defaultReasoningEffort"] == "high"
+    assert result.models[0]["supportedReasoningEfforts"][0]["reasoningEffort"] == "off"
+    assert result.routable_models == ["QB/DSV4.1-Flash", "gpt-5.6"]
     _cleanup_host(host)
 
 

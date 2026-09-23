@@ -49,6 +49,20 @@ from tests.runner.conftest import (
 from tests.runner.helpers import NullServerClient
 
 
+@pytest.fixture(autouse=True)
+def _isolate_machine_localdex_installation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Keep runner tests independent of a developer's installed LocalDex."""
+    from omnigent.harnesses.localdex_native import config as localdex_config
+
+    def _missing_config(**_kwargs: object) -> None:
+        raise FileNotFoundError("LocalDex configuration is not part of this test")
+
+    monkeypatch.setattr(localdex_config, "LOCALDEX_BINARY", tmp_path / "missing-localdex")
+    monkeypatch.setattr(localdex_config, "load_localdex_config", _missing_config)
+
+
 @pytest.mark.asyncio
 async def test_create_session_threads_cursor_bridge_dir_without_dead_guard_env(
     tmp_path: Path,
@@ -3493,13 +3507,16 @@ def test_localdex_restart_recovery_requires_dead_owner_and_active_turn() -> None
         active_turn_id="turn_interrupted",
     )
 
-    assert orchestration._localdex_interrupted_turn_id(
-        selected_local_model=True,
-        prior_owner_dead=True,
-        previous_state=state,
-        session_id=state.session_id,
-        external_session_id=state.thread_id,
-    ) == "turn_interrupted"
+    assert (
+        orchestration._localdex_interrupted_turn_id(
+            selected_local_model=True,
+            prior_owner_dead=True,
+            previous_state=state,
+            session_id=state.session_id,
+            external_session_id=state.thread_id,
+        )
+        == "turn_interrupted"
+    )
     assert (
         orchestration._localdex_interrupted_turn_id(
             selected_local_model=True,
@@ -3798,6 +3815,7 @@ async def test_codex_discover_thread_and_forward_persists_workspace_as_bridge_cw
             workspace=str(workspace),
             event_client=_Client(),  # type: ignore[arg-type]
             routing_summary="provider 'test' (model=gpt-test)",
+            default_model_provider="gateway",
             thread_start_timeout_seconds=120.0,
         )
     finally:
@@ -3820,6 +3838,7 @@ async def test_codex_discover_thread_and_forward_persists_workspace_as_bridge_cw
     assert events[0].attributes["harness"] == "codex-native"
     assert state.thread_id == thread_id
     assert state.cwd == str(workspace)
+    assert state.default_model_provider == "gateway"
     assert wait_calls == [{"timeout": 120.0}]
     assert codex_native_bridge.read_bridge_startup_timeout(tmp_path) == 120.0
 

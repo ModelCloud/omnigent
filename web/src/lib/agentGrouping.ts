@@ -13,8 +13,7 @@ import { nativeAgentSortRank } from "@/lib/nativeCodingAgents";
 // two, so this is a frontend allowlist for now.
 export const BUILTIN_AGENTS = new Set([
   "claude-native-ui", // Claude Code
-  "codex-native-ui", // Codex
-  "localdex-native-ui", // LocalDex
+  "codex-native-ui", // LocalDex (Codex-compatible)
   "opencode-native-ui", // OpenCode
   "pi-native-ui", // Pi
   "cursor-native-ui", // Cursor
@@ -63,7 +62,6 @@ export function isAcpHarnessAgent(
 // after, in server order.
 export const AGENT_DISPLAY_ORDER = [
   "Claude Code",
-  "Codex",
   "LocalDex",
   "OpenCode",
   "Cursor",
@@ -100,7 +98,12 @@ export function sortAgentsForDisplay<T extends AvailableAgent>(agents: readonly 
 // `kimi` / `kimi-code` are the headless SDK harness (kept for sub-agent /
 // `run --harness kimi` use) — pickers offer only the native TUI
 // (`kimi-native-ui`).
-export const NEW_SESSION_HIDDEN_AGENTS = new Set(["nessie", "kimi", "kimi-code"]);
+export const NEW_SESSION_HIDDEN_AGENTS = new Set([
+  "nessie",
+  "kimi",
+  "kimi-code",
+  "localdex-native-ui",
+]);
 
 /**
  * The pickable agent set for session-creation surfaces. The new-session

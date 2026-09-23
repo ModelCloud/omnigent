@@ -104,7 +104,7 @@ def test_p0_bench_harnesses_declare_interrupt_and_streaming() -> None:
     # interrupt + streaming; the capability declaration must match so the bench
     # can derive its expected matrix from capabilities without contradiction.
     caps = harness_capabilities()
-    for harness in ("claude-sdk", "codex", "pi", "openai-agents"):
+    for harness in ("claude-sdk", "pi", "openai-agents"):
         assert caps[harness].interrupt is True, harness
         assert caps[harness].streaming is True, harness
 
@@ -239,12 +239,11 @@ def test_catalog_rows_carry_setup_steps() -> None:
             # JSON-serializable primitives only.
             for value in step.values():
                 assert value is None or isinstance(value, str)
-    # Codex is a first-class harness: install (one-click) then a UI-authable
-    # auth step. The step opens the credential form (action "auth"); its
-    # subscription option still carries the `codex login` command.
-    codex = rows["codex"]["setup_steps"]
-    assert [s["action"] for s in codex] == ["install", "auth"]
-    assert codex[1]["command"] == "codex login"
+    # LocalDex is the sole Codex-compatible harness: install (one-click) then
+    # the existing account-auth step, which still uses `codex login`.
+    localdex = rows["codex-native"]["setup_steps"]
+    assert [s["action"] for s in localdex] == ["install", "auth"]
+    assert localdex[1]["command"] == "codex login"
 
 
 def test_setup_steps_by_spelling_covers_native_and_installable_ids() -> None:

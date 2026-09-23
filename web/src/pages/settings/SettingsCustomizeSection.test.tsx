@@ -131,9 +131,9 @@ describe("Harnesses subsection", () => {
     hosts = [ONLINE];
     renderHarnesses();
 
-    fireEvent.change(screen.getByTestId("harness-search"), { target: { value: "codex" } });
+    fireEvent.change(screen.getByTestId("harness-search"), { target: { value: "localdex" } });
 
-    expect(screen.getByText("Codex")).toBeTruthy();
+    expect(screen.getByText("LocalDex")).toBeTruthy();
     expect(screen.queryByText("Claude Code")).toBeNull();
   });
 });

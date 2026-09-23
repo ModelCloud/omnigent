@@ -28,6 +28,7 @@ from omnigent.harnesses.codex_native.bridge import (
     read_codex_config_model,
     read_codex_home_config_effort,
     read_codex_home_config_model,
+    read_codex_home_config_model_provider,
     read_mcp_startup,
     read_policy_hook_config,
     settle_pending_mcp_startup,
@@ -123,6 +124,32 @@ def test_bridge_state_preserves_native_working_directory(tmp_path: Path) -> None
     updated = read_bridge_state(tmp_path)
     assert updated is not None
     assert updated.cwd == str(tmp_path)
+
+
+def test_bridge_state_preserves_default_provider_across_thread_updates(tmp_path: Path) -> None:
+    write_bridge_state(
+        tmp_path,
+        CodexNativeBridgeState(
+            session_id="conv_provider",
+            socket_path="ws://127.0.0.1:1234",
+            thread_id="thread_provider",
+            codex_home=str(tmp_path / "codex-home"),
+            default_model_provider="gateway",
+        ),
+    )
+    update_active_turn_id(tmp_path, "turn_1")
+
+    state = read_bridge_state(tmp_path)
+    assert state is not None
+    assert state.default_model_provider == "gateway"
+
+
+def test_read_codex_home_config_model_provider(tmp_path: Path) -> None:
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_text('model_provider = "gateway"\n', encoding="utf-8")
+
+    assert read_codex_home_config_model_provider(codex_home) == "gateway"
 
 
 @pytest.fixture

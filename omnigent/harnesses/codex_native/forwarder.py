@@ -6132,11 +6132,7 @@ def _reasoning_text_blocks(item: _JsonObject, field: str, block_type: str) -> li
     value = item.get(field)
     if not isinstance(value, list):
         return []
-    return [
-        {"type": block_type, "text": text}
-        for text in value
-        if isinstance(text, str) and text
-    ]
+    return [{"type": block_type, "text": text} for text in value if isinstance(text, str) and text]
 
 
 async def _post_reasoning_item(

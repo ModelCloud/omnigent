@@ -152,6 +152,7 @@ class CodexNativeBridgeState:
     codex_home: str
     active_turn_id: str | None = None
     cwd: str | None = None
+    default_model_provider: str | None = None
 
 
 def bridge_dir_for_bridge_id(bridge_id: str) -> Path:
@@ -504,6 +505,16 @@ def read_codex_home_config_model(codex_home: Path) -> str | None:
         return None
     model = data.get("model")
     return model if isinstance(model, str) and model else None
+
+
+def read_codex_home_config_model_provider(codex_home: Path) -> str | None:
+    """Return the provider currently pinned in a session's private config."""
+    try:
+        data = tomllib.loads((codex_home / "config.toml").read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return None
+    provider = data.get("model_provider")
+    return provider if isinstance(provider, str) and provider else None
 
 
 def read_codex_config_effort(bridge_dir: Path) -> str | None:
@@ -869,6 +880,16 @@ def _write_bridge_state_unlocked(bridge_dir: Path, state: CodexNativeBridgeState
     """
     bridge_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     path = bridge_dir / _STATE_FILE
+    default_model_provider = state.default_model_provider
+    if default_model_provider is None:
+        try:
+            previous = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            previous = None
+        if isinstance(previous, dict):
+            saved_provider = previous.get("default_model_provider")
+            if isinstance(saved_provider, str) and saved_provider:
+                default_model_provider = saved_provider
     fd, tmp_name = tempfile.mkstemp(prefix=f"{_STATE_FILE}.", dir=str(bridge_dir))
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -880,6 +901,7 @@ def _write_bridge_state_unlocked(bridge_dir: Path, state: CodexNativeBridgeState
                     "codex_home": state.codex_home,
                     "active_turn_id": state.active_turn_id,
                     "cwd": state.cwd,
+                    "default_model_provider": default_model_provider,
                 },
                 handle,
                 sort_keys=True,
@@ -1229,6 +1251,7 @@ def read_bridge_state(bridge_dir: Path) -> CodexNativeBridgeState | None:
     codex_home = raw.get("codex_home")
     active_turn_id = raw.get("active_turn_id")
     cwd = raw.get("cwd")
+    default_model_provider = raw.get("default_model_provider")
     if (
         not isinstance(session_id, str)
         or not session_id
@@ -1250,6 +1273,11 @@ def read_bridge_state(bridge_dir: Path) -> CodexNativeBridgeState | None:
         codex_home=codex_home,
         active_turn_id=parsed_active_turn_id,
         cwd=cwd if isinstance(cwd, str) and cwd else None,
+        default_model_provider=(
+            default_model_provider
+            if isinstance(default_model_provider, str) and default_model_provider
+            else None
+        ),
     )
 
 

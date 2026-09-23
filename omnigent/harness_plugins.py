@@ -24,7 +24,6 @@ from omnigent._wrapper_labels import (
     HERMES_NATIVE_WRAPPER_VALUE,
     KIMI_NATIVE_WRAPPER_VALUE,
     KIRO_NATIVE_WRAPPER_VALUE,
-    LOCALDEX_NATIVE_WRAPPER_VALUE,
     OPENCODE_NATIVE_WRAPPER_VALUE,
     PI_NATIVE_WRAPPER_VALUE,
     QWEN_NATIVE_WRAPPER_VALUE,
@@ -155,21 +154,12 @@ CLAUDE_NATIVE_CODING_AGENT = NativeCodingAgent(
 
 CODEX_NATIVE_CODING_AGENT = NativeCodingAgent(
     key="codex",
-    display_name="Codex",
+    display_name="LocalDex",
     agent_name="codex-native-ui",
     harness="codex-native",
     wrapper_label=CODEX_NATIVE_WRAPPER_VALUE,
     terminal_name="codex",
     subagent_wrapper_label="codex-native-ui-subagent",
-)
-
-LOCALDEX_NATIVE_CODING_AGENT = NativeCodingAgent(
-    key="localdex",
-    display_name="LocalDex",
-    agent_name="localdex-native-ui",
-    harness="localdex-native",
-    wrapper_label=LOCALDEX_NATIVE_WRAPPER_VALUE,
-    terminal_name="localdex",
 )
 
 PI_NATIVE_CODING_AGENT = NativeCodingAgent(
@@ -321,7 +311,6 @@ _BUILTIN_NATIVE_PROVIDERS: tuple[NativeHarnessProvider, ...] = tuple(
     for agent in (
         CLAUDE_NATIVE_CODING_AGENT,
         CODEX_NATIVE_CODING_AGENT,
-        LOCALDEX_NATIVE_CODING_AGENT,
         PI_NATIVE_CODING_AGENT,
         OPENCODE_NATIVE_CODING_AGENT,
         CURSOR_NATIVE_CODING_AGENT,
@@ -385,23 +374,6 @@ _BUILTIN_CAPABILITIES: dict[str, HarnessCapabilities] = {
         _MF.GPT,
         _AU.OMNIGENT_CREDENTIAL,
         subagents=True,
-        interrupt=True,
-        streaming=True,
-        fork_history=_FH.REBUILD,
-        shell_tool_name="shell",
-        shell_tool_prompt=_SHELL_PROMPT,
-        instruction_delivery=_ID.AGENT_STARTUP_ADDITIVE,
-    ),
-    "localdex-native": _C(
-        _IM.NATIVE_TUI,
-        _EL.JSONRPC,
-        _RS.WARM_REATTACH,
-        _EF.CODEX_NATIVE,
-        # One LocalDex binary exposes both its explicitly registered local
-        # Responses provider and normal upstream Codex/ChatGPT models.
-        _MF.MULTI,
-        _AU.SESSION_SCOPED_CONFIG,
-        subagents=False,
         interrupt=True,
         streaming=True,
         fork_history=_FH.REBUILD,
@@ -616,18 +588,6 @@ _BUILTIN_CAPABILITIES: dict[str, HarnessCapabilities] = {
         streaming=True,
         instruction_delivery=_ID.COMPOSED_SESSION_SNAPSHOT,
     ),
-    "codex": _C(
-        _IM.CLI_SUBPROCESS,
-        _EL.JSONRPC,
-        _RS.WARM_REATTACH,
-        _EF.OPENAI,
-        _MF.GPT,
-        _AU.OMNIGENT_CREDENTIAL,
-        subagents=False,
-        interrupt=True,
-        streaming=True,
-        instruction_delivery=_ID.COMPOSED_PER_TURN,
-    ),
     "pi": _C(
         _IM.CLI_SUBPROCESS,
         _EL.NONE,
@@ -785,9 +745,7 @@ _BUILTIN_CONTRIBUTION = HarnessContribution(
             "antigravity-native",
             "claude-native",
             "claude-sdk",
-            "codex",
             "codex-native",
-            "localdex-native",
             "copilot",
             "cursor",
             "cursor-native",
@@ -820,11 +778,7 @@ _BUILTIN_CONTRIBUTION = HarnessContribution(
         "antigravity-native": "omnigent.inner.antigravity_native_harness",
         "claude-native": "omnigent.inner.claude_native_harness",
         "claude-sdk": "omnigent.inner.claude_sdk_harness",
-        "codex": "omnigent.inner.codex_harness",
         "codex-native": "omnigent.inner.codex_native_harness",
-        # LocalDex speaks the Codex app-server protocol; its own native
-        # provider row below selects the isolated runner bridge and binary.
-        "localdex-native": "omnigent.inner.codex_native_harness",
         "copilot": "omnigent.inner.copilot_harness",
         "cursor": "omnigent.inner.cursor_harness",
         "cursor-native": "omnigent.inner.cursor_native_harness",
@@ -847,6 +801,11 @@ _BUILTIN_CONTRIBUTION = HarnessContribution(
         "agy": "antigravity",
         "agy-native": "antigravity-native",
         "claude": "claude-sdk",
+        # The LocalDex distribution now owns the Codex-compatible runtime;
+        # accept existing `codex` specs but route them through the one native
+        # LocalDex harness rather than registering a second Codex harness.
+        "codex": "codex-native",
+        "native-codex": "codex-native",
         # Both vendor spellings resolve to the native wrap, mirroring
         # ``opencode`` -> ``opencode-native``. ``devin-acp`` was the built-in ACP
         # row, removed in 0.14: keeping the id aliased is what stops a session,
@@ -857,6 +816,10 @@ _BUILTIN_CONTRIBUTION = HarnessContribution(
         # ``acp`` and reads the user's own config.
         "devin": "devin-native",
         "devin-acp": "devin-native",
+        # Older bundles used a separate LocalDex harness id. Canonicalize it
+        # onto the shared Codex session identity so model switching is seamless.
+        "localdex": "codex-native",
+        "localdex-native": "codex-native",
         "github-copilot": "copilot",
         "google-antigravity": "antigravity",
         "kimi-code": "kimi",
@@ -866,7 +829,7 @@ _BUILTIN_CONTRIBUTION = HarnessContribution(
         "native-goose": "goose-native",
         "native-hermes": "hermes-native",
         "native-kimi": "kimi-native",
-        "native-localdex": "localdex-native",
+        "native-localdex": "codex-native",
         "native-kiro": "kiro-native",
         "native-opencode": "opencode-native",
         "native-pi": "pi-native",
@@ -886,7 +849,6 @@ _BUILTIN_CONTRIBUTION = HarnessContribution(
             "goose-native",
             "hermes-native",
             "kimi-native",
-            "localdex-native",
             "kiro-native",
             "native-agy",
             "native-antigravity",
@@ -897,7 +859,6 @@ _BUILTIN_CONTRIBUTION = HarnessContribution(
             "native-goose",
             "native-hermes",
             "native-kimi",
-            "native-localdex",
             "native-kiro",
             "native-opencode",
             "native-pi",
@@ -910,7 +871,6 @@ _BUILTIN_CONTRIBUTION = HarnessContribution(
     native_agents=(
         CLAUDE_NATIVE_CODING_AGENT,
         CODEX_NATIVE_CODING_AGENT,
-        LOCALDEX_NATIVE_CODING_AGENT,
         PI_NATIVE_CODING_AGENT,
         OPENCODE_NATIVE_CODING_AGENT,
         CURSOR_NATIVE_CODING_AGENT,
@@ -935,7 +895,6 @@ _BUILTIN_CONTRIBUTION = HarnessContribution(
         "acp": "HARNESS_ACP_MODEL",
         "antigravity": "HARNESS_ANTIGRAVITY_MODEL",
         "claude-sdk": "HARNESS_CLAUDE_SDK_MODEL",
-        "codex": "HARNESS_CODEX_MODEL",
         "copilot": "HARNESS_COPILOT_MODEL",
         "cursor": "HARNESS_CURSOR_MODEL",
         "goose": "HARNESS_GOOSE_MODEL",
@@ -953,20 +912,14 @@ _BUILTIN_CONTRIBUTION = HarnessContribution(
             "omnigent.runner.background_titles.claude_native:generate_background_title",
             resolver_harness="claude-sdk",
         ),
-        "codex": BackgroundTitleGeneratorSpec(
-            "omnigent.runner.background_titles.sdk:generate_background_title"
-        ),
         "codex-native": BackgroundTitleGeneratorSpec(
-            "omnigent.runner.background_titles.codex_native:generate_background_title"
-        ),
-        "localdex-native": BackgroundTitleGeneratorSpec(
             "omnigent.runner.background_titles.codex_native:generate_background_title"
         ),
     },
     harness_labels={
         "antigravity": "Antigravity",
         "claude-sdk": "Claude SDK",
-        "codex": "Codex",
+        "codex-native": "LocalDex",
         "copilot": "Copilot",
         "cursor": "Cursor",
         "devin-native": "Devin",

@@ -985,7 +985,7 @@ describe("agentDisplayLabel", () => {
   it("maps native wrapper slugs to their display name", () => {
     expect(agentDisplayLabel("pi-native-ui")).toBe("Pi");
     expect(agentDisplayLabel("claude-native-ui")).toBe("Claude");
-    expect(agentDisplayLabel("codex-native-ui")).toBe("Codex");
+    expect(agentDisplayLabel("codex-native-ui")).toBe("LocalDex");
     expect(agentDisplayLabel("antigravity-native-ui")).toBe("Antigravity");
   });
 
@@ -996,7 +996,7 @@ describe("agentDisplayLabel", () => {
     expect(agentDisplayLabel("pi-native-ui (fork conv_ab12)")).toBe("Pi");
     expect(agentDisplayLabel("pi-native-ui (switch conv_ab12)")).toBe("Pi");
     expect(agentDisplayLabel("claude-native-ui (fork conv_ab12)")).toBe("Claude");
-    expect(agentDisplayLabel("codex-native-ui (switch conv_ab12)")).toBe("Codex");
+    expect(agentDisplayLabel("codex-native-ui (switch conv_ab12)")).toBe("LocalDex");
   });
 
   it("strips EVERY clone layer of a fork-of-a-fork before resolving", () => {
