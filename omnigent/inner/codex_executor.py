@@ -1057,9 +1057,30 @@ def _populate_codex_home_config(
         # replace any prior per-session copy.  This also prevents a resumed
         # session from retaining a former Databricks/OpenAI provider table.
         config_path = target_dir / "config.toml"
+        # The TUI persists explicit user choices (including
+        # ``service_tier = "default"`` for /fast off) in this private config.
+        # Keep that one preference across profile rematerialization; otherwise
+        # a resumed session silently inherits the model catalog's fast default.
+        saved_service_tier: str | None = None
+        if config_path.is_file():
+            try:
+                previous_config = tomllib.loads(config_path.read_text(encoding="utf-8"))
+                previous_service_tier = previous_config.get("service_tier")
+                if isinstance(previous_service_tier, str):
+                    saved_service_tier = previous_service_tier
+            except (OSError, tomllib.TOMLDecodeError):
+                # Provider/profile materialization must still be able to
+                # replace a stale or malformed private config.
+                pass
         if config_path.exists() or config_path.is_symlink():
             config_path.unlink()
         if authless_profile_text is not None:
+            if saved_service_tier is not None:
+                import tomlkit
+
+                profile_document = tomlkit.parse(authless_profile_text)
+                profile_document["service_tier"] = saved_service_tier
+                authless_profile_text = tomlkit.dumps(profile_document)
             config_path.write_text(authless_profile_text, encoding="utf-8")
             os.chmod(config_path, 0o600)
         # Preserve resume continuity with the official Codex runtime without
