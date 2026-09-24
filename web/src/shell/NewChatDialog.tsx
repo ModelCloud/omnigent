@@ -1,5 +1,6 @@
 import { useLoadedConversations } from "@/hooks/useSidebarData";
 import { useComposerContext } from "@/hooks/useComposerContext";
+import { useSlashCompletion } from "@/hooks/useSlashCompletion";
 import {
   HarnessPicker,
   HarnessPickerEntry,
@@ -31,8 +32,10 @@ import {
   ChatComposer,
   COMPOSER_COLUMN_WIDTH,
   COMPOSER_WORKSPACE_COLLAPSED_LABEL_CLASS,
+  ComposerFeedbackRow,
   ComposerSendButton,
 } from "@/components/composer/ChatComposer";
+import { ComposerMentionChips } from "@/components/composer/ComposerMentionChips";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   MonitorCloudIcon,
@@ -43,7 +46,6 @@ import {
   ChevronsUpDownIcon,
   GitBranchIcon,
   LockIcon,
-  FileTextIcon,
   FolderGit2Icon,
   FolderIcon,
   FolderOpenIcon,
@@ -95,7 +97,6 @@ import { fetchGithubBranches, fetchGithubRepos, type GithubRepo } from "@/lib/gi
 import { composerContextToLabels } from "@/lib/composerContextAdapters";
 import { randomUUID } from "@/lib/randomUUID";
 import { readSubmitWithModEnter } from "@/lib/composerSendShortcutPreferences";
-import { validateAttachments } from "@/lib/attachments";
 import { ComposerAttachments } from "@/components/ComposerAttachments";
 import { recordOptimisticTitle } from "@/lib/optimisticTitles";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -122,13 +123,10 @@ import {
 export { harnessUnavailableReasonOnHost, harnessUnconfiguredOnHost, harnessWarningBadgeText };
 import { isFeatureEnabled, sandboxOptionLabel, sandboxProviderOptions } from "@/lib/capabilities";
 import { useHeading, usePoweredBy } from "@/lib/branding";
-import {
-  isSlashCommandText,
-  rankedSlashCommandNames,
-  SlashCommandMenu,
-} from "@/components/SlashCommandMenu";
+import { isSlashCommandText, SlashCommandMenu } from "@/components/SlashCommandMenu";
 import {
   beginLocalConversation,
+  hasPendingLocalMessage,
   hydrateLocalConversation,
   removeLocalConversation,
   setPendingInitialPrompt,
@@ -261,6 +259,7 @@ import {
   type AvailableAgent,
 } from "@/hooks/useAvailableAgents";
 import { useAutoGrowTextarea } from "@/hooks/useAutoGrowTextarea";
+import { useComposerAttachments } from "@/hooks/useComposerAttachments";
 import { useFileDropTarget } from "@/hooks/useFileDropTarget";
 import { useDictationInsert } from "@/hooks/useDictationInsert";
 import { useRecentHarnesses } from "@/hooks/useRecentHarnesses";
@@ -300,7 +299,6 @@ import { useMentionBrowser } from "@/hooks/useMentionBrowser";
 import {
   buildMentionPreamble,
   detectMentionAt,
-  mentionItemPath,
   type MentionState,
   parseMentionToken,
   rankMentionEntries,
@@ -1685,10 +1683,13 @@ export function AgentHarnessPicker({
     for (const agent of harnessEntries) {
       const selected = agent.id === effectiveAgentId;
       const readiness = harnessReadinessOnHost(agent.harness, host);
-      if (!selected && hideUnconfigured && !readiness.selectable && readiness.fallbackRelevant)
-        continue;
+      const unavailable = !readiness.selectable && readiness.fallbackRelevant;
+      if (!selected && hideUnconfigured && unavailable) continue;
       const key = nativeCodingAgentForAvailableAgent(agent)?.iconKind ?? "";
-      if (primaryOrder.includes(key) || agent.id === promotedHarnessId) {
+      const primary = primaryOrder.includes(key) || agent.id === promotedHarnessId;
+      // Unavailable primaries demote to "Other..." — the main list stays
+      // launch-ready; the selected harness always keeps its slot.
+      if (primary && (selected || !unavailable)) {
         ready.push(agent);
       } else more.push(agent);
     }
@@ -1954,7 +1955,7 @@ export function AgentHarnessPicker({
                     }}
                     className="items-center"
                   >
-                    <span className="flex-1 text-left">{otherHarnessLabel}</span>
+                    <span className="flex-1 pl-6 text-left">{otherHarnessLabel}</span>
                     <ChevronRightIcon className="size-4 shrink-0 text-muted-foreground/70" />
                   </DropdownMenuItem>
                 ) : (
@@ -1974,7 +1975,7 @@ export function AgentHarnessPicker({
                         }
                       }}
                     >
-                      <span className="flex-1 text-left">{otherHarnessLabel}</span>
+                      <span className="flex-1 pl-6 text-left">{otherHarnessLabel}</span>
                     </DropdownMenuSubTrigger>
                     <HarnessPickerSubContent
                       sideOffset={-4}
@@ -2006,7 +2007,7 @@ export function AgentHarnessPicker({
                 }}
                 className="items-center"
               >
-                <span className="flex-1 text-left">Other...</span>
+                <span className="flex-1 pl-6 text-left">Custom agents...</span>
                 <ChevronRightIcon className="size-4 shrink-0 text-muted-foreground/70" />
               </DropdownMenuItem>
             ) : (
@@ -2016,7 +2017,7 @@ export function AgentHarnessPicker({
                   data-testid="new-chat-landing-custom-agents"
                   className="cursor-pointer items-center"
                 >
-                  <span className="flex-1 text-left">Other...</span>
+                  <span className="flex-1 pl-6 text-left">Custom agents...</span>
                 </DropdownMenuSubTrigger>
                 <HarnessPickerSubContent
                   sideOffset={-4}
@@ -2273,23 +2274,14 @@ export function NewChatLandingScreen() {
 
   // Attachments for the first message — same affordances as the in-session
   // composer (paperclip + paste); carried to ChatPage via the pending
-  // initial prompt and sent with the auto-dispatched first turn.
-  const [files, setFiles] = useState<File[]>(() => restoredDraft?.files ?? []);
-  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  // initial prompt and sent with the auto-dispatched first turn. Validation
+  // rejects unsupported types and oversized files before the session exists
+  // — without it the upload only fails after the session is created and
+  // navigated into, where the first turn's 415 strands the typed message in
+  // a session the user never wanted.
+  const { files, attachmentError, addFiles, removeFile, restoreFiles, onPaste, clearError } =
+    useComposerAttachments({ initialFiles: restoredDraft?.files ?? [] });
   const fileInputRef = useRef<HTMLInputElement>(null);
-  // Reject unsupported types (only images, PDF, and text/code) and oversized
-  // files here, before the session exists. Without this the upload only fails
-  // after the session is created and navigated into, where the first turn's
-  // 415 strands the typed message in a session the user never wanted.
-  const addFiles = (incoming: File[]) => {
-    const { accepted, errors } = validateAttachments(incoming);
-    if (accepted.length > 0) setFiles((prev) => [...prev, ...accepted]);
-    setAttachmentError(errors.length > 0 ? errors.join("\n") : null);
-  };
-  const removeFile = (index: number) => {
-    setFiles((prev) => prev.filter((_, i) => i !== index));
-    setAttachmentError(null);
-  };
 
   // Drag-and-drop — as in the in-session composer, a file dropped anywhere on
   // the landing surface attaches here. Declared after ``landingSurface``.
@@ -4609,7 +4601,6 @@ export function NewChatLandingScreen() {
 
   // Pre-session suggestions contain skills; built-ins such as /model need a live session.
   const [inputFocused, setInputFocused] = useState(false);
-  const [slashMenuIndex, setSlashMenuIndex] = useState(-1);
   const skillPrefix = skillsHarness === "codex-native" ? "$" : "/";
   const skillCommands = useMemo(
     () =>
@@ -4618,47 +4609,25 @@ export function NewChatLandingScreen() {
       ),
     [availableSkills, skillPrefix],
   );
-  const trimmedMessage = message.trimStart();
-  const skillNameOnly =
-    (trimmedMessage.startsWith("/") || trimmedMessage.startsWith(skillPrefix)) &&
-    !trimmedMessage.slice(1).includes("/") &&
-    !trimmedMessage.includes(" ");
-  const slashMenuOpen = inputFocused && skillNameOnly;
-  const slashMenuQuery = skillNameOnly ? trimmedMessage.slice(1) : "";
-  // Kept in sync with what SlashCommandMenu renders so keyboard nav
-  // indexes into the same list.
-  const slashMenuMatches = skillNameOnly
-    ? rankedSlashCommandNames(skillCommands, slashMenuQuery)
-    : [];
-  const pendingSkillCompletion =
-    skillNameOnly && skillsStatus === "loading" && slashMenuMatches.length === 0;
-  // New queries select the first match; async arrivals retain the selected name.
-  // Track the previous render in state so discarded renders cannot consume an update.
-  const [previousSlashMatches, setPreviousSlashMatches] = useState<{
-    query: string;
-    names: string[];
-  }>({ query: "", names: [] });
-  if (
-    slashMenuQuery !== previousSlashMatches.query ||
-    slashMenuMatches.length !== previousSlashMatches.names.length ||
-    slashMenuMatches.some((m, i) => m !== previousSlashMatches.names[i])
-  ) {
-    const previousName = previousSlashMatches.names[slashMenuIndex];
-    const retainedIndex =
-      previousSlashMatches.query === slashMenuQuery && previousName
-        ? slashMenuMatches.indexOf(previousName)
-        : -1;
-    setPreviousSlashMatches({ query: slashMenuQuery, names: slashMenuMatches });
-    setSlashMenuIndex(retainedIndex >= 0 ? retainedIndex : slashMenuMatches.length > 0 ? 0 : -1);
-  }
-
   // Selecting a skill fills "/name " and leaves the caret ready for the
   // argument — skills never auto-execute from the menu.
   function applySlashSelection(cmd: string) {
-    setSlashMenuIndex(-1);
     setMessage(cmd + " ");
     textareaRef.current?.focus();
   }
+  const slashCompletion = useSlashCompletion({
+    text: message,
+    commands: skillCommands,
+    prefix: skillPrefix,
+    status: skillsStatus,
+    mobile: isMobileViewport,
+    mobileEnterCompletes: true,
+    escapeClearsOnlyWithContent: false,
+    allowOpen: inputFocused,
+    onSelect: applySlashSelection,
+    clearText: () => setMessage(""),
+  });
+  const pendingSkillCompletion = slashCompletion.pendingCompletion;
 
   // Always-visible skill pills for the allowlisted orchestrators, fed by
   // the same bundled-skills list as the "/" menu.
@@ -5162,10 +5131,16 @@ export function NewChatLandingScreen() {
   function returnDraftToUser(temporaryConversationId?: string) {
     submittedRef.current = false;
     submittedDraftRevisionRef.current = null;
-    const returnedDraft = recoverFailedSessionDraft(draftRef.current, temporaryConversationId);
+    const originalDraft =
+      temporaryConversationId && !hasPendingLocalMessage(temporaryConversationId)
+        ? { ...draftRef.current, message: "", files: [] }
+        : draftRef.current;
+    const returnedDraft = recoverFailedSessionDraft(originalDraft, temporaryConversationId);
     if (onScreenRef.current) {
       setMessage(returnedDraft.message);
-      setFiles(returnedDraft.files);
+      // The draft's files were validated when the user attached them, so
+      // they come back verbatim rather than through a re-validating replace.
+      restoreFiles(returnedDraft.files);
     } else {
       writeLandingDraft(returnedDraft);
     }
@@ -5819,11 +5794,11 @@ export function NewChatLandingScreen() {
       className="relative flex flex-1 items-center justify-center pb-24"
       data-testid="new-chat-landing"
     >
-      {/* Padding lives inside the 800px cap, so the composer renders at
-          800 − 80 = 720px max on desktop. px-4 on phones (16px gutters)
-          keeps the composer from feeling cramped against the viewport
-          edges; widens to the full px-10 at the md breakpoint and up. */}
-      <div className="flex w-full max-w-[800px] flex-col items-center px-4 pt-8 pb-16 md:select-none md:px-10">
+      {/* Padding lives inside the 800px cap, so the composer surface reaches
+          its shared 48rem column (800 − 32 = 768px) on desktop. px-4 (16px
+          gutters) keeps the composer from feeling cramped against the
+          viewport edges on phones. */}
+      <div className="flex w-full max-w-[800px] flex-col items-center px-4 pt-8 pb-16 md:select-none">
         <div className="mb-6 flex w-full flex-col items-center justify-center gap-3.5">
           {selectedProject ? (
             // Landing inside a project: swap Otto's eyes for the project's
@@ -5872,7 +5847,7 @@ export function NewChatLandingScreen() {
                     aria-label={`Sandbox repositories: ${
                       sandboxRepoSelections.length > 0 ? sandboxRepoLabel : "None selected"
                     }`}
-                    className="relative inline-flex h-6 min-w-10 max-w-[calc(50%-0.25rem)] cursor-pointer items-center gap-1 rounded-md border border-transparent bg-transparent px-0.5 text-xs leading-4 font-normal text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:min-w-11 md:px-1"
+                    className="relative inline-flex h-6 min-w-10 max-w-[calc(50%-0.25rem)] cursor-pointer items-center gap-1 rounded-md border border-transparent bg-transparent px-1 text-xs leading-4 font-normal text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:min-w-11"
                     data-testid="new-chat-landing-repo-chip"
                   >
                     <GitBranchIcon className="ui-icon" />
@@ -6325,7 +6300,7 @@ export function NewChatLandingScreen() {
                   // A rejected attachment is never added, so there's no chip to
                   // remove and nothing else would ever clear this. Left sticky it
                   // reads as a blocker on a composer the user can actually submit.
-                  if (attachmentError !== null) setAttachmentError(null);
+                  if (attachmentError !== null) clearError();
                   // Recompute the active "@"-mention from the caret each keystroke
                   // (native terminal agents with a workspace — ``mentionEnabled``).
                   setMention(
@@ -6354,49 +6329,11 @@ export function NewChatLandingScreen() {
                   // and takes priority over submission.
                   if (!shouldPreferSendOverCompletion && handleMentionKeyDown(e)) return;
 
-                  if (slashMenuOpen && e.key === "Escape") {
-                    e.preventDefault();
-                    setMessage("");
-                    setSlashMenuIndex(-1);
-                    return;
-                  }
-                  // Keep a partial skill name in the composer until there is a completion.
-                  if (
-                    slashMenuOpen &&
-                    skillsStatus === "loading" &&
-                    slashMenuMatches.length === 0 &&
-                    !shouldPreferSendOverCompletion &&
-                    (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && !isMobileViewport))
-                  ) {
-                    e.preventDefault();
-                    return;
-                  }
+                  // Slash-completion menu keys (shared useSlashCompletion) —
+                  // navigate, complete, or dismiss; takes priority over
+                  // submission (same UX as the in-session composer).
+                  if (slashCompletion.handleKey(e, { shouldPreferSendOverCompletion })) return;
 
-                  // While the skills menu is open, ArrowUp/Down navigate it and
-                  // Enter/Tab complete the highlighted item — these take
-                  // priority over submission (same UX as the in-session
-                  // composer).
-                  if (slashMenuOpen && slashMenuMatches.length > 0) {
-                    if (e.key === "ArrowDown") {
-                      e.preventDefault();
-                      setSlashMenuIndex((i) => (i + 1) % slashMenuMatches.length);
-                      return;
-                    }
-                    if (e.key === "ArrowUp") {
-                      e.preventDefault();
-                      setSlashMenuIndex((i) => (i <= 0 ? slashMenuMatches.length - 1 : i - 1));
-                      return;
-                    }
-                    if (
-                      !shouldPreferSendOverCompletion &&
-                      (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) &&
-                      slashMenuIndex >= 0
-                    ) {
-                      e.preventDefault();
-                      applySlashSelection(slashMenuMatches[slashMenuIndex]!);
-                      return;
-                    }
-                  }
                   if (shouldSubmitFromKeyboard) {
                     e.preventDefault();
                     // The mention menu is briefly closed while its listing loads;
@@ -6405,18 +6342,7 @@ export function NewChatLandingScreen() {
                     void handleCreate();
                   }
                 },
-                onPaste: (e) => {
-                  // Pasted images/files attach instead of inserting as text,
-                  // mirroring the in-session composer.
-                  const pasted = Array.from(e.clipboardData.items)
-                    .filter((item) => item.kind === "file")
-                    .map((item) => item.getAsFile())
-                    .filter((f): f is File => f !== null);
-                  if (pasted.length > 0) {
-                    e.preventDefault();
-                    addFiles(pasted);
-                  }
-                },
+                onPaste,
                 placeholder: pillSkills.length > 0 ? "" : placeholderText,
                 "aria-label": placeholderText,
                 rows: 1,
@@ -6427,10 +6353,10 @@ export function NewChatLandingScreen() {
                 beforeInput: (
                   <>
                     {/* Skill suggestions — floats above the composer box. */}
-                    {slashMenuOpen && (
+                    {slashCompletion.open && (
                       <SlashCommandMenu
-                        query={slashMenuQuery}
-                        activeIndex={slashMenuIndex}
+                        query={slashCompletion.query}
+                        activeIndex={slashCompletion.index}
                         onSelect={applySlashSelection}
                         commands={skillCommands}
                         skillsStatus={skillsStatus}
@@ -6487,44 +6413,17 @@ export function NewChatLandingScreen() {
                     {/* "@"-mention chips — one per tagged workspace file/folder. Each is
                 delivered as an "[Attached: <path>]" marker prepended to the
                 first message at create time. */}
-                    {mentionedItems.length > 0 && (
-                      <div className="flex flex-wrap gap-1.5 px-4 pb-2">
-                        {mentionedItems.map((item, i) => (
-                          <span
-                            key={mentionItemPath(item)}
-                            className="flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-0.5 text-sm text-muted-foreground"
-                          >
-                            {item.isDir ? (
-                              <FolderIcon className="size-3 shrink-0" />
-                            ) : (
-                              <FileTextIcon className="size-3 shrink-0" />
-                            )}
-                            <span className="max-w-[200px] truncate" title={mentionItemPath(item)}>
-                              @{item.path}
-                              {item.isDir ? "/" : ""}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => removeMentionedItem(i)}
-                              className="ml-0.5 rounded-full hover:text-foreground"
-                              aria-label={`Remove ${item.path}`}
-                            >
-                              <XIcon className="size-3" />
-                            </button>
-                          </span>
-                        ))}
-                      </div>
-                    )}
+                    <ComposerMentionChips items={mentionedItems} onRemove={removeMentionedItem} />
                     {/* Pending attachments — image thumbnails (click to view) + file rows. */}
                     <ComposerAttachments files={files} onRemove={removeFile} />
                     {/* Rejected-attachment feedback: unsupported type or too large */}
                     {attachmentError !== null && (
-                      <div
-                        className="px-4 pb-2 text-xs text-destructive whitespace-pre-wrap"
+                      <ComposerFeedbackRow
+                        tone="error"
                         data-testid="new-chat-landing-attachment-error"
                       >
                         {attachmentError}
-                      </div>
+                      </ComposerFeedbackRow>
                     )}
                     {/* No own bg — the pill paints the surface. An explicit bg-card
                 here would also catch the .dark .bg-card glass rule (border +

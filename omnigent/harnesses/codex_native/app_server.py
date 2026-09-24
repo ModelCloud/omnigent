@@ -26,6 +26,7 @@ from websockets.asyncio.client import ClientConnection
 from websockets.exceptions import ConnectionClosed
 
 from omnigent.models import model_catalog
+from omnigent.models.model_fallbacks import CODEX_DEFAULT_MODEL
 from omnigent.util.json_types import JsonObject as _JsonObject
 
 if TYPE_CHECKING:
@@ -54,6 +55,7 @@ from omnigent.harnesses.codex_native.process_registry import (
 from omnigent.harnesses.codex_native.stderr_diagnostics import (
     MAX_STDERR_RECORD_BYTES,
     CodexStderrDiagnostics,
+    codex_app_server_diagnostic_env,
     report_capture_start_failure,
 )
 from omnigent.inner import _proc
@@ -1473,7 +1475,8 @@ def mark_launch_default(rows: list[_JsonObject], pinned_model: str | None) -> li
     A pinned model no visible row names (a hidden configured default is
     explicitly supported) marks NO default: crowning a different visible
     model would let the launch path pin a model the configuration never
-    selected. Only an unpinned launch keeps Codex's own first default.
+    selected. Without a pin, prefer Omnigent's launch default when visible;
+    otherwise keep Codex's own first default.
     Rows are otherwise verbatim.
 
     Codex's own ``isDefault`` is its built-in preference, which says nothing
@@ -1487,14 +1490,24 @@ def mark_launch_default(rows: list[_JsonObject], pinned_model: str | None) -> li
     from omnigent.models.codex_model_vocabulary import comparable_model_id
 
     codex_default_index: int | None = None
+    omnigent_default_index: int | None = None
     pinned_index: int | None = None
     pinned_key = comparable_model_id(pinned_model) if pinned_model else None
+    omnigent_default_key = comparable_model_id(CODEX_DEFAULT_MODEL)
     marked: list[_JsonObject] = []
     for index, row in enumerate(rows):
         cleaned = {key: value for key, value in row.items() if key != "isDefault"}
         marked.append(cleaned)
         if codex_default_index is None and row.get("isDefault") is True:
             codex_default_index = index
+        if omnigent_default_index is None:
+            for spelling in (row.get("id"), row.get("model")):
+                if (
+                    isinstance(spelling, str)
+                    and comparable_model_id(spelling) == omnigent_default_key
+                ):
+                    omnigent_default_index = index
+                    break
         if pinned_index is None and pinned_key is not None:
             for spelling in (row.get("id"), row.get("model")):
                 if isinstance(spelling, str) and comparable_model_id(spelling) == pinned_key:
@@ -1504,6 +1517,8 @@ def mark_launch_default(rows: list[_JsonObject], pinned_model: str | None) -> li
         # The effective model is authoritative even when hidden from the
         # visible rows; never substitute a model the config did not select.
         default_index = pinned_index
+    elif omnigent_default_index is not None:
+        default_index = omnigent_default_index
     else:
         default_index = codex_default_index
     if default_index is not None:
@@ -1580,7 +1595,7 @@ async def probe_codex_model_options(
 
 
 async def _read_codex_probe_default(client: CodexAppServerClient) -> str | None:
-    """Read Codex's effective default; older servers retain their model/list default."""
+    """Read Codex's effective explicit default; older servers defer to catalog shaping."""
     try:
         try:
             response = await client.request("config/read", {"includeLayers": False})
@@ -1593,7 +1608,7 @@ async def _read_codex_probe_default(client: CodexAppServerClient) -> str | None:
             exc.code == -32600 and "unknown variant `config/read`" in (exc.message or "")
         ):
             raise
-        _logger.info("Codex config/read unavailable; keeping the model/list default")
+        _logger.info("Codex config/read unavailable; deferring to catalog default shaping")
         return None
     result = response.get("result")
     config = result.get("config") if isinstance(result, dict) else None
@@ -1625,7 +1640,7 @@ def codex_catalog_fingerprint(launch: NativeCodexLaunch, *, codex_path: str | No
     profile_host = _read_databrickscfg_host(launch.profile) if launch.profile is not None else None
     return fingerprint_of(
         "codex-native",
-        "isolated-picker-v3",
+        "isolated-picker-v4",
         _codex_config_identity(_codex_home_config_source_from_env()),
         (launch.profile, (profile_host or "").rstrip("/")) if launch.profile is not None else None,
         launch.model,
@@ -2068,7 +2083,9 @@ class CodexNativeAppServer:
             listen_url=resolved_listen,
             config_overrides=self.config_overrides,
         )
-        proc_env = {**self.env, "CODEX_HOME": str(self.codex_home)}
+        proc_env = codex_app_server_diagnostic_env(
+            {**self.env, "CODEX_HOME": str(self.codex_home)}
+        )
         self.process_owner_lock = acquire_codex_native_process_owner_lock()
         try:
             self.proc = await asyncio.create_subprocess_exec(
@@ -3074,12 +3091,15 @@ def _resolve_databricks_codex_model(
         # simply fails the listing and drops to the ucode-state fallback below,
         # which is already keyed by ``host``.
         servable = discover_databricks_codex_models(host, creds.token)
-    except Exception:  # noqa: BLE001 — cached ucode state is the launch fallback
+    except Exception as exc:  # noqa: BLE001 — cached ucode state is the launch fallback
+        # Recoverable fallback; frames are debug-only so a TTY-mirrored
+        # host console stays concise.
         _logger.warning(
             "native-codex: live Databricks model discovery failed for profile %r; "
-            "falling back to ucode state",
+            "falling back to ucode state (%s)",
             profile,
-            exc_info=True,
+            exc,
+            exc_info=_logger.isEnabledFor(logging.DEBUG),
         )
         try:
             from omnigent.onboarding.ucode_state import read_ucode_state

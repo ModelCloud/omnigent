@@ -149,7 +149,12 @@ export const NeedsSetupBadges: Story = {
       </CapabilitiesProvider>
     ),
   ],
-  play: async ({ canvasElement }) => openPicker(canvasElement),
+  play: async ({ canvasElement }) => {
+    await openPicker(canvasElement);
+    // The badged rows live behind the harness overflow flyout now.
+    const page = within(canvasElement.ownerDocument.body);
+    await userEvent.click(await page.findByTestId("new-chat-landing-harness-more"));
+  },
 };
 
 export const ClaudeSelected: Story = {
