@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+
 import tomllib
 
 from omnigent.harnesses.localdex_native.config import (
@@ -92,9 +93,7 @@ requires_openai_auth = false
         encoding="utf-8",
     )
     models = tmp_path / "models.toml"
-    models.write_text(
-        '[models."vendor/model"]\nprovider = "openai"\n', encoding="utf-8"
-    )
+    models.write_text('[models."vendor/model"]\nprovider = "openai"\n', encoding="utf-8")
     registration = load_localdex_config(providers, models_path=models, require_token=False)
     codex_home = tmp_path / "codex-home"
     codex_home.mkdir()
