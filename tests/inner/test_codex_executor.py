@@ -3471,6 +3471,35 @@ def test_populate_codex_home_config_config_toml_copy_is_isolated(tmp_path: Path)
     assert (source / "config.toml").read_text() == '[default]\nmodel = "gpt-5.4"'
 
 
+def test_populate_codex_home_config_adds_provider_to_resumed_session(tmp_path: Path) -> None:
+    """A stale private home can resume after its source gains LocalDex."""
+    import tomllib
+
+    from omnigent.inner.codex_executor import _populate_codex_home_config
+
+    source = tmp_path / "real_codex_home"
+    source.mkdir()
+    (source / "config.toml").write_text(
+        'model = "gpt-5.6-sol"\n'
+        "[model_providers.localdex]\n"
+        'base_url = "http://10.0.13.33:2120/v1"\n'
+        'env_key = "CODEX_LOCAL_OPENAI_API_KEY"\n'
+        'wire_api = "responses"\n'
+    )
+    target = tmp_path / "private_codex_home"
+    target.mkdir()
+    (target / "config.toml").write_text('model_provider = "localdex"\nmodel = "QB/DSV4.1-Flash"\n')
+
+    _populate_codex_home_config(target, source)
+    _populate_codex_home_config(target, source)
+
+    config = tomllib.loads((target / "config.toml").read_text())
+    assert config["model"] == "QB/DSV4.1-Flash"
+    assert config["model_provider"] == "localdex"
+    assert config["model_providers"]["localdex"]["base_url"] == "http://10.0.13.33:2120/v1"
+    assert "model_providers" in tomllib.loads((source / "config.toml").read_text())
+
+
 def test_populate_codex_home_config_normalizes_deprecated_effort(tmp_path: Path) -> None:
     """A ChatGPT-app ``model_reasoning_effort = "ultra"`` becomes ``xhigh``.
 
