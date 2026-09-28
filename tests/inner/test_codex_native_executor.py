@@ -176,6 +176,58 @@ def test_localdex_discovery_failure_discards_a_stale_larger_limit(
     assert not (tmp_path / localdex_config.LOCALDEX_RUNTIME_CAPABILITIES_FILE).exists()
 
 
+@pytest.mark.parametrize(
+    ("stale_model", "stale_provider"),
+    [
+        ("QB/DSV4.1-Flash", "localdex"),
+        ("gpt-6-sol", "openai"),
+    ],
+)
+def test_localdex_runtime_preserves_live_provider_without_model_selection(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    stale_model: str,
+    stale_provider: str,
+) -> None:
+    """A resumed turn must not reassert provider state from a stale config."""
+    from omnigent.harnesses.localdex_native import config as localdex_config
+
+    registration = localdex_config.LocalDexConfig(
+        local_model="QB/DSV4.1-Flash",
+        provider="localdex",
+        base_url="http://127.0.0.1:2120/v1",
+        env_key="BEARER_TOKEN",
+    )
+
+    async def _capabilities(
+        _config: localdex_config.LocalDexConfig,
+    ) -> localdex_config.LocalDexRuntimeCapabilities:
+        return localdex_config.LocalDexRuntimeCapabilities(
+            context_window=262_144, max_prompt_tokens=262_142
+        )
+
+    monkeypatch.setattr(localdex_config, "load_localdex_config", lambda **_kwargs: registration)
+    monkeypatch.setenv(registration.env_key, "test-token")
+    monkeypatch.setattr(localdex_config, "fetch_localdex_runtime_capabilities", _capabilities)
+    monkeypatch.setattr(localdex_config, "write_localdex_runtime_capabilities", lambda *_args: None)
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    (home / "config.toml").write_text(
+        f'model = "{stale_model}"\nmodel_provider = "{stale_provider}"\n'
+    )
+    state = CodexNativeBridgeState(
+        session_id="session_123",
+        socket_path=str(tmp_path / "app-server.sock"),
+        thread_id="thread_123",
+        codex_home=str(home),
+        default_model_provider=stale_provider,
+    )
+
+    actual = asyncio.run(codex_native_executor._localdex_runtime_settings_overrides(state, {}))
+
+    assert actual == {}
+
+
 def test_localdex_turn_routes_official_model_to_openai(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

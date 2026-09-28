@@ -340,10 +340,10 @@ async def _localdex_runtime_settings_overrides(
     )
 
     overrides = dict(settings_overrides)
+    selected_model = overrides.get("model")
+    has_model_selection = isinstance(selected_model, str) and bool(selected_model.strip())
     current_model = read_codex_home_config_model(Path(state.codex_home))
-    target_model = overrides.get("model")
-    if not isinstance(target_model, str) or not target_model:
-        target_model = current_model
+    target_model = selected_model if has_model_selection else current_model
     try:
         # Official models do not need the local endpoint's bearer token. Read
         # the additive registration first, then require that token only when
@@ -364,7 +364,8 @@ async def _localdex_runtime_settings_overrides(
                 raise RuntimeError(
                     f"LocalDex bearer environment variable {registration.env_key!r} is not set"
                 )
-            overrides["modelProvider"] = localdex_runtime_provider_id(registration.provider)
+            if has_model_selection:
+                overrides["modelProvider"] = localdex_runtime_provider_id(registration.provider)
             if registration.discover_capabilities or registration.model == LOCALDEX_MODEL:
                 selected_config = dataclasses.replace(
                     localdex,
@@ -387,7 +388,7 @@ async def _localdex_runtime_settings_overrides(
         else:
             # A model picker change must move both pieces of routing state.
             # Restore the provider resolved for the non-LocalDex model.
-            if "modelProvider" not in overrides:
+            if has_model_selection and "modelProvider" not in overrides:
                 provider = state.default_model_provider or read_codex_home_config_model_provider(
                     Path(state.codex_home)
                 )
