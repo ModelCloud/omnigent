@@ -938,6 +938,35 @@ def _codex_home_config_source_from_env() -> Path:
     )
 
 
+def _sync_missing_codex_model_providers(source_file: Path, dest_path: Path) -> None:
+    """Add newly configured providers to an existing private Codex home.
+
+    A resumed session keeps its own config.toml so its selected model and
+    provider remain isolated.  The source home may gain a provider after that
+    copy was created, though, and Codex cannot start when the session selects
+    the provider without its definition.
+    """
+    import tomlkit
+
+    source = tomlkit.parse(source_file.read_text(encoding="utf-8"))
+    source_providers = source.get("model_providers")
+    if not source_providers:
+        return
+    dest = tomlkit.parse(dest_path.read_text(encoding="utf-8"))
+    dest_providers = dest.get("model_providers")
+    missing = [
+        name for name in source_providers if not dest_providers or name not in dest_providers
+    ]
+    if not missing:
+        return
+    if dest_providers is None:
+        dest_providers = tomlkit.table()
+        dest["model_providers"] = dest_providers
+    for name in missing:
+        dest_providers[name] = source_providers[name]
+    dest_path.write_text(tomlkit.dumps(dest), encoding="utf-8")
+
+
 def _populate_codex_home_config(
     target_dir: Path,
     source_dir: Path,
@@ -1151,6 +1180,8 @@ def _populate_codex_home_config(
             continue
         dest_path = target_dir / filename
         if dest_path.exists() or dest_path.is_symlink():
+            if filename == "config.toml" and dest_path.is_file():
+                _sync_missing_codex_model_providers(source_file, dest_path)
             continue
         if minimal_config and filename == "config.toml":
             import tomlkit
