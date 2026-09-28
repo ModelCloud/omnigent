@@ -63,6 +63,7 @@ display_name = "Lab Coder"
     provider_config = tomllib.loads(local_overrides[0])["model_providers"]
     dsv_runtime_id = localdex_runtime_provider_id("dsv")
     assert dsv_runtime_id != "openai"
+    assert localdex_runtime_provider_id("localdex") == "localdex"
     assert provider_config[dsv_runtime_id]["base_url"] == "http://127.0.0.1:9000/v1"
     assert provider_config[dsv_runtime_id]["env_key"] == "DSV_TOKEN"
     assert provider_config[dsv_runtime_id]["requires_openai_auth"] is False
