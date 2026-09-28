@@ -2756,7 +2756,10 @@ def test_empty_agent_codex_profile_uses_host_default(monkeypatch: pytest.MonkeyP
     assert codex_native_app_server._native_codex_config_profile(spec) == "local"
 
 
-def test_native_codex_profile_and_history_are_bridged(tmp_path: Path) -> None:
+@pytest.mark.parametrize("include_credentials", [True, False])
+def test_native_codex_profile_and_history_are_bridged(
+    tmp_path: Path, include_credentials: bool
+) -> None:
     """Native sessions retain user profiles and the normal Codex resume store."""
     source_home = tmp_path / "source-codex-home"
     source_home.mkdir()
@@ -2792,10 +2795,17 @@ def test_native_codex_profile_and_history_are_bridged(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     (source_home / "sessions").mkdir()
+    (source_home / ".credentials.json").write_text('{"stale": true}', encoding="utf-8")
     target_home = tmp_path / "native-codex-home"
     target_home.mkdir()
+    (target_home / ".credentials.json").symlink_to(source_home / ".credentials.json")
 
-    _populate_codex_home_config(target_home, source_home, config_profile="local")
+    _populate_codex_home_config(
+        target_home,
+        source_home,
+        config_profile="local",
+        include_credentials=include_credentials,
+    )
 
     assert (target_home / "local.config.toml").is_file()
     bridged_config = tomllib.loads((target_home / "config.toml").read_text(encoding="utf-8"))
@@ -2807,6 +2817,7 @@ def test_native_codex_profile_and_history_are_bridged(tmp_path: Path) -> None:
     assert "databricks" not in bridged_config["model_providers"]
     assert (target_home / "auth.json").read_text(encoding="utf-8") == "{}\n"
     assert not (target_home / "auth.json").is_symlink()
+    assert not (target_home / ".credentials.json").exists()
     assert (target_home / "sessions").is_symlink()
     assert (target_home / "sessions").resolve() == (source_home / "sessions").resolve()
 
