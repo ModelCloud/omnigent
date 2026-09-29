@@ -6062,6 +6062,36 @@ def create_runner_app(
                 },
             )
 
+        # The web model picker updates the live app-server directly, bypassing
+        # CodexNativeExecutor.run_turn(). Resolve the provider here too so a
+        # LocalDex model switch and a return to an official model update model
+        # and provider atomically on the active thread.
+        routed_settings = settings
+        if isinstance(settings.get("model"), str) and settings["model"].strip():
+            from omnigent.inner.codex_native_executor import (
+                _localdex_runtime_settings_overrides,
+            )
+
+            try:
+                routed_settings = await _localdex_runtime_settings_overrides(state, settings)
+            except Exception as exc:  # noqa: BLE001 - surface invalid LocalDex routing.
+                _logger.warning(
+                    "Codex-native model/provider resolution failed for session=%s model=%s",
+                    conv_id,
+                    settings.get("model"),
+                    exc_info=True,
+                    extra={"session_id": conv_id},
+                )
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "error": "codex_native_settings_update_failed",
+                        "detail": _client_safe_error_detail(
+                            exc, context="Codex-native model/provider resolution"
+                        ),
+                    },
+                )
+
         codex_client = client_for_transport(
             state.socket_path,
             client_name="omnigent-codex-native-runner",
@@ -6072,7 +6102,7 @@ def create_runner_app(
                 "thread/settings/update",
                 {
                     "threadId": state.thread_id,
-                    **settings,
+                    **routed_settings,
                 },
             )
         except Exception as exc:  # noqa: BLE001 - surface app-server settings failures.
