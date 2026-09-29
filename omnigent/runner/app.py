@@ -5960,6 +5960,7 @@ def create_runner_app(
         *,
         action: str,
         missing_state_log_level: int = logging.WARNING,
+        wait_for_startup: bool = False,
     ) -> CodexNativeBridgeState | None:
         from omnigent.harnesses.codex_native.bridge import read_bridge_state
 
@@ -5986,6 +5987,34 @@ def create_runner_app(
         # Legacy LocalDex sessions use an isolated bridge directory, but the
         # app-server state file has the same Codex-compatible format.
         state = read_bridge_state(bridge_dir)
+        if state is None and wait_for_startup:
+            # A resumed session can take longer to restore its Codex thread
+            # than it takes the web model picker to send this update. Match
+            # the turn executor's bridge wait so a model/effort change arriving
+            # during app-server startup is applied as soon as the thread is
+            # published, instead of failing with a transient 503.
+            from omnigent.inner.codex_native_executor import (
+                _LEGACY_BRIDGE_STATE_WAIT_SECONDS,
+                _bridge_state_wait_seconds,
+                _wait_for_bridge_state,
+            )
+
+            max_wait_seconds = _bridge_state_wait_seconds(bridge_dir)
+            state, waited_seconds, _, _ = await _wait_for_bridge_state(
+                bridge_dir,
+                waited_seconds=0.0,
+                max_wait_seconds=max_wait_seconds,
+                startup_timeout_observed=(
+                    max_wait_seconds > _LEGACY_BRIDGE_STATE_WAIT_SECONDS
+                ),
+            )
+            if state is not None:
+                _logger.info(
+                    "Native Codex-compatible %s waited %.1fs for bridge startup for %s",
+                    action,
+                    waited_seconds,
+                    conv_id,
+                )
         if state is None:
             _logger.log(
                 missing_state_log_level,
@@ -6049,7 +6078,11 @@ def create_runner_app(
 
         if not settings:
             return Response(status_code=204)
-        state = await _codex_native_bridge_state_for_session(conv_id, action="settings update")
+        state = await _codex_native_bridge_state_for_session(
+            conv_id,
+            action="settings update",
+            wait_for_startup=True,
+        )
         if state is None:
             # No loaded Codex bridge means nothing applied the settings; a
             # silent 204 here would let the caller claim a switch the

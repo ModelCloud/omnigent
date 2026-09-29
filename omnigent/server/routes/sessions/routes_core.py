@@ -118,6 +118,7 @@ from omnigent.server.routes._sessions.common import (
     set_server_runner_router,
 )
 from omnigent.server.routes._sessions.helpers import (
+    _CODEX_NATIVE_SETTINGS_FORWARD_TIMEOUT_S,
     _TUI_INJECT_FORWARD_TIMEOUT_S,
     SessionLiveness,
     _agent_carries_cursor_fork_history,
@@ -2706,6 +2707,17 @@ def register_core_routes(
             # decided to keep. Same-replica fast path; the deferred stop's
             # archived-flag re-check covers a cross-replica Undo.
             _cancel_pending_archive_stop(session_id)
+        updated_native_agent = (
+            _native_coding_agent_for_agent(updated.agent_id)
+            if updated.agent_id is not None
+            else None
+        )
+        settings_forward_timeout = (
+            _CODEX_NATIVE_SETTINGS_FORWARD_TIMEOUT_S
+            if updated_native_agent is not None
+            and updated_native_agent.harness in ("codex-native", "localdex-native")
+            else _TUI_INJECT_FORWARD_TIMEOUT_S
+        )
         # The runner applies native settings live. Silent startup metadata
         # writes skip both recovery and forwarding to avoid recursive launches.
         live_forward = not body.silent
@@ -2717,7 +2729,7 @@ def register_core_routes(
                 # Same TUI injection budget as the model change below: the
                 # ``/effort`` confirm dialog can render seconds after the
                 # command.
-                timeout_s=_TUI_INJECT_FORWARD_TIMEOUT_S,
+                timeout_s=settings_forward_timeout,
             )
         if live_model_change:
             _model_forward = await _forward_session_change_to_runner(
@@ -2726,7 +2738,7 @@ def register_core_routes(
                 {"type": "model_change", "model": updated.model_override},
                 # The runner answers this by typing ``/model`` into the pane and
                 # confirming the dialog, which outlasts the default budget.
-                timeout_s=_TUI_INJECT_FORWARD_TIMEOUT_S,
+                timeout_s=settings_forward_timeout,
             )
             # Append a durable [System: model changed to X] note for sessions
             # whose history Omnigent writes. Gate on the wrapper label (NOT
