@@ -6705,6 +6705,12 @@ async def _forward_session_change_to_runner(
 #: happen.
 _TUI_INJECT_FORWARD_TIMEOUT_S = 20.0
 
+# Codex native settings are applied to the live app-server thread. A resumed
+# Codex thread may spend up to its configured startup budget restoring history
+# before the bridge state is published; allow that bounded startup wait plus
+# time for the settings RPC to complete.
+_CODEX_NATIVE_SETTINGS_FORWARD_TIMEOUT_S = 180.0
+
 
 async def _forward_session_change_to_runner_impl(
     session_id: str,
