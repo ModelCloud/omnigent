@@ -5961,29 +5961,42 @@ def create_runner_app(
         action: str,
         missing_state_log_level: int = logging.WARNING,
     ) -> CodexNativeBridgeState | None:
-        from omnigent.harnesses.codex_native.bridge import (
-            CODEX_NATIVE_BRIDGE_ID_LABEL_KEY,
-            bridge_dir_for_bridge_id,
-            read_bridge_state,
-        )
+        from omnigent.harnesses.codex_native.bridge import read_bridge_state
 
         labels = await _session_labels_for_runner_spawn(
             server_client=server_client,
             session_id=conv_id,
         )
-        bridge_id = labels.get(CODEX_NATIVE_BRIDGE_ID_LABEL_KEY) or conv_id
-        state = read_bridge_state(bridge_dir_for_bridge_id(bridge_id))
+        if _session_harness_name(conv_id) == "localdex-native":
+            from omnigent.harnesses.localdex_native.bridge import (
+                LOCALDEX_NATIVE_BRIDGE_ID_LABEL_KEY,
+                bridge_dir_for_bridge_id,
+            )
+
+            bridge_id = labels.get(LOCALDEX_NATIVE_BRIDGE_ID_LABEL_KEY) or conv_id
+            bridge_dir = bridge_dir_for_bridge_id(bridge_id)
+        else:
+            from omnigent.harnesses.codex_native.bridge import (
+                CODEX_NATIVE_BRIDGE_ID_LABEL_KEY,
+                bridge_dir_for_bridge_id,
+            )
+
+            bridge_id = labels.get(CODEX_NATIVE_BRIDGE_ID_LABEL_KEY) or conv_id
+            bridge_dir = bridge_dir_for_bridge_id(bridge_id)
+        # Legacy LocalDex sessions use an isolated bridge directory, but the
+        # app-server state file has the same Codex-compatible format.
+        state = read_bridge_state(bridge_dir)
         if state is None:
             _logger.log(
                 missing_state_log_level,
-                "Codex-native %s skipped for %s: no bridge state.",
+                "Native Codex-compatible %s skipped for %s: no bridge state.",
                 action,
                 conv_id,
             )
             return None
         if state.session_id != conv_id:
             _logger.warning(
-                "Codex-native %s skipped for %s: bridge belongs to %s.",
+                "Native Codex-compatible %s skipped for %s: bridge belongs to %s.",
                 action,
                 conv_id,
                 state.session_id,
@@ -6002,15 +6015,24 @@ def create_runner_app(
         :param conv_id: Conversation id, e.g. ``"conv_abc123"``.
         :returns: The session's bridge directory.
         """
+        labels = await _session_labels_for_runner_spawn(
+            server_client=server_client,
+            session_id=conv_id,
+        )
+        if _session_harness_name(conv_id) == "localdex-native":
+            from omnigent.harnesses.localdex_native.bridge import (
+                LOCALDEX_NATIVE_BRIDGE_ID_LABEL_KEY,
+                bridge_dir_for_bridge_id,
+            )
+
+            return bridge_dir_for_bridge_id(
+                labels.get(LOCALDEX_NATIVE_BRIDGE_ID_LABEL_KEY) or conv_id
+            )
         from omnigent.harnesses.codex_native.bridge import (
             CODEX_NATIVE_BRIDGE_ID_LABEL_KEY,
             bridge_dir_for_bridge_id,
         )
 
-        labels = await _session_labels_for_runner_spawn(
-            server_client=server_client,
-            session_id=conv_id,
-        )
         return bridge_dir_for_bridge_id(labels.get(CODEX_NATIVE_BRIDGE_ID_LABEL_KEY) or conv_id)
 
     codex_goal_runner = CodexGoalRunner(
@@ -6040,6 +6062,36 @@ def create_runner_app(
                 },
             )
 
+        # The web model picker updates the live app-server directly, bypassing
+        # CodexNativeExecutor.run_turn(). Resolve the provider here too so a
+        # LocalDex model switch and a return to an official model update model
+        # and provider atomically on the active thread.
+        routed_settings = settings
+        if isinstance(settings.get("model"), str) and settings["model"].strip():
+            from omnigent.inner.codex_native_executor import (
+                _localdex_runtime_settings_overrides,
+            )
+
+            try:
+                routed_settings = await _localdex_runtime_settings_overrides(state, settings)
+            except Exception as exc:  # noqa: BLE001 - surface invalid LocalDex routing.
+                _logger.warning(
+                    "Codex-native model/provider resolution failed for session=%s model=%s",
+                    conv_id,
+                    settings.get("model"),
+                    exc_info=True,
+                    extra={"session_id": conv_id},
+                )
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "error": "codex_native_settings_update_failed",
+                        "detail": _client_safe_error_detail(
+                            exc, context="Codex-native model/provider resolution"
+                        ),
+                    },
+                )
+
         codex_client = client_for_transport(
             state.socket_path,
             client_name="omnigent-codex-native-runner",
@@ -6050,7 +6102,7 @@ def create_runner_app(
                 "thread/settings/update",
                 {
                     "threadId": state.thread_id,
-                    **settings,
+                    **routed_settings,
                 },
             )
         except Exception as exc:  # noqa: BLE001 - surface app-server settings failures.
@@ -6280,12 +6332,10 @@ def create_runner_app(
             read_codex_home_config_model,
             Path(state.codex_home),
         )
-        # A LocalDex installation is still ``codex-native``. Its custom
-        # OpenAI-compatible provider is not reported by Codex's account
-        # ``model/list`` response, so add the registered local model to that
-        # very same live picker.  It is deliberately not a second harness or
-        # a provider-derived replacement for the account rows.
-        if _session_harness_name(conv_id) == "codex-native":
+        # LocalDex's custom OpenAI-compatible provider is not reported by
+        # Codex's account ``model/list`` response, so add the registered local
+        # model to the live picker for both current and legacy LocalDex sessions.
+        if _session_harness_name(conv_id) in {"codex-native", "localdex-native"}:
             from omnigent.harnesses.localdex_native.config import (
                 load_localdex_config,
                 with_localdex_model_picker_row,
@@ -10481,8 +10531,14 @@ def create_runner_app(
                 _session_reasoning_effort[conversation_id] = effort
             else:
                 _session_reasoning_effort.pop(conversation_id, None)
-            if harness in ("claude-native", "codex-native", "pi-native", "devin-native"):
-                if harness == "codex-native":
+            if harness in (
+                "claude-native",
+                "codex-native",
+                "localdex-native",
+                "pi-native",
+                "devin-native",
+            ):
+                if harness in ("codex-native", "localdex-native"):
                     return await _handle_codex_native_settings_update(
                         conversation_id,
                         {"effort": effort},
@@ -10508,6 +10564,7 @@ def create_runner_app(
             if harness in (
                 "claude-native",
                 "codex-native",
+                "localdex-native",
                 "cursor-native",
                 "opencode-native",
                 "kiro-native",
@@ -10523,7 +10580,7 @@ def create_runner_app(
                             "detail": "Body 'model' must be a string or null",
                         },
                     )
-                if harness == "codex-native":
+                if harness in ("codex-native", "localdex-native"):
                     if model is None or not model.strip():
                         return Response(status_code=204)
                     return await _handle_codex_native_settings_update(
@@ -10563,7 +10620,7 @@ def create_runner_app(
 
         if body_type == "plan_mode_change":
             harness = _session_harness_name(conversation_id)
-            if harness == "codex-native":
+            if harness in ("codex-native", "localdex-native"):
                 enabled = body.get("enabled") if isinstance(body, dict) else None
                 if not isinstance(enabled, bool):
                     return JSONResponse(
