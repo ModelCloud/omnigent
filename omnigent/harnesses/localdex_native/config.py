@@ -175,6 +175,13 @@ def localdex_models(config: LocalDexConfig) -> tuple[LocalDexModelRegistration, 
 
 def localdex_runtime_provider_id(provider: str) -> str:
     """Map a LocalDex config name into a private Codex provider namespace."""
+    # LocalDex's Codex fork routes QB models through the canonical `localdex`
+    # provider id, including during `thread/settings/update`. Keep that one
+    # provider id stable so the catalog, startup config, and live model switch
+    # all resolve the same table. Other provider names remain namespaced to
+    # avoid shadowing Codex's built-in OpenAI or user-defined gateway entries.
+    if provider == "localdex":
+        return provider
     slug = re.sub(r"[^A-Za-z0-9_-]+", "-", provider).strip("-_")[:24] or "provider"
     digest = hashlib.sha256(provider.encode("utf-8")).hexdigest()[:10]
     return f"omnigent-localdex-{slug}-{digest}"
