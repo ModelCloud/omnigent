@@ -845,6 +845,14 @@ describe("Composer slash-command menu", () => {
     expect(ta.value).toBe("/deslop ");
   });
 
+  it.each(["/context", "/help"])("Tab only fills the %s built-in", (command) => {
+    render(<Composer {...composerProps()} />);
+    fireEvent.change(textarea(), { target: { value: command } });
+    fireEvent.keyDown(textarea(), { key: "Tab" });
+    expect(textarea()).toHaveValue(command + " ");
+    expect(screen.queryByText("No usage data yet — send a message first.")).toBeNull();
+  });
+
   it("Tab completes a match found only mid-name (exercises menuMatches, not just the render filter)", () => {
     render(<Composer {...composerProps()} />);
     const ta = textarea();
@@ -2477,8 +2485,22 @@ describe("Composer shared visible controls", () => {
       .mockResolvedValue(undefined);
     renderWithTooltips(<Composer {...composerProps({ showCodexApprovalMode: true })} />);
     fireEvent.keyDown(screen.getByTestId("composer-permission-chip"), { key: "ArrowDown" });
-    fireEvent.click(screen.getByTestId("composer-permission-option-read-only"));
-    await waitFor(() => expect(setApproval).toHaveBeenCalledWith("read-only"));
+    fireEvent.click(screen.getByTestId("composer-permission-option-full-access"));
+    await waitFor(() => expect(setApproval).toHaveBeenCalledWith("full-access"));
+  });
+
+  it("doesn't offer Read Only as a codex runtime switch", () => {
+    useChatStore.setState({
+      conversationId: "codex-no-read-only",
+      codexApprovalMode: "read-only",
+    });
+    renderWithTooltips(<Composer {...composerProps({ showCodexApprovalMode: true })} />);
+    const chip = screen.getByTestId("composer-permission-chip");
+    // A session launched read-only still shows its live mode on the chip.
+    expect(chip).toHaveTextContent("Read Only");
+    fireEvent.keyDown(chip, { key: "ArrowDown" });
+    expect(screen.getByTestId("composer-permission-option-full-access")).toBeInTheDocument();
+    expect(screen.queryByTestId("composer-permission-option-read-only")).toBeNull();
   });
 });
 

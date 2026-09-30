@@ -176,6 +176,7 @@ export type { ConversationScroller } from "@/components/chat/chatBubbleParts";
 import {
   type ConversationScroller,
   SessionSharedContext,
+  computeIsTurnActive,
   computeIsWorking,
 } from "@/components/chat/chatBubbleParts";
 import { useSession } from "@/hooks/useSession";
@@ -728,7 +729,7 @@ export function ChatPage() {
   // Keep the parent's Stop action live while its turn waits on an elicitation.
   // Child activity and display suppression belong to `showsWorking` below.
   const isWorking =
-    computeIsWorking(sessionStatus) || status === "streaming" || hasPendingInitialMessage;
+    computeIsTurnActive(sessionStatus, status === "streaming") || hasPendingInitialMessage;
   // Managed-sandbox stages own the in-progress slot with specific pipeline
   // copy. A normal terminal runner launch keeps the standard Working shimmer
   // so startup does not introduce a second, special chat state.
@@ -3105,12 +3106,16 @@ function ComposerImpl(
     }
   };
 
-  // Skills insert at the caret; standalone no-argument built-ins execute immediately.
+  const completeMenuSelection = (cmd: string) => {
+    const completion = slashCompletion.complete(cmd);
+    setValue(completion.text);
+    dirtyRef.current = true;
+  };
+
+  // Skills insert at the caret; Enter/click executes standalone no-argument built-ins.
   const applyMenuSelection = (cmd: string) => {
     if (slashCompletion.inline || slashCommandsWithArgs.has(cmd)) {
-      const completion = slashCompletion.complete(cmd);
-      setValue(completion.text);
-      dirtyRef.current = true;
+      completeMenuSelection(cmd);
     } else {
       // Execute immediately — no argument needed.
       setValue("");
@@ -3138,6 +3143,7 @@ function ComposerImpl(
     escapeClearsOnlyWithContent: true,
     allowOpen: inputFocused && draft.quotes.length === 0 && files.length === 0,
     onSelect: applyMenuSelection,
+    onTabComplete: completeMenuSelection,
     clearText: () => setValue(""),
   });
 
