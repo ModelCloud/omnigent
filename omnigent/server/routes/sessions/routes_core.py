@@ -2707,10 +2707,13 @@ def register_core_routes(
             # decided to keep. Same-replica fast path; the deferred stop's
             # archived-flag re-check covers a cross-replica Undo.
             _cancel_pending_archive_stop(session_id)
-        updated_native_agent = (
-            _native_coding_agent_for_agent(updated.agent_id)
+        updated_agent = (
+            await asyncio.to_thread(agent_store.get, updated.agent_id)
             if updated.agent_id is not None
             else None
+        )
+        updated_native_agent = (
+            _native_coding_agent_for_agent(updated_agent) if updated_agent is not None else None
         )
         settings_forward_timeout = (
             _CODEX_NATIVE_SETTINGS_FORWARD_TIMEOUT_S
@@ -2832,6 +2835,10 @@ def register_core_routes(
                     "type": "codex_approval_mode_change",
                     "approval_mode": requested_codex_approval_mode,
                 },
+                # The runner drives Codex's /permissions popup — reading the rows,
+                # pressing the preset's digit, then confirming the echo — which
+                # outlasts the default forward budget.
+                timeout_s=_TUI_INJECT_FORWARD_TIMEOUT_S,
             )
             # Raises unless the runner drove the /permissions popup, so the label
             # can never claim a preset the Codex TUI wasn't switched to. Codex owns
