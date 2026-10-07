@@ -35,7 +35,6 @@ if TYPE_CHECKING:
         CodexAppServerClient,
         CodexNativeAppServer,
     )
-    from omnigent.harnesses.codex_native.bridge import CodexNativeBridgeState
     from omnigent.harnesses.opencode_native.app_server import OpenCodeNativeServer
     from omnigent.harnesses.opencode_native.client import OpenCodeClient, OpenCodeSession
     from omnigent.harnesses.opencode_native.forwarder import OpenCodeNativeForwarder
@@ -56,7 +55,14 @@ from omnigent.entities.session_resources import (
     session_resource_view_to_dict,
     terminal_resource_id,
 )
-from omnigent.errors import ErrorCategory, ErrorCode, ErrorImpact, ErrorPhase, OmnigentError
+from omnigent.errors import (
+    SESSION_AGENT_MISSING_MESSAGE,
+    ErrorCategory,
+    ErrorCode,
+    ErrorImpact,
+    ErrorPhase,
+    OmnigentError,
+)
 from omnigent.harness_plugins import native_provider_for_key
 from omnigent.models.model_override import validate_model_override
 from omnigent.native.native_coding_agents import (
@@ -85,6 +91,7 @@ from omnigent.runner.resource_registry import (
 from omnigent.runner.session_init_protocol import (
     RunnerSessionInitEnvelope,
 )
+from omnigent.runner.transports.ws_tunnel.event_delivery import RunnerEventDispatcher
 from omnigent.spec.types import AgentSpec
 
 _logger = logging.getLogger("omnigent.runner.app")
@@ -349,45 +356,6 @@ _CODEX_SIGN_IN_POLL_INTERVAL_S = 2.0
 # Background Codex app-server instances for host-spawned codex-native
 # runners, kept referenced so they aren't garbage-collected mid-run.
 _AUTO_CODEX_APP_SERVERS: dict[str, CodexNativeAppServer] = {}
-
-
-def _bridge_owner_is_dead(bridge_dir: Path) -> bool:
-    """Return whether a bridge still names a provably-dead prior runner.
-
-    Missing or malformed ownership data fails closed. A stale active turn is
-    only an interruption candidate after its owning runner is known dead.
-    """
-    from omnigent.inner.terminal import _process_alive
-    from omnigent.native.native_bridge_common import OWNER_PID_FILENAME
-
-    try:
-        owner_pid = int((bridge_dir / OWNER_PID_FILENAME).read_text(encoding="utf-8").strip())
-    except (OSError, ValueError):
-        return False
-    if owner_pid <= 0:
-        return False
-    return not _process_alive(owner_pid)
-
-
-def _localdex_interrupted_turn_id(
-    *,
-    selected_local_model: bool,
-    prior_owner_dead: bool,
-    previous_state: CodexNativeBridgeState | None,
-    session_id: str,
-    external_session_id: str | None,
-) -> str | None:
-    """Return an interrupted LocalDex turn only for a dead-owner active bridge."""
-    if (
-        not selected_local_model
-        or not prior_owner_dead
-        or external_session_id is None
-        or previous_state is None
-        or previous_state.session_id != session_id
-        or previous_state.thread_id != external_session_id
-    ):
-        return None
-    return previous_state.active_turn_id
 
 
 # Background OpenCode ``opencode serve`` instances for host-spawned
@@ -986,7 +954,9 @@ def _kiro_session_workspace(session_workspace: str | None) -> Path:
 # under load. Left un-retried it fails Codex terminal launch, ensure, and the
 # next turn from one blip; a bounded retry rides it out (the read is idempotent)
 # before surfacing a server-attributed hard error, so persistent cases fail loud.
-_LAUNCH_CONFIG_FETCH_TIMEOUT_S = 10.0
+# Slow reads take 10-15 s. A shorter timeout makes every retry time out, and makes
+# the single-attempt launch metadata reads below fall back to their defaults.
+_LAUNCH_CONFIG_FETCH_TIMEOUT_S = 20.0
 _LAUNCH_CONFIG_FETCH_ATTEMPTS = 3
 _LAUNCH_CONFIG_FETCH_BACKOFF_BASE_S = 0.5
 _LAUNCH_CONFIG_FETCH_BACKOFF_CAP_S = 4.0
@@ -1274,21 +1244,39 @@ async def _codex_native_launch_config(
     *,
     session_id: str,
     server_client: httpx.AsyncClient | None,
+    session_init: RunnerSessionInitEnvelope | None = None,
 ) -> _CodexNativeLaunchConfig:
     """
-    Fetch and validate persisted Codex launch config for a session.
+    Load and validate persisted Codex launch config for a session.
 
     :param session_id: Session/conversation id, e.g. ``"conv_abc123"``.
     :param server_client: Runner Omnigent server client.
+    :param session_init: Current initialization metadata. Missing or incomplete
+        metadata falls back to the session endpoint for older servers.
     :returns: Parsed launch config.
     :raises RuntimeError: If the session snapshot or required runner env is
         unavailable.
     """
-    snapshot = await _fetch_native_launch_snapshot(
-        server_client=server_client,
-        session_id=session_id,
-        runtime_label="Codex",
-    )
+    launch_fields = {
+        "workspace",
+        "terminal_launch_args",
+        "model_override",
+        "external_session_id",
+        "reasoning_effort",
+        "labels",
+        "harness_override",
+        "cost_control_mode_override",
+    }
+    # Older envelopes can omit fields that default to None during parsing.
+    # Only explicit values, including nulls, replace the legacy config read.
+    if session_init is not None and launch_fields <= session_init.snapshot.model_fields_set:
+        snapshot = session_init.snapshot.model_dump(mode="json")
+    else:
+        snapshot = await _fetch_native_launch_snapshot(
+            server_client=server_client,
+            session_id=session_id,
+            runtime_label="Codex",
+        )
     terminal_launch_args = snapshot.get("terminal_launch_args")
     if terminal_launch_args is not None and not (
         isinstance(terminal_launch_args, list)
@@ -4741,6 +4729,7 @@ async def _auto_create_codex_terminal(
     skills_filter: str | list[str] = "all",
     agent_spec: AgentSpec | ResolvedSpec | None = None,
     server_client: httpx.AsyncClient | None = None,
+    session_init: RunnerSessionInitEnvelope | None = None,
     ensure_comment_relay: _EnsureCommentRelay | None = None,
     localdex: bool = False,
 ) -> SessionResourceView:
@@ -4784,6 +4773,8 @@ async def _auto_create_codex_terminal(
         default, e.g. ``"gpt-5.4-mini"``.
     :param server_client: Runner's Omnigent server HTTP client. Used to read
         persisted launch args and the native thread id.
+    :param session_init: Snapshot supplied for this initialization. Later
+        terminal ensures omit it to read updated configuration from the server.
     :returns: The created terminal resource view.
     """
     import socket as _socket
@@ -4803,7 +4794,6 @@ async def _auto_create_codex_terminal(
     )
     from omnigent.harnesses.codex_native.bridge import (
         CodexNativeBridgeState,
-        bridge_dir_for_bridge_id,
         clear_bridge_state,
         codex_home_for_bridge_dir,
         prepare_bridge_dir,
@@ -4817,18 +4807,15 @@ async def _auto_create_codex_terminal(
     launch_config = await _codex_native_launch_config(
         session_id=session_id,
         server_client=server_client,
+        session_init=session_init,
     )
     original_external_session_id = launch_config.external_session_id
     workspace = str(launch_config.workspace)
     if localdex:
         from omnigent.harnesses.localdex_native import bridge as localdex_bridge
 
-        _prior_bridge_dir = localdex_bridge.bridge_dir_for_bridge_id(session_id)
-        _prior_bridge_owner_dead = _bridge_owner_is_dead(_prior_bridge_dir)
         bridge_dir = localdex_bridge.prepare_bridge_dir(session_id)
     else:
-        _prior_bridge_dir = bridge_dir_for_bridge_id(session_id)
-        _prior_bridge_owner_dead = _bridge_owner_is_dead(_prior_bridge_dir)
         bridge_dir = prepare_bridge_dir(session_id)
     socket_path = socket_path_for_bridge_dir(bridge_dir)
     codex_home = codex_home_for_bridge_dir(bridge_dir)
@@ -4877,7 +4864,10 @@ async def _auto_create_codex_terminal(
     # Thread the spec so its executor.auth / legacy profile win over
     # machine-level config, parity with the in-process harness (#2744).
     _launch_spec = agent_spec.spec if isinstance(agent_spec, ResolvedSpec) else agent_spec
-    _codex_launch = resolve_native_codex_launch(model=default_model, spec=_launch_spec)
+    _codex_terminal_args = launch_config.terminal_launch_args or ()
+    _codex_launch = resolve_native_codex_launch(
+        model=default_model, spec=_launch_spec, terminal_launch_args=_codex_terminal_args
+    )
     default_model_provider = codex_session_meta_model_provider(_codex_launch)
     from omnigent.inference_config import binding_for_harness, load_runtime_inference_config
 
@@ -4985,7 +4975,10 @@ async def _auto_create_codex_terminal(
     _fresh_codex_catalog: list[_JsonObject] | None = None
     try:
         _catalog_launch = await asyncio.to_thread(
-            resolve_native_codex_launch, model=None, spec=_launch_spec
+            resolve_native_codex_launch,
+            model=None,
+            spec=_launch_spec,
+            terminal_launch_args=_codex_terminal_args,
         )
         _fresh_codex_catalog = fresh_codex_launch_catalog(
             codex_path=_codex_cli_path,
@@ -5022,7 +5015,10 @@ async def _auto_create_codex_terminal(
         try:
             if _catalog_launch is None:
                 _catalog_launch = await asyncio.to_thread(
-                    resolve_native_codex_launch, model=None, spec=_launch_spec
+                    resolve_native_codex_launch,
+                    model=None,
+                    spec=_launch_spec,
+                    terminal_launch_args=_codex_terminal_args,
                 )
             # Read staleness before the fetch can start a background probe.
             # The fingerprint and probe must use this session's provider.
@@ -5055,7 +5051,9 @@ async def _auto_create_codex_terminal(
                 # Re-resolve so provider overrides cannot retain the old model.
                 # A failed probe permits fallback, but cannot retire the pick.
                 _codex_launch = resolve_native_codex_launch(
-                    model=unpinned_model, spec=_launch_spec
+                    model=unpinned_model,
+                    spec=_launch_spec,
+                    terminal_launch_args=_codex_terminal_args,
                 )
                 pick_to_reset = pick if fresh_rows else None
                 outcome = (
@@ -5096,26 +5094,6 @@ async def _auto_create_codex_terminal(
         if _codex_catalog and not _codex_catalog_was_stale:
             _fresh_codex_catalog = _codex_catalog
     _session_meta_provider = codex_session_meta_model_provider(_codex_launch)
-    # A host restart destroys the LocalDex app-server and its in-flight HTTP
-    # stream. Resume only if the *previous* bridge was owned by a now-dead
-    # runner and still recorded an active turn. Idle sessions have no active
-    # turn and ordinary in-process terminal recreation still sees a live owner.
-    _previous_bridge_state = read_bridge_state(bridge_dir)
-    _restart_continuation_turn_id = _localdex_interrupted_turn_id(
-        selected_local_model=selected_local_model,
-        prior_owner_dead=_prior_bridge_owner_dead,
-        previous_state=_previous_bridge_state,
-        session_id=session_id,
-        external_session_id=original_external_session_id,
-    )
-    if _restart_continuation_turn_id is not None:
-        _logger.info(
-            "LocalDex interrupted-turn recovery armed: session=%s thread=%s turn=%s",
-            session_id,
-            original_external_session_id,
-            _restart_continuation_turn_id,
-            extra={"session_id": session_id},
-        )
     # Cancel any surviving forwarder first so its teardown closes the OLD app-server,
     # not the one registered below — and so it can't mirror alongside the new one.
     await _cancel_auto_forwarder_task(session_id)
@@ -5580,6 +5558,27 @@ async def _auto_create_codex_terminal(
     # ``_AUTO_CODEX_APP_SERVERS`` entry, or the failure leaks the app-server.
     try:
         if launch_config.external_session_id is not None:
+            if launch_config.reasoning_effort:
+                # A resumed thread runs the rollout's effort, not the config pin.
+                try:
+                    await apply_codex_thread_effort(
+                        codex_ws_url,
+                        launch_config.external_session_id,
+                        launch_config.reasoning_effort,
+                        model=_codex_launch.model,
+                        bridge_dir=bridge_dir,
+                    )
+                except Exception:  # noqa: BLE001 — a failed update must not sink the launch
+                    _logger.warning(
+                        "codex-native: could not apply reasoning effort %r to resumed thread "
+                        "%s for session %s; the next web turn re-applies it",
+                        launch_config.reasoning_effort,
+                        launch_config.external_session_id,
+                        session_id,
+                        exc_info=True,
+                        extra={"session_id": session_id},
+                    )
+            # Publish after resume repair so live settings cannot interleave it.
             write_bridge_state(
                 bridge_dir,
                 CodexNativeBridgeState(
@@ -5593,25 +5592,6 @@ async def _auto_create_codex_terminal(
                     default_model_provider=default_model_provider,
                 ),
             )
-            if launch_config.reasoning_effort:
-                # A resumed thread runs the rollout's effort, not the config pin.
-                try:
-                    await apply_codex_thread_effort(
-                        codex_ws_url,
-                        launch_config.external_session_id,
-                        launch_config.reasoning_effort,
-                        model=_codex_launch.model,
-                    )
-                except Exception:  # noqa: BLE001 — a failed update must not sink the launch
-                    _logger.warning(
-                        "codex-native: could not apply reasoning effort %r to resumed thread "
-                        "%s for session %s; the next web turn re-applies it",
-                        launch_config.reasoning_effort,
-                        launch_config.external_session_id,
-                        session_id,
-                        exc_info=True,
-                        extra={"session_id": session_id},
-                    )
         launched = await _launch_codex_native_tui(
             session_id,
             resource_registry,
@@ -5675,16 +5655,6 @@ async def _auto_create_codex_terminal(
             subagent_router=_codex_router,
             turn_router=_codex_turn_router,
         )
-    elif _restart_continuation_turn_id is None:
-        forwarder_coro = _codex_forward_known_thread(
-            session_id=session_id,
-            bridge_dir=bridge_dir,
-            codex_ws_url=codex_ws_url,
-            thread_id=launch_config.external_session_id,
-            client=retained_resume_client,
-            subagent_router=_codex_router,
-            turn_router=_codex_turn_router,
-        )
     else:
         forwarder_coro = _codex_forward_known_thread(
             session_id=session_id,
@@ -5692,9 +5662,9 @@ async def _auto_create_codex_terminal(
             codex_ws_url=codex_ws_url,
             thread_id=launch_config.external_session_id,
             client=retained_resume_client,
+            app_server=app_server,
             subagent_router=_codex_router,
             turn_router=_codex_turn_router,
-            localdex_restart_recovery_turn_id=_restart_continuation_turn_id,
         )
     _forwarder_task = asyncio.create_task(
         forwarder_coro,
@@ -5984,6 +5954,7 @@ async def _codex_discover_thread_and_forward(
         CODEX_NATIVE_DIRECT_THREAD_START_TIMEOUT_SECONDS,
         CodexNativeBridgeState,
         clear_bridge_startup_error,
+        record_app_server_stopped,
         write_bridge_startup_error,
         write_bridge_state,
     )
@@ -6023,6 +5994,7 @@ async def _codex_discover_thread_and_forward(
 
     discovery_started_at = time.monotonic()
     startup_pending_recorded = False
+    cancelled = False
     try:
         while True:
             try:
@@ -6121,6 +6093,24 @@ async def _codex_discover_thread_and_forward(
                 except Exception as diagnostics_error:  # noqa: BLE001
                     # Diagnostics must not replace the startup error or prevent cleanup.
                     diagnostics = {"diagnostics_error_type": type(diagnostics_error).__name__}
+                # A timeout after the TUI already died is a symptom: attribute the
+                # exit itself rather than the generic TimeoutError.
+                exit_attribution: dict[str, object] = {}
+                if isinstance(exc, _CodexTerminalExited) or diagnostics.get(
+                    "terminal_exited_undetected"
+                ):
+                    from omnigent.runner.launch_failure import classify_terminal_failure
+
+                    exit_status = diagnostics.get("terminal_exit_status")
+                    last_output = diagnostics.get("terminal_last_output")
+                    diagnosis = classify_terminal_failure(
+                        command="codex",
+                        exit_status=exit_status if isinstance(exit_status, int) else None,
+                        output=last_output if isinstance(last_output, str) else None,
+                    )
+                    exit_attribution["error_category"] = (
+                        diagnosis.category if diagnosis else ErrorCategory.RUNNER
+                    ).value
                 failure_event = debug_event("codex_thread_start_failed", session_id=session_id)
                 failure_event["attributes"] = {
                     "harness": "codex-native",
@@ -6144,6 +6134,9 @@ async def _codex_discover_thread_and_forward(
                     "elapsed_ms": round((time.monotonic() - discovery_started_at) * 1000),
                     "login_required": login_required,
                     **diagnostics,
+                    **exit_attribution,
+                    "error_impact": ErrorImpact.BLOCKING.value,
+                    "error_phase": ErrorPhase.HARNESS_STARTUP.value,
                 }
                 _logger.exception(
                     "Codex TUI never started a thread for %s; chat will not forward%s%s",
@@ -6268,6 +6261,9 @@ async def _codex_discover_thread_and_forward(
             client=event_client,
             auth=_RunnerDatabricksAuth(auth_factory),
         )
+    except asyncio.CancelledError:
+        cancelled = True
+        raise
     finally:
         # Tear down the listener and the per-session app-server whenever
         # forwarding ends — discovery failed, the app-server connection dropped
@@ -6288,6 +6284,9 @@ async def _codex_discover_thread_and_forward(
         leftover_app_server = app_server
         if app_server is None or _AUTO_CODEX_APP_SERVERS.get(session_id) is app_server:
             leftover_app_server = _AUTO_CODEX_APP_SERVERS.pop(session_id, None)
+            if not cancelled:
+                # The pane outlives its app-server; mark it so the next ensure replaces it.
+                record_app_server_stopped(bridge_dir)
         with contextlib.suppress(Exception):
             await event_client.close()
         if leftover_app_server is not None:
@@ -6304,9 +6303,9 @@ async def _codex_forward_known_thread(
     codex_ws_url: str,
     thread_id: str,
     client: CodexAppServerClient | None = None,
+    app_server: CodexNativeAppServer | None = None,
     subagent_router: SubagentRouter | None = None,
     turn_router: TurnRouter | None = None,
-    localdex_restart_recovery_turn_id: str | None = None,
 ) -> None:
     """
     Forward a runner-owned Codex terminal that resumes an existing thread.
@@ -6318,46 +6317,31 @@ async def _codex_forward_known_thread(
     :param thread_id: Existing Codex app-server thread id, e.g.
         ``"thread_abc123"``.
     :param client: Retained preload subscription, owned and closed by this forwarder.
+    :param app_server: This launch's process. Only a registry entry that is still
+        this process is dropped on exit, so a late teardown cannot pop the entry a
+        re-created terminal has since installed. ``None`` drops whatever the
+        session has registered.
     :param subagent_router: Router this terminal launch started, torn down
         in the ``finally``. Passed so a late teardown cannot close the
         endpoint a re-created terminal has since installed.
     :param turn_router: First-message routing endpoint this launch
         started, torn down alongside the subagent one.
-    :param localdex_restart_recovery_turn_id: Active LocalDex turn observed
-        before the prior host cleared its bridge. When present, the restored,
-        idle thread receives one automatic continuation. ``None`` preserves
-        ordinary Codex behavior.
     :returns: None. Runs until cancelled or the app-server connection
         closes.
     """
+    from omnigent.harnesses.codex_native.bridge import record_app_server_stopped
     from omnigent.harnesses.codex_native.forwarder import supervise_forwarder
     from omnigent.runner._entry import (
         _make_auth_token_factory,
         _RunnerDatabricksAuth,
     )
 
+    cancelled = False
     try:
         server_url = _required_runner_env("RUNNER_SERVER_URL")
         auth_factory = _make_auth_token_factory()
         auth_token = auth_factory() if auth_factory is not None else None
         headers = {"Authorization": f"Bearer {auth_token}"} if auth_token else {}
-        on_subscribed = None
-        if localdex_restart_recovery_turn_id is not None:
-
-            async def _continue_localdex_after_host_restart(
-                codex_client: CodexAppServerClient,
-                _forwarder_state: object,
-            ) -> None:
-                del _forwarder_state
-                await _start_localdex_host_restart_continuation(
-                    codex_client,
-                    bridge_dir=bridge_dir,
-                    thread_id=thread_id,
-                    interrupted_turn_id=localdex_restart_recovery_turn_id,
-                )
-
-            on_subscribed = _continue_localdex_after_host_restart
-
         await supervise_forwarder(
             base_url=server_url,
             headers=headers,
@@ -6367,8 +6351,10 @@ async def _codex_forward_known_thread(
             thread_id=thread_id,
             client=client,
             auth=_RunnerDatabricksAuth(auth_factory),
-            on_subscribed=on_subscribed,
         )
+    except asyncio.CancelledError:
+        cancelled = True
+        raise
     finally:
         if client is not None:
             with contextlib.suppress(Exception):
@@ -6382,83 +6368,17 @@ async def _codex_forward_known_thread(
                 stage="native_input",
             ),
         )
-        leftover_app_server = _AUTO_CODEX_APP_SERVERS.pop(session_id, None)
+        leftover_app_server = app_server
+        if app_server is None or _AUTO_CODEX_APP_SERVERS.get(session_id) is app_server:
+            leftover_app_server = _AUTO_CODEX_APP_SERVERS.pop(session_id, None)
+            if not cancelled:
+                # The pane outlives its app-server; mark it so the next ensure replaces it.
+                record_app_server_stopped(bridge_dir)
         if leftover_app_server is not None:
             with contextlib.suppress(Exception):
                 await leftover_app_server.close()
         await _shutdown_session_router_async(session_id, subagent_router)
         await _shutdown_session_turn_router_async(session_id, turn_router)
-
-
-_RESTART_RECOVERY_CONTINUATION_PROMPT = (
-    "[System: The previous response was interrupted before completion. Continue "
-    "the task from the existing conversation. Do not repeat completed work; "
-    "continue from the last confirmed state.]"
-)
-
-
-async def _start_localdex_host_restart_continuation(
-    client: CodexAppServerClient,
-    *,
-    bridge_dir: Path,
-    thread_id: str,
-    interrupted_turn_id: str,
-) -> None:
-    """Start one replacement LocalDex turn after a host-restart resume.
-
-    ``thread/resume`` restores durable conversation state, but an HTTP
-    generation owned by the old host has no resumable socket. Start a fresh
-    continuation only while the restored bridge is idle; a user message or a
-    live turn that wins the race always takes precedence.
-    """
-    from omnigent.harnesses.codex_native.bridge import (
-        read_bridge_state,
-        update_active_turn_id,
-    )
-
-    state = read_bridge_state(bridge_dir)
-    if state is None or state.thread_id != thread_id:
-        _logger.info(
-            "LocalDex host-restart continuation skipped; bridge changed: "
-            "thread=%s interrupted_turn=%s",
-            thread_id,
-            interrupted_turn_id,
-        )
-        return
-    if state.active_turn_id is not None:
-        _logger.info(
-            "LocalDex host-restart continuation skipped; thread already active: "
-            "thread=%s active_turn=%s interrupted_turn=%s",
-            thread_id,
-            state.active_turn_id,
-            interrupted_turn_id,
-        )
-        return
-    response = await client.request(
-        "turn/start",
-        {
-            "threadId": thread_id,
-            "input": [{"type": "text", "text": _RESTART_RECOVERY_CONTINUATION_PROMPT}],
-            "environments": [
-                {
-                    "environmentId": "local",
-                    "cwd": state.cwd or str(Path.cwd()),
-                }
-            ],
-        },
-    )
-    result = response.get("result")
-    turn = result.get("turn") if isinstance(result, dict) else None
-    turn_id = turn.get("id") if isinstance(turn, dict) else None
-    if not isinstance(turn_id, str) or not turn_id:
-        raise RuntimeError("LocalDex restart continuation did not return a turn id")
-    update_active_turn_id(bridge_dir, turn_id)
-    _logger.info(
-        "LocalDex host-restart continuation started: thread=%s interrupted_turn=%s turn=%s",
-        thread_id,
-        interrupted_turn_id,
-        turn_id,
-    )
 
 
 async def _run_antigravity_reader(
@@ -7209,7 +7129,7 @@ async def _session_payload_for_host_spawn_check(
         resp = await server_client.get(
             f"/v1/sessions/{urllib.parse.quote(session_id, safe='')}",
             params=_SESSION_METADATA_PARAMS,
-            timeout=10.0,
+            timeout=_LAUNCH_CONFIG_FETCH_TIMEOUT_S,
         )
     except httpx.HTTPError:
         _logger.warning(
@@ -7833,6 +7753,12 @@ def _native_terminal_start_error_payload(
         exception_type=type(exc).__name__,
         exception_cause_type=type(exc.__cause__).__name__ if exc.__cause__ is not None else None,
         cause_code=exc.code if isinstance(exc, OmnigentError) else None,
+        # The warning below carries no exc_info for a missing agent, so the
+        # sink cannot derive its category.
+        error_category=exc.category.value
+        if isinstance(exc, OmnigentError) and missing_agent
+        else None,
+        error_impact=ErrorImpact.BLOCKING.value,
     )
     if missing_agent:
         # Expected session-lifecycle condition: the session's agent was deleted
@@ -7851,11 +7777,7 @@ def _native_terminal_start_error_payload(
         return {
             "code": ErrorCode.SESSION_AGENT_MISSING,
             "error_id": error_id,
-            "message": (
-                "This session's agent is no longer available; it was deleted "
-                "or replaced. Recreate the agent or start a new session, then "
-                f"retry. Error ID: {error_id}."
-            ),
+            "message": f"{SESSION_AGENT_MISSING_MESSAGE} Error ID: {error_id}.",
         }
     _logger.warning(
         "Native %s terminal start failed; error_id=%s: %s",
@@ -7949,11 +7871,15 @@ def _native_terminal_start_error_response(
     :param exc: Exception raised by terminal auto-create.
     :param runtime_name: Human-readable runtime name, e.g. ``"Codex"``.
     :param session_id: Session whose terminal ensure failed.
-    :returns: HTTP 500 response with an ``error`` object carrying the
-        real failure message.
+    :returns: HTTP 410 when the session's agent was removed (the status of
+        ``session_agent_missing``), else 500, with an ``error`` object
+        carrying the real failure message.
     """
+    status_code = 500
+    if isinstance(exc, OmnigentError) and exc.code == ErrorCode.SESSION_AGENT_MISSING:
+        status_code = exc.http_status
     return JSONResponse(
-        status_code=500,
+        status_code=status_code,
         content={
             "error": _native_terminal_start_error_payload(exc, runtime_name, session_id=session_id)
         },
@@ -8175,7 +8101,7 @@ async def _load_legacy_claude_launch_metadata(
         response = await server_client.get(
             f"/v1/sessions/{urllib.parse.quote(session_id, safe='')}",
             params=_SESSION_METADATA_PARAMS,
-            timeout=10.0,
+            timeout=_LAUNCH_CONFIG_FETCH_TIMEOUT_S,
         )
     except httpx.HTTPError:
         _logger.debug(
@@ -8322,6 +8248,7 @@ async def _auto_create_claude_terminal(
     publish_event: Callable[[str, _JsonObject], None],
     *,
     server_client: httpx.AsyncClient,
+    event_dispatcher: RunnerEventDispatcher | None = None,
     bundle_dir: Path | None = None,
     agent_name: str | None = None,
     agent_spec: AgentSpec | ResolvedSpec | None = None,
@@ -9022,6 +8949,7 @@ async def _auto_create_claude_terminal(
     claude_args = augment_claude_args(
         base_claude_args,
         bridge_dir=bridge_dir,
+        workspace=Path(workspace),
         ap_server_url=server_url,
         ap_auth_headers=_runner_headers,
         bundle_dir=bundle_dir,
@@ -9238,6 +9166,7 @@ async def _auto_create_claude_terminal(
                 start_at_end=resume_external_session_id is not None,
                 start_at_offset=resume_prefix_bytes,
                 auth=_runner_auth,
+                event_dispatcher=event_dispatcher,
             )
         finally:
             await _shutdown_session_router_async(session_id, _subagent_router)
@@ -9649,6 +9578,7 @@ class NativeLaunchContext:
     resource_registry: SessionResourceRegistry
     publish_event: Callable[[str, _JsonObject], None]
     server_client: httpx.AsyncClient | None = None
+    event_dispatcher: RunnerEventDispatcher | None = None
     ensure_comment_relay: _EnsureCommentRelay | None = None
     agent_spec: AgentSpec | ResolvedSpec | None = None
     bundle_dir: Path | None = None
@@ -9793,6 +9723,7 @@ async def _launch_codex(ctx: NativeLaunchContext) -> SessionResourceView:
         skills_filter=ctx.skills_filter,
         agent_spec=ctx.agent_spec,
         server_client=ctx.server_client,
+        session_init=ctx.session_init,
         ensure_comment_relay=ctx.ensure_comment_relay,
     )
 
@@ -9807,6 +9738,7 @@ async def _launch_localdex(ctx: NativeLaunchContext) -> SessionResourceView:
         skills_filter=ctx.skills_filter,
         agent_spec=ctx.agent_spec,
         server_client=ctx.server_client,
+        session_init=ctx.session_init,
         ensure_comment_relay=ctx.ensure_comment_relay,
         localdex=True,
     )
@@ -9837,6 +9769,7 @@ async def _launch_claude(ctx: NativeLaunchContext) -> SessionResourceView:
         ctx.resource_registry,
         ctx.publish_event,
         server_client=ctx.server_client,
+        event_dispatcher=ctx.event_dispatcher,
         bundle_dir=ctx.bundle_dir,
         agent_name=ctx.agent_name,
         agent_spec=ctx.agent_spec,
@@ -9958,6 +9891,8 @@ async def _launch_native_terminal(
                     session_id=ctx.session_id,
                     harness=harness_name,
                     stage="terminal_start",
+                    error_impact=ErrorImpact.BLOCKING.value,
+                    error_phase=ErrorPhase.HARNESS_STARTUP.value,
                 ),
             )
             if reraise:
@@ -10116,6 +10051,7 @@ async def _ensure_native_terminal(
                         session_id=ctx.session_id,
                         terminal_name=terminal_name,
                         stage="terminal_start",
+                        error_impact=ErrorImpact.BLOCKING.value,
                     ),
                 )
             return _native_terminal_start_error_response(
@@ -10165,7 +10101,7 @@ async def _claude_native_session_wants_rebuild(
         resp = await server_client.get(
             f"/v1/sessions/{urllib.parse.quote(session_id, safe='')}",
             params=_SESSION_METADATA_PARAMS,
-            timeout=10.0,
+            timeout=_LAUNCH_CONFIG_FETCH_TIMEOUT_S,
         )
     except httpx.HTTPError:
         return False

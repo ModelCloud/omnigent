@@ -171,6 +171,13 @@ _STREAM_READ_CHUNK_SIZE = 65536
 # home starts with no memories and past-conversation context is lost. The ``_1``
 # suffix is Codex's schema version — update if Codex migrates to a newer schema.
 _CODEX_HOME_SYMLINK_FILES = ("auth.json", ".credentials.json", "memories_1.sqlite")
+# Bridged as hard links instead: Codex rewrites its OAuth store in place through
+# an ``O_NOFOLLOW`` open, which fails on a symlink (ELOOP). A hard link shares the
+# inode, so refreshes still reach the real home.
+_CODEX_HOME_HARDLINK_FILES = frozenset({".credentials.json"})
+# Unlike a symlink, a hard link records no path back to its source home, so the
+# private home records it here for nested launches to resolve.
+_CODEX_HOME_SOURCE_RECORD = ".omnigent-codex-source"
 _CODEX_HOME_GLOBAL_INSTRUCTION_FILES = ("AGENTS.md", "AGENTS.override.md", "hooks.json")
 # Name of the hooks file inside a CODEX_HOME. Symlinked from the user's home
 # by default; generated as a merged regular file when subagent routing is on.
@@ -734,8 +741,9 @@ def codex_skill_sources(
     ``$CODEX_HOME/skills/``) and the slash-command menu's ``codex_host_skills``
     provider — so the linked set and the menu cannot drift on which roots
     are scanned. Priority order: the agent's own ``<bundle>/skills/`` before
-    the host-installed skills dir (a bundled skill shadows a host skill of
-    the same name). Only existing directories are returned.
+    the host-installed Codex skills dir, then ``~/.agents/skills`` (a bundled
+    skill shadows a host skill of the same name). Only existing directories
+    are returned.
 
     :param bundle_dir: Materialized agent-bundle root, or ``None``.
     :param home: The user home directory (``Path.home()``); injected so
@@ -754,6 +762,9 @@ def codex_skill_sources(
     host = (codex_home if codex_home is not None else home / ".codex") / "skills"
     if host.is_dir():
         sources.append(host)
+    shared = home / ".agents" / "skills"
+    if shared.is_dir():
+        sources.append(shared)
     return sources
 
 
@@ -999,7 +1010,8 @@ def _private_codex_home_config_source(path: Path) -> Path | None:
     A parent Omnigent launch bridges ``auth.json`` and ``config.toml`` into
     its private home as symlinks. If a nested launch inherits that private
     ``CODEX_HOME``, those symlink targets are the only durable record of a
-    custom parent source.
+    custom parent source, along with the source recorded beside a
+    hard-linked credential store.
 
     :param path: Private ``CODEX_HOME`` path, e.g.
         ``"/home/user/.omnigent/codex-native/<hash>/codex-home"``.
@@ -1013,6 +1025,10 @@ def _private_codex_home_config_source(path: Path) -> Path | None:
             continue
         with suppress(OSError):
             source_dirs.add(config_file.resolve().parent)
+    with suppress(OSError):
+        recorded = (path / _CODEX_HOME_SOURCE_RECORD).read_text().strip()
+        if recorded:
+            source_dirs.add(Path(recorded))
     if len(source_dirs) == 1:
         return next(iter(source_dirs))
     return None
@@ -1091,6 +1107,11 @@ def _sync_missing_codex_model_providers(source_file: Path, dest_path: Path) -> N
     dest_path.write_text(tomlkit.dumps(dest), encoding="utf-8")
 
 
+def codex_minimal_config_requested() -> bool:
+    """Whether the worker should omit ambient user tools and instructions."""
+    return os.environ.get(_CODEX_MINIMAL_CONFIG_ENV, "").strip().lower() in {"1", "true", "yes"}
+
+
 def _populate_codex_home_config(
     target_dir: Path,
     source_dir: Path,
@@ -1148,14 +1169,14 @@ def _populate_codex_home_config(
         models`` probe, so it is reserved for Smart Routing sessions whose
         turns/spawns can land on such an arm.
     :param config_profile: Optional named Codex profile to copy from the
-    source home, e.g. ``"local"`` for ``local.config.toml``. The session
-    selects it with ``codex --profile local`` while retaining an isolated
-    writable base config for Omnigent's bridge settings.
+        source home, e.g. ``"local"`` for ``local.config.toml``. The session
+        selects it with ``codex --profile local`` while retaining an isolated
+        writable base config for Omnigent's bridge settings.
     :param include_credentials: Bridge host credential stores. Signer-backed
-    workers set this to ``False`` because authentication stays exclusively
-    in the trusted signer process.
+        workers set this to ``False`` because authentication stays exclusively
+        in the trusted signer process.
     :param required_brokered_probe: Codex path, working directory, and active
-    sandbox used to write a network-denied bundled catalog.
+        sandbox used to write a network-denied bundled catalog.
     """
     if required_brokered_probe is not None:
         codex_path, cwd, os_env = required_brokered_probe
@@ -1177,11 +1198,7 @@ def _populate_codex_home_config(
         return
 
     if minimal_config is None:
-        minimal_config = os.environ.get(_CODEX_MINIMAL_CONFIG_ENV, "").strip().lower() in {
-            "1",
-            "true",
-            "yes",
-        }
+        minimal_config = codex_minimal_config_requested()
 
     # A profile can intentionally select a local/OpenAI-compatible provider
     # that does not use ChatGPT auth.  Never bridge ``auth.json`` into that
@@ -1220,7 +1237,6 @@ def _populate_codex_home_config(
             if name not in {"auth.json", ".credentials.json", "memories_1.sqlite"}
         )
     if profile_disables_openai_auth:
-        minimal_config = True
         symlink_files = tuple(
             name for name in symlink_files if name not in {"auth.json", ".credentials.json"}
         )
@@ -1270,9 +1286,7 @@ def _populate_codex_home_config(
                 authless_profile_text = tomlkit.dumps(profile_document)
             config_path.write_text(authless_profile_text, encoding="utf-8")
             os.chmod(config_path, 0o600)
-        # Preserve resume continuity with the official Codex runtime without
-        # inheriting its credentials, plugins, rules, or generic config.
-        # Rollouts are local transcript state, not provider authentication.
+        # Rollouts preserve resume continuity without sharing provider credentials.
         source_sessions = source_dir / "sessions"
         target_sessions = target_dir / "sessions"
         if source_sessions.is_dir() and not (
@@ -1293,22 +1307,30 @@ def _populate_codex_home_config(
         # home would either shadow it or (worse) be written through.
         symlink_files = tuple(name for name in symlink_files if name != _CODEX_HOOKS_FILENAME)
     for filename in symlink_files:
+        link_path = target_dir / filename
+        if filename in _CODEX_HOME_HARDLINK_FILES and link_path.is_symlink():
+            # A home reused from before hard-linking still holds the symlink.
+            link_path.unlink()
         source_file = source_dir / filename
         if not source_file.is_file():
             continue
-        link_path = target_dir / filename
         if link_path.exists() or link_path.is_symlink():
             continue
         try:
-            link_path.symlink_to(source_file)
+            if filename in _CODEX_HOME_HARDLINK_FILES:
+                os.link(source_file, link_path)
+            else:
+                link_path.symlink_to(source_file)
         except OSError as exc:
             logger.warning(
-                "could not symlink %r into %s (%s); copying instead",
+                "could not link %r into %s (%s); copying instead",
                 filename,
                 target_dir,
                 exc,
             )
             shutil.copy2(source_file, link_path)
+        if filename in _CODEX_HOME_HARDLINK_FILES:
+            (target_dir / _CODEX_HOME_SOURCE_RECORD).write_text(f"{source_dir.resolve()}\n")
 
     if not minimal_config:
         for reldir in _CODEX_HOME_SYMLINK_DIRS:
@@ -1343,7 +1365,12 @@ def _populate_codex_home_config(
             continue
         dest_path = target_dir / filename
         if dest_path.exists() or dest_path.is_symlink():
-            if filename == "config.toml" and dest_path.is_file():
+            if (
+                filename == "config.toml"
+                and not minimal_config
+                and dest_path.is_file()
+                and not dest_path.is_symlink()
+            ):
                 _sync_missing_codex_model_providers(source_file, dest_path)
             continue
         if minimal_config and filename == "config.toml":
@@ -1432,6 +1459,9 @@ def materialize_codex_provider_config(
     commands. Persist them in the session-owned ``config.toml`` instead so
     process arguments contain only non-secret routing and behavior overrides.
 
+    Built-in provider tables (e.g. ``[model_providers.amazon-bedrock]``) stay
+    untouched: Codex rejects unsupported fields there by discarding the whole config.
+
     :param codex_home: Private session ``CODEX_HOME`` directory.
     :param config_overrides: Pending Codex config override strings.
     :param retry_policy: Omnigent retry policy to apply through Codex's native
@@ -1478,9 +1508,13 @@ def materialize_codex_provider_config(
         for provider_name, provider_config in generated.items():
             providers[provider_name] = provider_config
 
+    from omnigent.onboarding.codex_auth_readiness import CODEX_BUILTIN_PROVIDERS
+
     policy = retry_policy if retry_policy is not None else RetryPolicy()
     for provider_name, provider_config in list(providers.items()):
         if not isinstance(provider_config, MutableMapping):
+            continue
+        if provider_name in CODEX_BUILTIN_PROVIDERS:
             continue
         if isinstance(provider_config, tomlkit.items.InlineTable):
             inline_provider = tomlkit.inline_table()
