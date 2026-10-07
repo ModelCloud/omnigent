@@ -1724,6 +1724,12 @@ async def test_codex_model_catalog_writeback_uses_session_provider(
     )
     from omnigent.spec.types import DatabricksAuth
 
+    # This scenario uses only the upstream account catalog.
+    monkeypatch.setattr(
+        "omnigent.harnesses.localdex_native.config.load_localdex_config",
+        Mock(side_effect=FileNotFoundError("No LocalDex registration in this scenario")),
+    )
+
     cfg = tmp_path / "databrickscfg"
     cfg.write_text("[default]\nhost = https://a.example\n[other]\nhost = https://b.example\n")
     monkeypatch.setenv("DATABRICKS_CONFIG_FILE", str(cfg))

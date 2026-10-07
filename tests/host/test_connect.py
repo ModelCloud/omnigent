@@ -6415,6 +6415,12 @@ async def test_handle_model_options_serves_codex_probe_rows_and_caches(
     """
     from omnigent.harnesses.codex_native import app_server as codex_native_app_server
 
+    # This scenario uses only the upstream account catalog.
+    monkeypatch.setattr(
+        "omnigent.harnesses.localdex_native.config.load_localdex_config",
+        Mock(side_effect=FileNotFoundError("No LocalDex registration in this scenario")),
+    )
+
     monkeypatch.setattr(
         codex_native_app_server,
         "resolve_native_codex_launch",
@@ -6600,6 +6606,12 @@ async def test_model_options_frame_replies_off_the_receive_loop(
     """
     from omnigent.harnesses.codex_native import app_server as codex_native_app_server
     from omnigent.host.frames import encode_host_frame
+
+    # This scenario uses only the upstream account catalog.
+    monkeypatch.setattr(
+        "omnigent.harnesses.localdex_native.config.load_localdex_config",
+        Mock(side_effect=FileNotFoundError("No LocalDex registration in this scenario")),
+    )
 
     monkeypatch.setattr(
         codex_native_app_server,
