@@ -245,11 +245,16 @@ def test_localdex_turn_routes_official_model_to_openai(
         env_key="BEARER_TOKEN",
     )
     monkeypatch.setattr(localdex_config, "load_localdex_config", lambda **_kwargs: registration)
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    (home / "config.toml").write_text(
+        f'model = "{registration.local_model}"\nmodel_provider = "localdex"\n'
+    )
     state = CodexNativeBridgeState(
         session_id="session_123",
         socket_path=str(tmp_path / "app-server.sock"),
         thread_id="thread_123",
-        codex_home=str(tmp_path / "codex-home"),
+        codex_home=str(home),
     )
 
     actual = asyncio.run(

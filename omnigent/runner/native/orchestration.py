@@ -4562,6 +4562,7 @@ async def _launch_codex_native_tui(
             *app_server.config_overrides,
             "check_for_update_on_startup=false",
         ),
+        config_profile=getattr(app_server, "config_profile", None),
         codex_cli_version=app_server.codex_cli_version,
         # The runner provisions and trusts these hooks. An unknown CLI version
         # must not strand a headless session behind an interactive trust prompt.

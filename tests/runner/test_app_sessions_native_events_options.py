@@ -589,16 +589,8 @@ async def test_events_compact_on_codex_native_calls_app_server(
         async def close(self) -> None:
             calls.append(("close", None))
 
-    if harness == "localdex-native":
-        from omnigent.harnesses.localdex_native import bridge as legacy_bridge
-
-        monkeypatch.setattr(legacy_bridge, "_BRIDGE_ROOT", tmp_path / "localdex-native")
-        bridge_dir = legacy_bridge.bridge_dir_for_bridge_id
-        terminal_name = "localdex"
-    else:
-        monkeypatch.setattr(codex_native_bridge, "_BRIDGE_ROOT", tmp_path / "codex-native")
-        bridge_dir = codex_bridge_dir_for_bridge_id
-        terminal_name = "codex"
+    # The legacy harness alias launches the shared Codex terminal and bridge.
+    monkeypatch.setattr(codex_native_bridge, "_BRIDGE_ROOT", tmp_path / "codex-native")
     monkeypatch.setattr(
         codex_app_server,
         "client_for_transport",
@@ -609,7 +601,7 @@ async def test_events_compact_on_codex_native_calls_app_server(
 
     conv_id = "9864122f95f2f013c9599f4014725784"
     write_bridge_state(
-        bridge_dir(conv_id),
+        codex_bridge_dir_for_bridge_id(conv_id),
         CodexNativeBridgeState(
             session_id=conv_id,
             socket_path="ws://127.0.0.1:9999/rpc",
@@ -618,8 +610,8 @@ async def test_events_compact_on_codex_native_calls_app_server(
         ),
     )
     terminal_registry = TerminalRegistry()
-    instance = make_test_terminal_instance(terminal_name, "main", tmp_path)
-    terminal_registry._by_conversation.setdefault(conv_id, {})[(terminal_name, "main")] = instance
+    instance = make_test_terminal_instance("codex", "main", tmp_path)
+    terminal_registry._by_conversation.setdefault(conv_id, {})[("codex", "main")] = instance
 
     app, _ = await _build_app_for_spec(codex_native_spec, terminal_registry=terminal_registry)
 
