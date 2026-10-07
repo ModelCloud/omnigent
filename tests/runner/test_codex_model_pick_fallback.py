@@ -6,7 +6,7 @@ import asyncio
 import json
 import os
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -118,8 +118,12 @@ async def codex_launch_harness(
     )
 
     def resolve_launch(
-        *, model: str | None, spec: AgentSpec | None = None
+        *,
+        model: str | None,
+        spec: AgentSpec | None = None,
+        terminal_launch_args: Sequence[str] = (),
     ) -> codex_app.NativeCodexLaunch:
+        del terminal_launch_args
         return codex_app.NativeCodexLaunch(
             config_overrides=[],
             model=model or _PROVIDER_DEFAULT,
@@ -433,9 +437,12 @@ async def test_generic_provider_fallback_rebuilds_model_config_overrides(
     pick = harness.snapshot["model_override"]
 
     def resolve_launch(
-        *, model: str | None, spec: AgentSpec | None = None
+        *,
+        model: str | None,
+        spec: AgentSpec | None = None,
+        terminal_launch_args: Sequence[str] = (),
     ) -> codex_app.NativeCodexLaunch:
-        del spec
+        del spec, terminal_launch_args
         model = model or _PROVIDER_DEFAULT
         return codex_app.NativeCodexLaunch(
             config_overrides=[
@@ -480,7 +487,10 @@ async def test_localdex_install_preserves_nonlocal_codex_launch(
     harness.snapshot["model_override"] = "gateway-model"
 
     def resolve_launch(
-        *, model: str | None, spec: AgentSpec | None = None
+        *,
+        model: str | None,
+        spec: AgentSpec | None = None,
+        terminal_launch_args: tuple[str, ...] = (),
     ) -> codex_app.NativeCodexLaunch:
         del spec
         return codex_app.NativeCodexLaunch(
@@ -537,10 +547,8 @@ async def test_localdex_model_passes_only_declared_bearer_key(
     assert build["isolated_env_keys"] == ()
     assert build["provider_env_keys"] == ("BEARER_TOKEN",)
     assert build["bridge_openai_auth"] is True
-    assert any("omnigent-localdex-localdex-" in value for value in build["extra_config_overrides"])
-    assert 'model_provider="omnigent-localdex-localdex-' in "\n".join(
-        build["extra_config_overrides"]
-    )
+    assert any("[model_providers.localdex]" in value for value in build["extra_config_overrides"])
+    assert 'model_provider="localdex"' in build["extra_config_overrides"]
     assert "show_raw_agent_reasoning=true" in build["extra_config_overrides"]
     assert 'model_reasoning_summary="none"' in build["extra_config_overrides"]
     assert 'model_reasoning_summary="auto"' not in build["extra_config_overrides"]
@@ -648,9 +656,12 @@ async def test_subscription_fallback_pins_only_fresh_account_default(
     harness = codex_launch_harness
 
     def resolve_launch(
-        *, model: str | None, spec: AgentSpec | None = None
+        *,
+        model: str | None,
+        spec: AgentSpec | None = None,
+        terminal_launch_args: Sequence[str] = (),
     ) -> codex_app.NativeCodexLaunch:
-        del spec
+        del spec, terminal_launch_args
         return codex_app.NativeCodexLaunch(
             config_overrides=['model_provider="openai"'], model=model, profile=None
         )
@@ -795,7 +806,10 @@ async def test_host_runner_preserves_selected_codex_profile(
     """
 
     def resolve_launch(
-        *, model: str | None, spec: AgentSpec | None = None
+        *,
+        model: str | None,
+        spec: AgentSpec | None = None,
+        terminal_launch_args: tuple[str, ...] = (),
     ) -> codex_app.NativeCodexLaunch:
         return codex_app.NativeCodexLaunch(
             config_overrides=['model_provider="local-openai"'],

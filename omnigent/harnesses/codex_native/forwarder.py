@@ -9,7 +9,7 @@ import json
 import logging
 import urllib.error
 import urllib.request
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Callable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,6 +34,7 @@ from omnigent.harnesses.codex_native.bridge import (
     CodexNativeBridgeState,
     DeveloperInstructionsReadState,
     clear_active_turn_id_if_matches,
+    codex_config_revision,
     codex_home_for_bridge_dir,
     pending_mcp_servers,
     read_bridge_state,
@@ -71,12 +72,6 @@ _logger = logging.getLogger(__name__)
 
 _AGENT_NAME = "codex-native-ui"
 
-# Invoked after ``thread/resume`` has replayed durable items, but before the
-# live-event loop begins.  Restart recovery uses this narrow seam to start a
-# replacement turn only after the restored thread is known to be idle.
-CodexForwarderSubscribedHook = Callable[
-    [CodexAppServerClient, "_CodexForwarderState"], Awaitable[None]
-]
 _SUBSCRIBE_RETRY_DELAY_SECONDS = 0.2
 _NO_ROLLOUT_FRAGMENT = "no rollout found for thread id"
 # A freshly created thread passes through a second transient state: its rollout
@@ -381,6 +376,8 @@ class _CodexForwarderState:
         the last ``_refresh_effort_from_config`` read, so the refresh can tell
         an unchanged file from a rewritten one (an unchanged file must not roll
         back a live ``thread/settings/updated`` effort).
+    :param last_config_effort_revision: File identity and modification time used
+        to retry mirroring after a same-value config rewrite.
     :param collaboration_mode: Latest known Codex collaboration mode kind, e.g.
         ``"plan"`` or ``"default"``.
     :param posted_collaboration_mode: Last collaboration mode kind already
@@ -454,6 +451,7 @@ class _CodexForwarderState:
     # The config.toml effort as of the last _refresh_effort_from_config read,
     # so the refresh can tell an unchanged file from a rewritten one.
     last_config_effort: str | None = None
+    last_config_effort_revision: tuple[int, int] | None = None
     collaboration_mode: str | None = None
     posted_collaboration_mode: str | None = None
     terminal_launch_args: list[str] | None = None
@@ -1634,6 +1632,15 @@ class _OutputTextDeltaCoalescer:
             _logger.warning("Codex forwarder delta flush failed", exc_info=True)
 
 
+# Posted together so each token post is a self-contained cumulative snapshot;
+# older servers read an omitted cache count as zero cached tokens.
+_CUMULATIVE_TOKEN_KEYS = (
+    "cumulative_input_tokens",
+    "cumulative_cache_read_input_tokens",
+    "cumulative_output_tokens",
+)
+
+
 class _SessionUsageCoalescer:
     """
     Coalesce Codex token-usage updates before posting to AP.
@@ -1643,7 +1650,9 @@ class _SessionUsageCoalescer:
     (latest-only, deduped) so repeated frames collapse to one post. The
     caller flushes it per usage frame (so the web UI cost badge updates
     live mid-turn) and again at turn/session boundaries (a no-op when
-    nothing changed).
+    nothing changed). Cumulative token counts are posted as one group, so
+    a cache-miss turn still carries the unchanged cached total alongside
+    its grown input/output totals.
 
     :param client: HTTP client for Omnigent event posts.
     :param session_id: Omnigent conversation id, e.g. ``"conv_abc123"``.
@@ -1710,6 +1719,15 @@ class _SessionUsageCoalescer:
         if not data:
             self._pending.clear()
             return
+        if data.keys() & _CUMULATIVE_TOKEN_KEYS:
+            # Re-attach every cumulative count so the post stays self-contained:
+            # the latest pending value, else the last posted one when this frame
+            # omitted the field (older servers read an omitted count as zero).
+            for key in _CUMULATIVE_TOKEN_KEYS:
+                if key in self._pending:
+                    data[key] = self._pending[key]
+                elif key in self._last_posted:
+                    data[key] = self._last_posted[key]
         # Attach the model to every token-bearing post (not via the
         # changed-keys dedup, so it rides along even when only token
         # counts changed) — the server reprices cumulative tokens into
@@ -2058,7 +2076,6 @@ async def supervise_forwarder(
     client: CodexAppServerClient | None = None,
     auth: httpx.Auth | None = None,
     ap_transport: httpx.AsyncBaseTransport | None = None,
-    on_subscribed: CodexForwarderSubscribedHook | None = None,
 ) -> None:
     """
     Mirror Codex app-server notifications into an Omnigent session.
@@ -2081,9 +2098,6 @@ async def supervise_forwarder(
     :param auth: Optional HTTP auth for long-lived remote sessions.
     :param ap_transport: Optional HTTP transport for the Omnigent client,
         e.g. ``httpx.MockTransport(...)`` for tests.
-    :param on_subscribed: Optional one-shot hook run after the initial
-        ``thread/resume`` replay is complete. A hook failure is logged and
-        cannot take the live transcript mirror down.
     :returns: None. Runs until cancelled or the app-server connection
         closes.
     """
@@ -2139,7 +2153,6 @@ async def supervise_forwarder(
                 elicitation_tracker=target.elicitation_tracker,
                 forwarder_state=forwarder_state,
                 ready_signal=thread_active,
-                on_subscribed=on_subscribed,
             ),
             name="codex-native-forwarder-subscribe",
         )
@@ -2180,7 +2193,6 @@ async def supervise_forwarder(
                                 elicitation_tracker=target.elicitation_tracker,
                                 forwarder_state=forwarder_state,
                                 ready_signal=thread_active,
-                                on_subscribed=None,
                             ),
                             name="codex-native-forwarder-subscribe",
                         )
@@ -2544,7 +2556,6 @@ async def _subscribe_until_ready(
     elicitation_tracker: _CodexElicitationTaskTracker,
     forwarder_state: _CodexForwarderState | None = None,
     ready_signal: asyncio.Event | None = None,
-    on_subscribed: CodexForwarderSubscribedHook | None = None,
 ) -> None:
     """Reserve authoritative delivery order while subscribing and replaying."""
     async with _conversation_item_delivery_scope(session_id):
@@ -2558,7 +2569,6 @@ async def _subscribe_until_ready(
             elicitation_tracker=elicitation_tracker,
             forwarder_state=forwarder_state,
             ready_signal=ready_signal,
-            on_subscribed=on_subscribed,
         )
 
 
@@ -2573,7 +2583,6 @@ async def _subscribe_until_ready_inner(
     elicitation_tracker: _CodexElicitationTaskTracker,
     forwarder_state: _CodexForwarderState | None = None,
     ready_signal: asyncio.Event | None = None,
-    on_subscribed: CodexForwarderSubscribedHook | None = None,
 ) -> None:
     """
     Subscribe this app-server connection to a Codex thread.
@@ -2610,9 +2619,6 @@ async def _subscribe_until_ready_inner(
         thread parks here instead of polling. ``None`` falls back to the
         fixed-interval retry (used where no live event stream drives the
         signal).
-    :param on_subscribed: Optional callback run once after the successful
-        resume replay. Used by LocalDex host-restart recovery to begin its
-        replacement turn only after this connection owns the restored thread.
     :returns: None.
     """
     bridge_state = read_bridge_state(bridge_dir)
@@ -2690,11 +2696,6 @@ async def _subscribe_until_ready_inner(
             forwarder_state=forwarder_state,
             replay_from_turn_id=replay_from_turn_id,
         )
-        if on_subscribed is not None and forwarder_state is not None:
-            try:
-                await on_subscribed(client, forwarder_state)
-            except Exception:  # recovery must never kill mirroring.
-                _logger.exception("Codex forwarder post-subscribe hook failed")
         return
 
 
@@ -3361,7 +3362,15 @@ def _refresh_effort_from_config(bridge_dir: Path, forwarder_state: _CodexForward
         updated in place.
     :returns: None.
     """
+    # Stat before reading, so a rewrite that races this read shows on the next pass.
+    revision = codex_config_revision(bridge_dir)
     config_effort = read_codex_config_effort(bridge_dir)
+    if revision is not None:
+        previous_revision = forwarder_state.last_config_effort_revision
+        forwarder_state.last_config_effort_revision = revision
+        if config_effort and previous_revision is not None and previous_revision != revision:
+            # Retry a failed immediate mirror even when the effort is unchanged.
+            forwarder_state.posted_effort_known = False
     if not config_effort:
         return
     # Change is detected by VALUE, not file revision, so an ABA rewrite between

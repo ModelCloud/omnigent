@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import contextlib
 import dataclasses
 import json
 import logging
@@ -13,6 +14,8 @@ from collections.abc import AsyncIterator, Mapping
 from pathlib import Path
 from typing import cast
 
+from websockets.exceptions import WebSocketException
+
 from omnigent.debug_logging import debug_event
 from omnigent.harnesses.codex_native import side_chat
 from omnigent.harnesses.codex_native.app_server import (
@@ -20,8 +23,10 @@ from omnigent.harnesses.codex_native.app_server import (
     CodexAppServerResponseError,
     client_for_transport,
     is_stale_active_turn_error,
+    resolve_codex_effort_for_model,
 )
 from omnigent.harnesses.codex_native.bridge import (
+    CODEX_APP_SERVER_STOPPED,
     CODEX_NATIVE_BRIDGE_DIR_ENV_VAR,
     CODEX_NATIVE_REQUEST_SESSION_ID_ENV_VAR,
     CODEX_NATIVE_STARTUP_PUBLICATION_GRACE_SECONDS,
@@ -30,17 +35,18 @@ from omnigent.harnesses.codex_native.bridge import (
     cancel_pending_mcp_startup,
     clear_active_turn_id_if_matches,
     mcp_startup_waiting_detail,
+    mirror_applied_codex_settings,
     read_bridge_startup_error,
     read_bridge_startup_failure,
     read_bridge_startup_timeout,
     read_bridge_state,
+    read_codex_config_effort,
+    read_codex_config_model,
     read_codex_home_config_model,
     read_codex_home_config_model_provider,
     read_mcp_startup,
+    read_unmirrored_codex_settings,
     update_active_turn_id,
-    write_codex_config_effort,
-    write_codex_config_model,
-    write_codex_config_model_provider,
 )
 from omnigent.inner.codex_goal_command import (
     goal_objective_from_content,
@@ -65,6 +71,7 @@ from omnigent.inner.native_attachments import (
     requires_filesystem,
     unresolved_attachment_marker,
 )
+from omnigent.process_logging import log_once
 from omnigent.util.reasoning_effort import (
     CODEX_NATIVE_EFFORTS,
     effort_for_model_switch,
@@ -130,6 +137,44 @@ def _bridge_state_wait_seconds(bridge_dir: Path) -> float:
     )
 
 
+async def _connect_to_app_server(state: CodexNativeBridgeState) -> CodexAppServerClient | None:
+    """
+    Connect to the bridge's app-server, or return ``None`` when it is unreachable.
+
+    Only a failure to connect counts, a socket error or a websocket handshake
+    failure such as an accept-then-close: nothing has been sent, so the turn is
+    provably undelivered. An error once the connection is up is the caller's.
+    Any other exit, a cancel included, closes the half-open client first.
+
+    :param state: Bridge state naming the app-server transport.
+    :returns: A connected client, or ``None`` when the connection was refused or lost.
+    """
+    client = client_for_transport(
+        state.socket_path,
+        client_name="omnigent-codex-native",
+    )
+    connected = False
+    try:
+        await client.connect()
+        connected = True
+        return client
+    except (OSError, WebSocketException):
+        _logger.exception(
+            "Codex native app-server unreachable: socket=%s",
+            state.socket_path,
+            extra=debug_event(
+                "codex_app_server_unreachable",
+                session_id=state.session_id,
+                thread_id=state.thread_id,
+            ),
+        )
+        return None
+    finally:
+        if not connected:
+            with contextlib.suppress(Exception):
+                await client.close()
+
+
 async def _start_codex_turn(
     client: CodexAppServerClient,
     *,
@@ -139,6 +184,32 @@ async def _start_codex_turn(
     settings_overrides: Mapping[str, object],
 ) -> None:
     """Apply optional settings and start one Codex turn on an idle thread."""
+    settings_overrides = dict(settings_overrides)
+    # Settings applied while their config write failed are recorded beside the config.
+    unmirrored = await asyncio.to_thread(read_unmirrored_codex_settings, bridge_dir)
+    model = (
+        settings_overrides.get("model")
+        or unmirrored.get("model")
+        or await asyncio.to_thread(read_codex_config_model, bridge_dir)
+    )
+    effort = (
+        settings_overrides.get("effort")
+        or unmirrored.get("effort")
+        or await asyncio.to_thread(read_codex_config_effort, bridge_dir)
+    )
+    if isinstance(model, str) and isinstance(effort, str):
+        resolved_effort = await resolve_codex_effort_for_model(
+            client, effort, model, transport=state.socket_path
+        )
+        if resolved_effort != effort:
+            settings_overrides["effort"] = resolved_effort
+    elif isinstance(effort, str):
+        log_once(
+            _logger,
+            logging.INFO,
+            "Codex effort %s has no known model; skipping capability validation",
+            effort,
+        )
     if settings_overrides:
         await client.request(
             "thread/settings/update",
@@ -147,37 +218,17 @@ async def _start_codex_turn(
                 **settings_overrides,
             },
         )
-        switched_model = settings_overrides.get("model")
-        if isinstance(switched_model, str) and switched_model:
-            if not write_codex_config_model(bridge_dir, switched_model):
-                _logger.warning(
-                    "Failed to mirror codex model switch into config.toml: model=%s",
-                    switched_model,
-                )
-        # The app-server JSON-RPC protocol is camelCase.  Using the TOML key
-        # spelling (``model_provider``) here is silently ignored by clients
-        # that tolerate unknown request fields, leaving the prior provider in
-        # place even though the model itself changed.
-        switched_provider = settings_overrides.get("modelProvider")
-        if isinstance(switched_provider, str) and switched_provider:
-            if not write_codex_config_model_provider(bridge_dir, switched_provider):
-                _logger.warning(
-                    "Failed to mirror codex provider switch into config.toml: provider=%s",
-                    switched_provider,
-                )
-        # Mirror an applied effort the same way (after the model write, whose
-        # clamp may have rewritten the stale effort line): the forwarder's
-        # effort mirror treats config.toml as the source of truth, and a fresh
-        # forwarder state (thread resume / reconnect) re-reads it — without
-        # this write it would revert a composer-picked effort to the stale
-        # launch value.
-        switched_effort = settings_overrides.get("effort")
-        if isinstance(switched_effort, str) and switched_effort:
-            if not write_codex_config_effort(bridge_dir, switched_effort):
-                _logger.warning(
-                    "Failed to mirror codex effort switch into config.toml: effort=%s",
-                    switched_effort,
-                )
+        # The forwarder and a fresh forwarder state (thread resume / reconnect)
+        # re-read config.toml, so mirror what applied; without it they would
+        # revert a composer pick to the stale launch value.
+        switched = {
+            key: value
+            for key in ("model", "modelProvider", "effort")
+            if isinstance(value := settings_overrides.get(key), str) and value
+        }
+        failed = await asyncio.to_thread(mirror_applied_codex_settings, bridge_dir, switched)
+        for key, value in failed.items():
+            _logger.warning("Failed to mirror codex %s switch into config.toml: %s", key, value)
     response = await client.request(
         "turn/start",
         {
@@ -309,7 +360,9 @@ async def _localdex_runtime_settings_overrides(
     overrides = dict(settings_overrides)
     selected_model = overrides.get("model")
     has_model_selection = isinstance(selected_model, str) and bool(selected_model.strip())
-    current_model = read_codex_home_config_model(Path(state.codex_home))
+    bridge_dir = Path(state.codex_home).parent
+    pending = await asyncio.to_thread(read_unmirrored_codex_settings, bridge_dir)
+    current_model = pending.get("model") or read_codex_home_config_model(Path(state.codex_home))
     target_model = selected_model if has_model_selection else current_model
     try:
         # Official models do not need the local endpoint's bearer token. Read
@@ -356,13 +409,28 @@ async def _localdex_runtime_settings_overrides(
             # A model picker change must move both pieces of routing state.
             # Restore the provider resolved for the non-LocalDex model.
             if has_model_selection and "modelProvider" not in overrides:
-                provider = state.default_model_provider or read_codex_home_config_model_provider(
-                    Path(state.codex_home)
-                )
-                local_provider_names = {item.provider for item in localdex.models}
-                if provider in local_provider_names or provider == "localdex":
+                current_provider = pending.get(
+                    "modelProvider"
+                ) or read_codex_home_config_model_provider(Path(state.codex_home))
+                provider = state.default_model_provider or current_provider
+                local_provider_names = {
+                    name
+                    for item in localdex.models
+                    for name in (item.provider, localdex_runtime_provider_id(item.provider))
+                } | {
+                    "localdex",
+                    localdex.provider,
+                    localdex_runtime_provider_id(localdex.provider),
+                }
+                if provider in local_provider_names:
                     provider = None
-                overrides["modelProvider"] = provider or "openai"
+                if provider is not None:
+                    overrides["modelProvider"] = provider
+                elif (
+                    current_provider in local_provider_names
+                    or localdex_model_for_selection(localdex, current_model) is not None
+                ):
+                    overrides["modelProvider"] = "openai"
     return overrides
 
 
@@ -648,12 +716,12 @@ class CodexNativeExecutor(Executor):
                 elif not _session_is_active(state.session_id, self._request_session_id):
                     error_msg = "Codex native session is no longer active"
                     undelivered = True
+                elif (client := await _connect_to_app_server(state)) is None:
+                    # Nothing reached the app-server, so the sender's copy is the only record.
+                    startup_failure = CODEX_APP_SERVER_STOPPED
+                    error_msg = startup_failure.message
+                    undelivered = True
                 else:
-                    client = client_for_transport(
-                        state.socket_path,
-                        client_name="omnigent-codex-native",
-                    )
-                    await client.connect()
                     try:
                         side_question = side_chat.side_chat_question(input_items)
                         if side_question is not None:
