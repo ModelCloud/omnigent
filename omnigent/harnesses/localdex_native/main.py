@@ -16,11 +16,13 @@ from .config import LOCALDEX_BINARY, load_localdex_config
 # Server-side built-in-agent seeding must be credential-free. The host validates
 # and materializes the dedicated LocalDex config immediately before launch.
 _DEFAULT_LOCALDEX_MODEL = "QB/DSV4.1-Flash"
+_LOCALDEX_REQUEST_TIMEOUT_S = 900
 
 
 def _materialize_localdex_agent_spec(tmpdir: Path, *, model: str | None) -> Path:
     """Write a LocalDex-owned terminal-first agent spec."""
     path = tmpdir / "localdex-native-ui.yaml"
+    selected_model = model or _DEFAULT_LOCALDEX_MODEL
     path.write_text(
         yaml.safe_dump(
             {
@@ -32,7 +34,19 @@ def _materialize_localdex_agent_spec(tmpdir: Path, *, model: str | None) -> Path
                 ),
                 "executor": {
                     "harness": "localdex-native",
-                    "model": model or _DEFAULT_LOCALDEX_MODEL,
+                    "model": selected_model,
+                },
+                "llm": {
+                    "model": selected_model,
+                    # LocalDex streams can spend a long time in prefill without
+                    # emitting an SSE event. Retrying a disconnected response
+                    # replays the entire conversation and can trigger repeated
+                    # compaction loops. Fail the turn once and give a cold
+                    # prefill enough time to finish instead.
+                    "retry": {
+                        "max_retries": 0,
+                        "timeout_per_request_s": _LOCALDEX_REQUEST_TIMEOUT_S,
+                    },
                 },
                 "spawn": True,
                 "os_env": {"type": "caller_process", "cwd": ".", "sandbox": {"type": "none"}},

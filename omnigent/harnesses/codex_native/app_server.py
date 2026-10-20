@@ -32,7 +32,7 @@ from omnigent.util.json_types import JsonObject as _JsonObject
 
 if TYPE_CHECKING:
     from omnigent.onboarding.provider_config import ProviderEntry
-    from omnigent.spec.types import AgentSpec
+    from omnigent.spec.types import AgentSpec, RetryPolicy
 
 from omnigent.cli_invocation import cli_invocation
 from omnigent.debug_logging import debug_event
@@ -1962,6 +1962,8 @@ class CodexNativeAppServer:
     :param codex_home: Private per-session ``CODEX_HOME`` path.
     :param env: Environment for the app-server subprocess.
     :param config_overrides: Codex ``-c`` config override values.
+    :param retry_policy: Optional agent retry policy materialized into generated
+        provider tables. ``None`` preserves the native Codex defaults.
     :param developer_instructions: Optional raw ``AgentSpec.instructions``
         (author-supplied, not framework-composed) appended to the private
         session config before app-server startup.
@@ -2033,6 +2035,7 @@ class CodexNativeAppServer:
     config_overrides: list[str]
     cwd: Path
     bridge_dir: Path
+    retry_policy: RetryPolicy | None = None
     config_profile: str | None = None
     # LocalDex owns its source config rather than falling back to ~/.codex.
     # This also keeps app-server profile-free: current Codex rejects --profile
@@ -2242,6 +2245,7 @@ class CodexNativeAppServer:
         self.config_overrides = materialize_codex_provider_config(
             self.codex_home,
             self.config_overrides,
+            retry_policy=self.retry_policy,
         )
         if codex_version is not None and not policy_hooks_supported:
             self._disable_policy_hook(
@@ -3458,6 +3462,7 @@ def build_codex_native_server(
     python_executable: str | None = None,
     codex_path: str | None = None,
     extra_config_overrides: list[str] | None = None,
+    retry_policy: RetryPolicy | None = None,
     developer_instructions: str | None = None,
     bypass_sandbox: bool = False,
     trust_project: bool = False,
@@ -3502,6 +3507,8 @@ def build_codex_native_server(
     :param extra_config_overrides: Additional ``-c`` config overrides
         appended after Databricks routing overrides, e.g. MCP server
         registration for the Omnigent tool relay.
+    :param retry_policy: Optional agent retry policy materialized into generated
+        provider tables. ``None`` preserves the native Codex defaults.
     :param developer_instructions: Optional raw ``AgentSpec.instructions``
         (author-supplied, not framework-composed) appended to Codex's
         private per-session config.
@@ -3633,6 +3640,7 @@ def build_codex_native_server(
         codex_home=codex_home,
         env=env,
         config_overrides=config_overrides,
+        retry_policy=retry_policy,
         config_profile=effective_config_profile,
         config_source=config_source,
         isolated_env_keys=authless_profile_env,

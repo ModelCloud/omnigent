@@ -877,3 +877,22 @@ def test_declared_local_provider_key_keeps_standard_codex_auth_environment(
     terminal_env = codex_terminal_env(server)
     assert terminal_env["BEARER_TOKEN"] == "local-provider-secret"
     assert terminal_env["OPENAI_ORG_ID"] == "official-openai-org"
+
+
+def test_build_codex_native_server_retains_agent_retry_policy(tmp_path: Path) -> None:
+    """The app-server must receive the retry policy generated from the spec."""
+    from omnigent.spec.types import RetryPolicy
+
+    retry_policy = RetryPolicy(max_retries=0, timeout_per_request_s=900)
+    server = build_codex_native_server(
+        socket_path=tmp_path / "codex.sock",
+        codex_home=tmp_path / "codex-home",
+        cwd=tmp_path,
+        model="QB/DSV4.1-Flash",
+        profile=None,
+        bridge_dir=tmp_path / "bridge",
+        codex_path=sys.executable,
+        retry_policy=retry_policy,
+    )
+
+    assert server.retry_policy == retry_policy
