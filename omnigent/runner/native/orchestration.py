@@ -5024,6 +5024,7 @@ async def _auto_create_codex_terminal(
     # Thread the spec so its executor.auth / legacy profile win over
     # machine-level config, parity with the in-process harness (#2744).
     _launch_spec = agent_spec.spec if isinstance(agent_spec, ResolvedSpec) else agent_spec
+    _codex_retry_policy = _launch_spec.llm.retry if _launch_spec and _launch_spec.llm else None
     _codex_terminal_args = launch_config.terminal_launch_args or ()
     _codex_launch = resolve_native_codex_launch(
         model=default_model, spec=_launch_spec, terminal_launch_args=_codex_terminal_args
@@ -5596,6 +5597,7 @@ async def _auto_create_codex_terminal(
             *_codex_reasoning_trace_overrides,
             *mcp_overrides,
         ],
+        retry_policy=_codex_retry_policy,
         bridge_dir=bridge_dir,
         ap_server_url=launch_config.policy_server_url,
         ap_auth_headers=policy_headers,
