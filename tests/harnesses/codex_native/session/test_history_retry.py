@@ -35,19 +35,19 @@ async def test_history_retries_only_the_throttled_page(retry_sleeps: list[float]
         requests.append(request)
         if len(requests) == 1:
             return httpx.Response(
-                200, json={"data": [{"id": "first"}], "has_more": True, "last_id": "first"}
+                200, json={"data": [{"id": "newer"}], "has_more": True, "last_id": "newer"}
             )
         if len(requests) == 2:
             return httpx.Response(429, headers={"Retry-After": "2"})
-        return httpx.Response(200, json={"data": [{"id": "last"}], "has_more": False})
+        return httpx.Response(200, json={"data": [{"id": "older"}], "has_more": False})
 
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(handle), base_url="http://test"
     ) as client:
-        items = await codex_native._fetch_all_session_items_for_codex_resume(client, "conv_codex")
+        items = await codex_native._fetch_session_items_for_codex_resume(client, "conv_codex")
 
-    assert items == [{"id": "first"}, {"id": "last"}]
-    assert [r.url.params.get("after") for r in requests] == [None, "first", "first"]
+    assert items == [{"id": "older"}, {"id": "newer"}]
+    assert [r.url.params.get("after") for r in requests] == [None, "newer", "newer"]
     assert all(r.url.path == "/v1/sessions/conv_codex/items" for r in requests)
     assert retry_sleeps == [2.25]
 
@@ -164,6 +164,31 @@ async def test_cancellation_during_backoff_stops_retrying(monkeypatch: pytest.Mo
         transport=httpx.MockTransport(handle), base_url="http://test"
     ) as client:
         with pytest.raises(asyncio.CancelledError):
-            await codex_native._fetch_all_session_items_for_codex_resume(client, "conv_codex")
+            await codex_native._fetch_session_items_for_codex_resume(client, "conv_codex")
 
     assert calls == 1
+
+
+@pytest.mark.parametrize("empty_page", [False, True])
+async def test_non_advancing_history_page_fails_instead_of_looping(empty_page: bool) -> None:
+    calls = 0
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        assert calls <= 2
+        return httpx.Response(
+            200,
+            json={
+                "data": [] if empty_page else [{"id": "same_item"}],
+                "has_more": True,
+                "last_id": "same_item",
+            },
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handle), base_url="http://test"
+    ) as client:
+        with pytest.raises(click.ClickException, match="non-advancing cursor"):
+            await codex_native._fetch_session_items_for_codex_resume(client, "conv_codex")
+    assert calls == (1 if empty_page else 2)
