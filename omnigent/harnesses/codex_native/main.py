@@ -2018,7 +2018,7 @@ async def _ensure_local_codex_resume_rollout(
         )
     await _replay_dead_letters_before_resume(client, codex_home.parent)
     try:
-        items = await _fetch_all_session_items_for_codex_resume(client, session_id)
+        items = await _fetch_session_items_for_codex_resume(client, session_id)
     except _CodexResumeHistoryUnavailableError:
         existing = _find_codex_rollout(codex_home, external_session_id)
         if existing is not None and _is_resumable_codex_rollout(
@@ -2158,12 +2158,60 @@ async def _codex_history_retry_sleep(delay: float) -> None:
     await asyncio.sleep(delay)
 
 
-async def _fetch_all_session_items_for_codex_resume(
+def _codex_resume_compaction_covers_history(
+    newest_first: list[_JsonObject],
+    compaction_index: int,
+    *,
+    user_response_ids: set[str],
+    call_response_ids: dict[str, str | None],
+    interrupted_response_ids: set[str],
+) -> bool:
+    """Check that truncating older history preserves the effective rollout.
+
+    Fetch through the user message of each retained turn so even an interruption
+    followed by late output is visible. Also retain raw calls for every later
+    tool output: calls omitted by a snapshot must survive, and raw call order
+    determines the replay order of parallel outputs.
+    """
+    compaction_response_id = _session_item_response_id(newest_first[compaction_index])
+    if compaction_response_id in interrupted_response_ids:
+        return False
+    # Server-created compactions have independent response ids. Imported ones
+    # sharing a turn id need the full transcript's interruption filtering.
+    if compaction_response_id is not None and not compaction_response_id.startswith("compact_"):
+        return False
+    required_response_ids: set[str] = set()
+    for item in newest_first[:compaction_index]:
+        response_id = _session_item_response_id(item)
+        if response_id in interrupted_response_ids or item.get("type") == "compaction":
+            continue
+        if not response_id and not item.get("id"):
+            # Index-based synthetic turn ids require the full history's offset.
+            return False
+        if response_id is not None:
+            required_response_ids.add(response_id)
+        if item.get("type") == "function_call_output":
+            call_id = item.get("call_id")
+            if not isinstance(call_id, str) or call_id not in call_response_ids:
+                return False
+            call_response_id = call_response_ids[call_id]
+            if call_response_id in interrupted_response_ids:
+                return False
+            if call_response_id is not None:
+                required_response_ids.add(call_response_id)
+    return required_response_ids <= user_response_ids
+
+
+async def _fetch_session_items_for_codex_resume(
     client: httpx.AsyncClient,
     session_id: str,
 ) -> list[_JsonObject]:
     """
-    Fetch committed Omnigent session items in chronological order.
+    Fetch the committed resume window, returning chronological items.
+
+    Walk newest-first to a usable compaction and its outstanding tool/turn
+    dependencies. Older records would be discarded by rollout synthesis anyway.
+    Without a complete boundary, continue to the start of server history.
 
     :param client: HTTP client pointed at the Omnigent server.
     :param session_id: Omnigent conversation id, e.g. ``"conv_abc123"``.
@@ -2176,8 +2224,15 @@ async def _fetch_all_session_items_for_codex_resume(
     """
     items: list[_JsonObject] = []
     after: str | None = None
+    seen_cursors: set[str] = set()
+    compaction_index: int | None = None
+    user_response_ids: set[str] = set()
+    call_response_ids: dict[str, str | None] = {}
+    interrupted_response_ids: set[str] = set()
+    started = time.monotonic()
+    pages = 0
     while True:
-        params: dict[str, str | int] = {"limit": 1000, "order": "asc"}
+        params: dict[str, str | int] = {"limit": 1000, "order": "desc"}
         if after is not None:
             params["after"] = after
         for attempt in range(1, _CODEX_HISTORY_FETCH_ATTEMPTS + 1):
@@ -2235,14 +2290,55 @@ async def _fetch_all_session_items_for_codex_resume(
                     f"History fetch for {session_id!r} returned a non-object "
                     f"item at index {index}."
                 )
+            response_id = _session_item_response_id(item)
+            if response_id is not None:
+                if _is_interrupted_assistant_session_item(item):
+                    interrupted_response_ids.add(response_id)
+                if item.get("type") == "message" and item.get("role") == "user":
+                    user_response_ids.add(response_id)
+            call_id = item.get("call_id")
+            if item.get("type") == "function_call" and isinstance(call_id, str) and call_id:
+                call_response_ids.setdefault(call_id, response_id)
+            if (
+                compaction_index is None
+                and item.get("type") == "compaction"
+                and isinstance(item.get("compacted_messages"), list)
+                and item["compacted_messages"]
+                and response_id not in interrupted_response_ids
+            ):
+                compaction_index = len(items)
             items.append(item)
-        if not payload.get("has_more"):
+        pages += 1
+        covered = compaction_index is not None and _codex_resume_compaction_covers_history(
+            items,
+            compaction_index,
+            user_response_ids=user_response_ids,
+            call_response_ids=call_response_ids,
+            interrupted_response_ids=interrupted_response_ids,
+        )
+        if not payload.get("has_more") or covered:
+            _logger.info(
+                "Fetched Codex resume history: session=%s items=%d pages=%d "
+                "compaction_covered=%s reached_start=%s elapsed_s=%.3f",
+                session_id,
+                len(items),
+                pages,
+                covered,
+                not payload.get("has_more"),
+                time.monotonic() - started,
+            )
+            items.reverse()
             return items
         last_id = payload.get("last_id")
         if not isinstance(last_id, str) or not last_id:
             raise click.ClickException(
                 f"History fetch for {session_id!r} set has_more without last_id."
             )
+        if not data or last_id in seen_cursors:
+            raise click.ClickException(
+                f"History fetch for {session_id!r} returned a non-advancing cursor."
+            )
+        seen_cursors.add(last_id)
         after = last_id
 
 

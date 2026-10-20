@@ -11777,21 +11777,26 @@ async def test_ensure_local_codex_resume_rollout_synthesizes_omnigent_history(
 
     def handler(request: httpx.Request) -> httpx.Response:
         """
-        Serve two chronological item pages.
+        Serve two newest-first item pages.
 
         :param request: Incoming mock HTTP request.
         :returns: Mock Omnigent response.
         """
         requested_urls.append(str(request.url))
         assert request.url.path == "/v1/sessions/conv_codex/items"
+        assert request.url.params["order"] == "desc"
         after = request.url.params.get("after")
         if after is None:
             return httpx.Response(
                 200,
-                json={"data": first_page, "has_more": True, "last_id": "fc_shell_1"},
+                json={
+                    "data": list(reversed(second_page)),
+                    "has_more": True,
+                    "last_id": "fco_shell_1",
+                },
             )
-        assert after == "fc_shell_1"
-        return httpx.Response(200, json={"data": second_page, "has_more": False})
+        assert after == "fco_shell_1"
+        return httpx.Response(200, json={"data": list(reversed(first_page)), "has_more": False})
 
     transport = httpx.MockTransport(handler)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -11881,7 +11886,7 @@ async def test_ensure_local_codex_resume_rollout_synthesizes_omnigent_history(
     restored_text = json.dumps(restored_payloads)
     assert "apply risky change" not in restored_text
     assert "partially applied" not in restored_text
-    assert any("after=fc_shell_1" in url for url in requested_urls), (
+    assert any("after=fco_shell_1" in url for url in requested_urls), (
         f"history pagination was not followed; requests were {requested_urls!r}"
     )
 
