@@ -198,6 +198,32 @@ async def test_no_compaction_fetches_complete_history(history: list[dict[str, An
     assert requests == 10
 
 
+async def test_resource_events_do_not_require_a_user_turn(
+    history: list[dict[str, Any]], compaction: dict[str, Any]
+) -> None:
+    history.extend(
+        [
+            compaction,
+            {
+                "id": "resource",
+                "type": "resource_event",
+                "response_id": "conv_codex",
+                "status": "completed",
+            },
+            {
+                "id": "latest_user",
+                "type": "message",
+                "role": "user",
+                "response_id": "codex_latest",
+                "content": [{"type": "input_text", "text": "continue"}],
+            },
+        ]
+    )
+    fetched, requests = await _fetch_history(history, page_size=4)
+    assert requests == 1
+    assert _records(fetched) == _records(history)
+
+
 @pytest.mark.parametrize("boundary", ["interrupted", "imported", "missing_user"])
 async def test_uncertain_turn_boundary_fetches_complete_history(
     history: list[dict[str, Any]], compaction: dict[str, Any], boundary: str

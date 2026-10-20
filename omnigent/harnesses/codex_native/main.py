@@ -2152,6 +2152,7 @@ class _CodexResumeHistoryUnavailableError(click.ClickException):
 
 _CODEX_HISTORY_FETCH_ATTEMPTS = 3
 _CODEX_HISTORY_RETRY_MAX_DELAY_S = 10.0
+_CODEX_RESUME_ROLLOUT_ITEM_TYPES = frozenset({"message", "function_call", "function_call_output"})
 
 
 async def _codex_history_retry_sleep(delay: float) -> None:
@@ -2182,15 +2183,20 @@ def _codex_resume_compaction_covers_history(
         return False
     required_response_ids: set[str] = set()
     for item in newest_first[:compaction_index]:
+        item_type = item.get("type")
+        if item_type not in _CODEX_RESUME_ROLLOUT_ITEM_TYPES:
+            continue
+        if item_type == "message" and item.get("role") not in ("user", "assistant"):
+            continue
         response_id = _session_item_response_id(item)
-        if response_id in interrupted_response_ids or item.get("type") == "compaction":
+        if response_id in interrupted_response_ids:
             continue
         if not response_id and not item.get("id"):
             # Index-based synthetic turn ids require the full history's offset.
             return False
         if response_id is not None:
             required_response_ids.add(response_id)
-        if item.get("type") == "function_call_output":
+        if item_type == "function_call_output":
             call_id = item.get("call_id")
             if not isinstance(call_id, str) or call_id not in call_response_ids:
                 return False
