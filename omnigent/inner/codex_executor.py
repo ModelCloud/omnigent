@@ -41,6 +41,11 @@ import tomllib
 from packaging.version import InvalidVersion, Version
 
 from omnigent._platform import resolve_cli_binary
+from omnigent.databricks_ai_gateway import (
+    CODEX_AGENT,
+    is_databricks_ai_gateway_url,
+    with_gateway_attribution,
+)
 from omnigent.errors import HarnessTransportClosedError
 from omnigent.harnesses.codex_egress import (
     CERTIFICATE_FAILURE_CODE,
@@ -1491,6 +1496,8 @@ def materialize_codex_provider_config(
 
     Built-in provider tables (e.g. ``[model_providers.amazon-bedrock]``) stay
     untouched: Codex rejects unsupported fields there by discarding the whole config.
+    Custom providers on a Databricks Unity Gateway also get the gateway's
+    usage-attribution ``http_headers``.
 
     :param codex_home: Private session ``CODEX_HOME`` directory.
     :param config_overrides: Pending Codex config override strings.
@@ -1565,6 +1572,12 @@ def materialize_codex_provider_config(
         # generic custom providers retain their explicit continuation policy.
         if provider_name == "localdex":
             provider_config["supports_responses_continuation"] = True
+        base_url = provider_config.get("base_url")
+        if isinstance(base_url, str) and is_databricks_ai_gateway_url(base_url):
+            headers = provider_config.get("http_headers")
+            provider_config["http_headers"] = with_gateway_attribution(
+                headers if isinstance(headers, Mapping) else None, CODEX_AGENT, base_url
+            )
 
     fd, tmp_name = tempfile.mkstemp(prefix="config.toml.", dir=str(codex_home))
     try:
