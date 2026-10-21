@@ -3262,7 +3262,7 @@ def create_runner_app(
                     event = await asyncio.wait_for(
                         queue.get(), timeout=_SESSION_STREAM_HEARTBEAT_S
                     )
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     yield heartbeat_frame
                     continue
                 if event is None:
@@ -6603,7 +6603,7 @@ def create_runner_app(
                                     _injection_resp.status_code,
                                     extra={"session_id": conversation_id},
                                 )
-                        except (httpx.HTTPError, RuntimeError, asyncio.TimeoutError):
+                        except (TimeoutError, httpx.HTTPError, RuntimeError):
                             _logger.debug(
                                 "mid-turn injection forward failed for %s; "
                                 "LLM will see message on next turn",

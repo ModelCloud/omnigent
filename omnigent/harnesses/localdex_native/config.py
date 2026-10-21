@@ -14,6 +14,7 @@ import json
 import os
 import re
 import tempfile
+import tomllib
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -21,7 +22,6 @@ from pathlib import Path
 from urllib.parse import quote, urlparse
 
 import httpx
-import tomllib
 
 LOCALDEX_CONFIG_ROOT = Path.home() / ".local" / "share" / "localdex"
 LOCALDEX_CONFIG_PATH = LOCALDEX_CONFIG_ROOT / "config.toml"

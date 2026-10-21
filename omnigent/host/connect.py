@@ -439,9 +439,7 @@ def _connection_refused(exc: BaseException) -> bool:
     :returns: ``True`` for a connection-refused failure, ``False``
         otherwise (fail toward "not refused" — the loop keeps retrying).
     """
-    # BaseExceptionGroup is a 3.11+ builtin (we require 3.12); ruff's pinned
-    # py310 target misflags it as undefined.
-    if isinstance(exc, BaseExceptionGroup):  # noqa: F821
+    if isinstance(exc, BaseExceptionGroup):
         return all(_connection_refused(sub) for sub in exc.exceptions)
     if not isinstance(exc, OSError):
         return False
@@ -637,6 +635,11 @@ _RUNNER_ENV_ALLOWLIST: frozenset[str] = frozenset(
         # runner on the default launch. Safe to propagate: not a secret, just a
         # plugin name.
         "OMNIGENT_CLAUDE_LAUNCHER",
+        # claude-sdk executor reads this and forwards it as CLAUDE_CODE_ENTRYPOINT;
+        # the daemon→runner strip would otherwise drop it. Not a secret.
+        "OMNIGENT_CLAUDE_CODE_ENTRYPOINT",
+        # Claude-family background-title model override (a model alias). Not a secret.
+        "OMNIGENT_BACKGROUND_TITLE_CLAUDE_MODEL",
         # Testing knob: override the context window size for compaction
         # trigger threshold. Not a secret — a plain integer.
         "AP_CONTEXT_WINDOW_OVERRIDE",

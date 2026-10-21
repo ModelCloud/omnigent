@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import tomllib
+from pathlib import Path
 
 from omnigent.harnesses.localdex_native.config import (
     load_localdex_config,

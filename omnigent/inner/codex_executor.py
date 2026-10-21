@@ -22,6 +22,7 @@ import sys
 import tempfile
 import threading
 import time
+import tomllib
 from collections.abc import (
     AsyncIterator,
     Awaitable,
@@ -37,7 +38,6 @@ from functools import partial
 from pathlib import Path
 from typing import Any, Protocol, TypeAlias, cast
 
-import tomllib
 from packaging.version import InvalidVersion, Version
 
 from omnigent._platform import resolve_cli_binary
@@ -605,7 +605,7 @@ async def _codex_cli_version_text(codex_path: str) -> str | None:
         stdout, _ = await asyncio.wait_for(
             proc.communicate(), timeout=_CODEX_VERSION_PROBE_TIMEOUT_SECONDS
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         with suppress(ProcessLookupError):
             proc.kill()
         with suppress(Exception):
@@ -3734,7 +3734,7 @@ class _CodexAppServerSession:
                 return final_response
             try:
                 message = await asyncio.wait_for(self._events.get(), timeout=remaining)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 return final_response
             if isinstance(message, HarnessTransportClosedError):
                 # A completed turn remains successful when its process exits.
