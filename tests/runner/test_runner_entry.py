@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import importlib
 import io
 import logging
@@ -17,6 +18,7 @@ from typing import Any
 import httpx
 import pytest
 
+from omnigent.errors import OmnigentError
 from omnigent.native import _native_forwarder_health as native_forwarder_health
 from omnigent.native import native_terminal
 from omnigent.runner._entry import (
@@ -2786,7 +2788,14 @@ async def test_resolve_agent_spec_from_server_caches_by_version_and_content(
     ]
 
 
-async def test_resolve_agent_spec_rebuilds_cache_after_config_is_removed(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "cached_config",
+    [None, b"name: truncated-agent\n", b"spec_version: [\n", b"\xff"],
+    ids=["missing", "missing-version", "invalid-yaml", "invalid-encoding"],
+)
+async def test_resolve_agent_spec_rebuilds_damaged_cache(
+    tmp_path: Path, cached_config: bytes | None
+) -> None:
     bundle = bundle_files(
         {
             "config.yaml": (
@@ -2803,7 +2812,11 @@ async def test_resolve_agent_spec_rebuilds_cache_after_config_is_removed(tmp_pat
             client, tmp_path, "ag_cached", session_id="conv_test"
         )
         assert original is not None
-        (original.workdir / "config.yaml").unlink()
+        config_path = original.workdir / "config.yaml"
+        if cached_config is None:
+            config_path.unlink()
+        else:
+            config_path.write_bytes(cached_config)
         (original.workdir / "partial.txt").write_text("left behind by an interrupted extraction")
 
         repaired = await _resolve_agent_spec_from_server(
@@ -2816,6 +2829,31 @@ async def test_resolve_agent_spec_rebuilds_cache_after_config_is_removed(tmp_pat
     assert (repaired.workdir / "config.yaml").is_file()
     assert not (repaired.workdir / "partial.txt").exists()
     assert list(tmp_path.iterdir()) == [repaired.workdir]
+
+
+async def test_resolve_agent_spec_keeps_cache_when_downloaded_bundle_is_invalid(
+    tmp_path: Path,
+) -> None:
+    config = b"name: truncated-agent\n"
+    bundle = bundle_files({"config.yaml": config})
+    digest = hashlib.sha256(bundle).hexdigest()[:16]
+    cached = _agent_cache_dest(tmp_path, "ag_cached", f"0-{digest}")
+    cached.mkdir()
+    (cached / "config.yaml").write_bytes(config)
+    (cached / "in-use.txt").write_text("retain until a replacement validates")
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, content=bundle)),
+        base_url="http://server.test",
+    ) as client:
+        with pytest.raises(OmnigentError, match="missing required field: spec_version"):
+            await _resolve_agent_spec_from_server(
+                client, tmp_path, "ag_cached", session_id="conv_test"
+            )
+
+    assert (cached / "config.yaml").read_bytes() == config
+    assert (cached / "in-use.txt").read_text() == "retain until a replacement validates"
+    assert list(tmp_path.iterdir()) == [cached]
 
 
 async def test_resolve_agent_spec_does_not_publish_interrupted_extraction(
@@ -3061,23 +3099,14 @@ def test_main_configures_runner_process_logging(
     assert captured == {"destination": "runner", "force": True}
 
 
-def test_main_makes_the_workspace_importable(
+def test_main_preserves_runtime_import_path(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """``main`` puts the workspace back on ``sys.path`` for local tools.
-
-    The runner is spawned with ``-P`` so its workspace cannot shadow the
-    installed omnigent. Spec-declared local tools are still imported by dotted
-    path, so the workspace has to be restored once omnigent itself is imported.
-
-    :param monkeypatch: Pytest monkeypatch fixture.
-    :param tmp_path: Stands in for the session workspace.
-    :returns: None.
-    """
+    """Local callable packages must be installed outside the session workspace."""
 
     async def _stop_immediately() -> None:
-        """Let ``main`` return once the path is set up.
+        """Let ``main`` return without starting a tunnel.
 
         :returns: None.
         """
@@ -3089,9 +3118,12 @@ def test_main_makes_the_workspace_importable(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "path", [p for p in sys.path if p != str(tmp_path)])
 
+    runtime_path = list(sys.path)
+
     main()
 
-    assert str(tmp_path) in sys.path
+    assert sys.path == runtime_path
+    assert str(tmp_path) not in sys.path
 
 
 def test_main_preserves_unexpected_runtime_errors(
