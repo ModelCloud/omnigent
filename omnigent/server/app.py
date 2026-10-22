@@ -1804,6 +1804,7 @@ def create_app(
                 # (before this lifespan runs), so it is already on state here.
                 sandbox_config=sandbox_config,
                 managed_launches=app_inst.state.managed_launches,
+                startup_inputs=app_inst.state.startup_inputs,
                 app_state=app_inst.state,
             )
             on_fire = build_on_fire(fire_deps)

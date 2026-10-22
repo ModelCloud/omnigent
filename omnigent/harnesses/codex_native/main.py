@@ -31,6 +31,7 @@ from omnigent._wrapper_labels import (
 )
 from omnigent._wrapper_labels import WRAPPER_LABEL_KEY as _WRAPPER_LABEL_KEY
 from omnigent.conversation_browser import conversation_url, open_conversation_link_if_enabled
+from omnigent.entities.conversation import NON_CONTENT_ITEM_TYPES
 from omnigent.entities.session_resources import terminal_resource_id
 from omnigent.harness_availability import (
     HARNESS_BINARY_MISSING,
@@ -2524,41 +2525,43 @@ def _codex_items_with_outputs_in_call_order(
     items: list[_JsonObject],
 ) -> list[_JsonObject]:
     """
-    Reorder each contiguous run of tool outputs to match their calls' order.
+    Reorder tool outputs separated only by metadata to match their calls' order.
 
     Parallel tool outputs are stored in completion order, but Codex keeps them
     in call order, and providers that pair outputs by position reject the swap.
 
     :param items: Flat Omnigent item dicts in chronological order.
-    :returns: Items with every run of ``function_call_output`` items sorted by
-        the position of its ``function_call``; unmatched outputs keep their
-        relative order at the end of the run.
+    :returns: Items with output slots sorted by their calls' positions, preserving
+        metadata positions and all content or compaction boundaries. Unmatched
+        outputs keep their relative order at the end of the run.
     """
     call_positions: dict[str, int] = {}
     for position, item in enumerate(items):
         call_id = item.get("call_id")
         if item.get("type") == "function_call" and isinstance(call_id, str):
             call_positions.setdefault(call_id, position)
-    ordered: list[_JsonObject] = []
-    run: list[_JsonObject] = []
+    ordered = list(items)
+    output_positions: list[int] = []
 
     def flush_run() -> None:
-        run.sort(
+        outputs = sorted(
+            (ordered[position] for position in output_positions),
             key=lambda output: (
                 (0, call_positions[call_id])
                 if isinstance(call_id := output.get("call_id"), str) and call_id in call_positions
                 else (1, 0)
-            )
+            ),
         )
-        ordered.extend(run)
-        run.clear()
+        for position, output in zip(output_positions, outputs, strict=True):
+            ordered[position] = output
+        output_positions.clear()
 
-    for item in items:
-        if item.get("type") == "function_call_output":
-            run.append(item)
-            continue
-        flush_run()
-        ordered.append(item)
+    for position, item in enumerate(items):
+        item_type = item.get("type")
+        if item_type == "function_call_output":
+            output_positions.append(position)
+        elif item_type == "compaction" or item_type not in NON_CONTENT_ITEM_TYPES:
+            flush_run()
     flush_run()
     return ordered
 
