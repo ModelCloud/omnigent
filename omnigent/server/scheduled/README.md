@@ -4,6 +4,9 @@
 occurrence once across server replicas. It also checks interrupted startups so a
 server crash does not leave a run in `starting` forever.
 
+The `automations_v2` flag selects this scheduler. It defaults to off, which keeps
+the existing in-memory timers.
+
 ## Starting a run
 
 Each poll fills in missing `next_run_at` values, then finds active tasks that are
@@ -90,8 +93,8 @@ remain in the database for a later recovery sweep.
 
 ## Execution and recovery callbacks
 
-The caller supplies execution, recovery, and host-ownership callbacks when
-constructing `PersistentTaskScheduler`:
+The application supplies these through `ScheduledTaskDispatchHooks`, passed to
+`create_app(scheduled_task_dispatch=...)`:
 
 | Callback | Responsibility |
 | --- | --- |
@@ -133,20 +136,65 @@ request that was already accepted.
 
 ## Timing and capacity
 
-Pass these settings to `PersistentTaskScheduler`. `ScheduledTaskSchedulerConfig`
-validates them together; renewal must happen more frequently than lease expiry.
+These are the defaults in the server YAML configuration:
 
-| Setting | Default | Meaning |
-| --- | --- | --- |
-| `poll_seconds` | 30 | Time between polls for due tasks and expired startups. |
-| `renewal_seconds` | 30 | Time between startup heartbeats. |
-| `lease_seconds` | 120 | Lease duration after a successful renewal. |
-| `recovery_seconds` | 30 | Timeout for inspecting and recovering one run. |
-| `batch_size` | 100 | Maximum rows per database page. |
-| `max_startups` | 100 | Concurrent startups per server, not active agent turns. |
+```yaml
+scheduled_task_scheduler:
+  startup_retry_seconds: 30  # Delay before retrying failed scheduler startup, in either mode
+  poll_seconds: 30       # Time between checks for due tasks and expired startups
+  renewal_seconds: 30    # Time between startup heartbeats
+  lease_seconds: 120     # Lease duration after a successful renewal
+  recovery_seconds: 30   # Timeout for inspecting and recovering one run
+  batch_size: 100        # Maximum rows per database page
+  max_startups: 100      # Concurrent startups per server, not active agent turns
+```
 
-Values must be positive and finite; lease seconds and capacities must be whole
-numbers. Settings are fixed for the scheduler's lifetime.
+Omit the section or individual settings to use defaults; an empty section also
+uses defaults. For the CLI, pass the YAML file with `omnigent server -c path/to/config.yaml`.
+Application wrappers can pass `server_config`; otherwise `create_app()` reads the
+file selected by `OMNIGENT_CONFIG`. Wrappers can also
+supply `scheduled_task_scheduler_config=ScheduledTaskSchedulerConfig(...)` to
+replace the YAML scheduler settings.
+
+Settings take effect at startup. Values must be positive and finite; lease seconds
+and capacities must be whole numbers. Renewal must be more frequent than expiry.
+Invalid settings fail startup when the flag is on. With the flag off, only
+`startup_retry_seconds` is read and validated; other scheduler settings are ignored.
+
+## Switching schedulers
+
+Set `OMNIGENT_FEATURES=automations_v2` and restart all scheduler replicas together.
+The application requires a compatible store and execution/recovery callbacks.
+Built-in entrypoints, including the CLI and Docker server, do not yet supply these
+callbacks, so enabling the flag there fails startup. A deployment wrapper must
+pass them to `create_app()` before enabling the flag.
+The legacy Run now path still uses a local overlap guard, so it must join the
+claimed-run path before rollout. The executor integration must also handle a
+session that finishes while its run still says `starting`; the current recovery
+callback can only return `running`, `failed`, or an uncertain outcome.
+
+To switch back, stop new startups and let existing ones finish or recover. Then
+set `OMNIGENT_FEATURES=-automations_v2` and restart all replicas. Legacy startup
+clears saved `next_run_at` values before creating future timers. Task definitions,
+run history, and running agent sessions are retained. Clearing the saved times
+prevents a later re-enable from replaying occurrences handled by the old timers.
+If clearing or startup fails, it retries after `startup_retry_seconds` (default 30).
+Legacy timers become available to routes after cursor reset, before task loading;
+changes made during loading take precedence over the database snapshot. A failed
+load clears partial timers before retrying. Persistent-mode task routes return
+saved `next_run_at` values even when the scheduler is unavailable.
+
+The startup retry interval applies to failures in either scheduler's `start()`.
+Persistent startup normally just launches the polling loop; database failures
+inside that loop retry at `poll_seconds`, not `startup_retry_seconds`.
+Database reads and cursor resets run off the event loop. Shutdown stops scheduling
+before the sandbox reaper and waits for an ongoing cursor reset to finish, so a
+slow database write can delay shutdown.
+
+All replicas sharing a database must use the same mode, because legacy timers do
+not claim occurrences. Changing the environment of a running server does not
+switch its scheduler. The flag is exposed through `/v1/info`; per-workspace access
+controls are separate.
 
 The store supports PostgreSQL, MySQL, CockroachDB, and SQLite. Cloudflare D1 cannot
 provide the transaction needed to create a run and advance its schedule together.

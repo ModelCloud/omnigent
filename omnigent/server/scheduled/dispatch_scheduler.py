@@ -6,6 +6,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Literal
 
 from omnigent.db.db_models import workspace_scope
@@ -160,6 +161,15 @@ OwnsHost = Callable[[int, str | None], Awaitable[bool]]
 
 async def _owns_every_host(_workspace_id: int, _host_id: str | None) -> bool:
     return True
+
+
+@dataclass(frozen=True)
+class ScheduledTaskDispatchHooks:
+    """Execution, recovery, and host-ownership callbacks; contracts are in README.md."""
+
+    on_fire: ClaimedFire
+    on_expired: ReconcileStartup
+    owns_host: OwnsHost = _owns_every_host
 
 
 class PersistentTaskScheduler:
