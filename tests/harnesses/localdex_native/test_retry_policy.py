@@ -16,6 +16,7 @@ def test_materialized_localdex_spec_disables_stream_retries(tmp_path: Path) -> N
     spec = yaml.safe_load(spec_path.read_text(encoding="utf-8"))
 
     assert spec["executor"]["model"] == "QB/DSV4.1-Flash"
+    assert spec["executor"]["reasoning_effort"] == "max"
     assert spec["llm"] == {
         "model": "QB/DSV4.1-Flash",
         "retry": {

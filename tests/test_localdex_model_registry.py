@@ -73,7 +73,38 @@ display_name = "Lab Coder"
         ("QB/DSV4.1-Flash", "DSV Flash"),
         ("lab/coder-32b", "Lab Coder"),
     ]
+    assert rows[0]["isDefault"] is True
+    assert rows[0]["defaultReasoningEffort"] == "max"
     assert rows[0]["supportedReasoningEfforts"][0]["reasoningEffort"] == "off"
+
+
+def test_localdex_row_overrides_an_upstream_default(tmp_path: Path) -> None:
+    providers = tmp_path / "config.toml"
+    providers.write_text(
+        """
+[model_providers.localdex]
+base_url = "http://127.0.0.1:9000/v1"
+env_key = "LOCALDEX_API_KEY"
+wire_api = "responses"
+requires_openai_auth = false
+""",
+        encoding="utf-8",
+    )
+    models = tmp_path / "models.toml"
+    models.write_text(
+        '[models."QB/DSV4.1-Flash"]\nprovider = "localdex"\n',
+        encoding="utf-8",
+    )
+    registration = load_localdex_config(providers, models_path=models, require_token=False)
+
+    rows = with_localdex_model_picker_row(
+        [{"id": "gpt-6-sol", "displayName": "GPT-6 Sol", "isDefault": True}],
+        registration,
+    )
+
+    assert rows[0]["id"] == "QB/DSV4.1-Flash"
+    assert rows[0]["isDefault"] is True
+    assert "isDefault" not in rows[1]
 
 
 def test_localdex_provider_materialization_preserves_codex_provider_routes(tmp_path: Path) -> None:
