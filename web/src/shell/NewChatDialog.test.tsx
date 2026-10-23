@@ -10734,7 +10734,7 @@ describe("NewChatLandingScreen Smart Routing harness row", () => {
 
     const notice = await screen.findByTestId("new-chat-landing-smart-routing-dropped");
     expect(notice.textContent).toContain(
-      "needs LocalDex running on the workspace AI gateway on machine-2",
+      "needs LocalDex running on the workspace Unity Gateway on machine-2",
     );
   });
 
