@@ -2764,8 +2764,7 @@ export function NewChatLandingScreen() {
   const { addRecentHarness } = useRecentHarnesses();
 
   const allHosts = hosts ?? [];
-  const onlineHosts = allHosts.filter((h) => h.status === "online");
-  const offlineHosts = allHosts.filter((h) => h.status === "offline");
+  const unsortedOnlineHosts = allHosts.filter((h) => h.status === "online");
 
   // Identify this machine exactly through Electron. A standalone browser cannot
   // read local host config, so a loopback server with exactly one online host
@@ -2773,8 +2772,19 @@ export function NewChatLandingScreen() {
   const thisMachineHostId = resolveThisMachineHostId(
     desktopHost?.hostId ?? null,
     isCurrentServerLocal(),
-    onlineHosts.map((host) => host.host_id),
+    unsortedOnlineHosts.map((host) => host.host_id),
   );
+
+  // Pickers scan for a machine by name, so both lists sort by the displayed
+  // label rather than keeping the /v1/hosts last-updated order.
+  const compareHostLabels = (a: Host, b: Host) =>
+    displayNameForHost(a, thisMachineHostId, navigator.userAgent).localeCompare(
+      displayNameForHost(b, thisMachineHostId, navigator.userAgent),
+      undefined,
+      { sensitivity: "base" },
+    );
+  const onlineHosts = unsortedOnlineHosts.sort(compareHostLabels);
+  const offlineHosts = allHosts.filter((h) => h.status === "offline").sort(compareHostLabels);
   // When it's already in the host list (online or offline) we connect via that
   // row. With another live host there is already a valid place to run, so do
   // not add a competing local-machine action.
@@ -6106,7 +6116,7 @@ export function NewChatLandingScreen() {
     ...onlineHosts,
     ...offlineHosts.filter((host) => host.host_id === selectedHostId || isReconnectRow(host)),
   ];
-  // Preserve /v1/hosts order: most recently updated first.
+  // Remaining offline hosts collapse into a section at the bottom, also A→Z.
   const otherOfflineHosts = offlineHosts.filter(
     (host) => host.host_id !== selectedHostId && !isReconnectRow(host),
   );

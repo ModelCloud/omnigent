@@ -1446,3 +1446,84 @@ async def test_interrupted_turn_keeps_launcher_certificate_record(tmp_path: Path
     )
 
     assert read_certificate_failure(tmp_path) is not None
+
+
+@pytest.mark.asyncio
+async def test_connection_retry_surfaces_once_per_turn(tmp_path: Path) -> None:
+    """Reconnect spam posts one ``blocked_on`` per turn, not one per cycle.
+
+    Codex emits the retry notification on every attempt; deduping on the raw
+    message would re-post whenever the detail text wobbles, so connection
+    retries share one stable key until the turn recovers.
+    """
+    client = _RecordingClient()
+    _seed_active_turn(tmp_path, "turn_123")
+    forwarder_state = fwd._CodexForwarderState()
+    coalescer = fwd._SessionUsageCoalescer(client, "conv_x")  # type: ignore[arg-type]
+    tracker = fwd._CodexElicitationTaskTracker()
+    for detail in ("Connection failed: error sending request", "Connection failed: dns"):
+        params = _connection_retry_params()
+        params["error"]["additionalDetails"] = detail
+        await fwd._handle_event(
+            client,  # type: ignore[arg-type]
+            session_id="conv_x",
+            bridge_dir=tmp_path,
+            event={"method": "error", "params": params},
+            usage_coalescer=coalescer,
+            elicitation_tracker=tracker,
+            expected_thread_id="thread_123",
+            forwarder_state=forwarder_state,
+        )
+    assert client.posts == [
+        (
+            "/v1/sessions/conv_x/events",
+            {
+                "type": "external_session_status",
+                "data": {
+                    "status": "running",
+                    "blocked_on": "Reconnecting... waiting for network",
+                },
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_item_event_after_retry_clears_blocked_on(tmp_path: Path) -> None:
+    """Resumed item traffic clears a parked ``blocked_on`` indicator.
+
+    ``blocked_on`` clears only on a status edge, but a recovered turn streams
+    items, not edges — without the clear the label would outlive the outage.
+    After clearing, a fresh outage re-surfaces normally.
+    """
+    client = _RecordingClient()
+    _seed_active_turn(tmp_path, "turn_123")
+    forwarder_state = fwd._CodexForwarderState()
+    coalescer = fwd._SessionUsageCoalescer(client, "conv_x")  # type: ignore[arg-type]
+    tracker = fwd._CodexElicitationTaskTracker()
+
+    async def send(method: str, params: dict) -> None:
+        await fwd._handle_event(
+            client,  # type: ignore[arg-type]
+            session_id="conv_x",
+            bridge_dir=tmp_path,
+            event={"method": method, "params": params},
+            usage_coalescer=coalescer,
+            elicitation_tracker=tracker,
+            expected_thread_id="thread_123",
+            forwarder_state=forwarder_state,
+        )
+
+    await send("error", _connection_retry_params())
+    await send(
+        "item/started",
+        {"threadId": "thread_123", "turnId": "turn_123", "item": {"type": "webSearch"}},
+    )
+    await send("error", _connection_retry_params())
+
+    statuses = [p[1]["data"] for p in client.posts if p[1]["type"] == "external_session_status"]
+    assert statuses == [
+        {"status": "running", "blocked_on": "Reconnecting... waiting for network"},
+        {"status": "running"},
+        {"status": "running", "blocked_on": "Reconnecting... waiting for network"},
+    ]

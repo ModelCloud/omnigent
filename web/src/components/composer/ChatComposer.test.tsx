@@ -205,6 +205,15 @@ describe("ChatComposer", () => {
     );
   });
 
+  it("keeps the resume variant clickable and busy-gated like send", () => {
+    const { rerender } = render(<ComposerSendButton label="Resume" resume />);
+    const button = screen.getByRole("button", { name: "Resume" });
+    expect(button).toBeEnabled();
+    expect(button).not.toHaveClass("bg-destructive");
+    rerender(<ComposerSendButton label="Resume" resume busy />);
+    expect(screen.getByRole("button", { name: "Resume" })).toHaveAttribute("aria-busy", "true");
+  });
+
   it("uses the same button size in send and interrupt states", () => {
     const { rerender } = render(<ComposerSendButton label="Send" />);
     const send = screen.getByRole("button", { name: "Send" });

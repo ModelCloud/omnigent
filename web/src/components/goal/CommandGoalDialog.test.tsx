@@ -52,6 +52,24 @@ describe("CommandGoalDialog", () => {
     expect(onStartGoal).not.toHaveBeenCalled();
   });
 
+  it("keeps the Start button reachable when the condition runs long", () => {
+    render(
+      <CommandGoalDialog open onOpenChange={vi.fn()} readOnly={false} onStartGoal={vi.fn()} />,
+    );
+    fireEvent.change(screen.getByTestId("goal-condition"), {
+      target: { value: "All tests pass. ".repeat(400) },
+    });
+
+    // Same cap contract as GoalDialog: 85dvh max, fixed footer, editor scrolls.
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveClass("max-h-[85dvh]", "grid-rows-[auto_1fr_auto]");
+    const scrollBody = dialog.querySelector(".overflow-y-auto");
+    expect(scrollBody).not.toBeNull();
+    const start = screen.getByTestId("goal-start");
+    expect(start).toBeEnabled();
+    expect(scrollBody).not.toContainElement(start);
+  });
+
   it("disables editing in read-only sessions", () => {
     render(<CommandGoalDialog open onOpenChange={vi.fn()} readOnly onStartGoal={vi.fn()} />);
 
