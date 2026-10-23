@@ -24,9 +24,10 @@ and the recording protocol for comparing revisions.
 - `changes`: select a changed Markdown file, then exit diff to edit it.
 - `direct-link`: open a session URL with a selected Markdown file.
 - `chat-link`: follow a Markdown file link in a message; a line citation opens
-  Source at that line, rather than the rich editor. Right-clicking or
-  long-pressing the link offers Copy path, which copies its path (absolute
-  when the workspace root is known).
+  Source at that line, rather than the rich editor, and a range (`:12-18`,
+  `#L12-L18`) highlights every cited line. Right-clicking or long-pressing the
+  link offers Copy path, which copies its path (absolute when the workspace root
+  is known).
 - `tool-row`: click the path on an agent's Read, Write, or Edit row for a
   Markdown file, including one the agent just created; absolute paths open too.
 - `document-link`: follow a relative file link inside the editor's link popup.

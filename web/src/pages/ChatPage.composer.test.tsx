@@ -5870,6 +5870,7 @@ describe("Composer config gear", () => {
     setComposerState({
       conversationId: "conv_test",
       skills: [],
+      isNativeTerminalSession: false,
       sessionModelOverride: null,
       llmModel: null,
       nativeVendorOwnsModel: false,
@@ -6523,6 +6524,56 @@ describe("Composer config gear", () => {
     expect(screen.getByTestId("composer-agent-menu")).toBeInTheDocument();
     expect(calls).toEqual(["model", "effort"]);
   });
+
+  it.each([
+    { runnerOnline: false, explained: true },
+    { runnerOnline: true, explained: false },
+  ])(
+    "explains a model pick held open by a session wake (runnerOnline=$runnerOnline)",
+    async ({ runnerOnline, explained }) => {
+      // The server wakes a disconnected native session before switching its model,
+      // so the locked picker must say why it is waiting.
+      let resolveModel: () => void = () => {};
+      const setModel = vi.fn().mockImplementation(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveModel = resolve;
+          }),
+      );
+      const options = [
+        { id: "opus", model: "opus", displayName: "Opus" },
+        { id: "sonnet", model: "sonnet", displayName: "Sonnet" },
+      ] as never;
+      // Native by harness alone: a custom agent on a native harness has no wrapper label.
+      useChatStore.setState({
+        setModel,
+        isNativeTerminalSession: true,
+        codexModelOptions: options,
+      });
+      renderWithTooltips(
+        <Composer
+          {...composerProps({
+            showModels: true,
+            modelPickerKind: "claude",
+            codexModelOptions: options,
+            runnerOnline,
+          })}
+        />,
+      );
+      await openSessionModels();
+      fireEvent.click(screen.getByTestId("composer-agent-model-sonnet"));
+      await waitFor(() => expect(setModel).toHaveBeenCalled());
+      const notice = screen.queryByTestId("composer-agent-starting-session");
+      if (explained) expect(notice).toHaveTextContent("Starting the session to switch models…");
+      else expect(notice).toBeNull();
+
+      act(() => resolveModel());
+      await waitFor(() =>
+        expect(screen.getByTestId("composer-agent-edit")).not.toHaveAttribute("data-disabled"),
+      );
+      expect(screen.queryByTestId("composer-agent-starting-session")).toBeNull();
+    },
+  );
 
   it("leaves no lingering error indicator when a session config update fails", async () => {
     const setModel = vi.fn().mockRejectedValue(new Error("Host stopped responding"));
