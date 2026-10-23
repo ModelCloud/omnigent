@@ -61,10 +61,17 @@ and steers messages while the agent is busy.
   `slash_command` so it runs on an in-process harness. A native terminal side
   chat shows no menu and sends slash text to the vendor TUI.
 - `session-mcp-status`: selecting `/mcp` in a started session replaces the slash
-  suggestions with a read-only list of MCP servers enabled for that session and
-  links to harness Settings with the session’s host preselected. Host-native entries are limited to the
-  active harness, and a host lookup failure leaves known agent entries visible.
-  It is absent before a session starts and from side chat.
+  suggestions with the MCP servers enabled for that session and links to harness
+  Settings with the session’s host preselected. Host-native entries are limited
+  to the active harness, and a host lookup failure leaves known agent entries
+  visible. It is absent before a session starts and from side chat. When the
+  server has the MCP registry on, each registry service row also shows its
+  account state. States: connected; sign-in required, with an inline **Sign in**
+  that runs the popup sign-in and flips the row to connected, or a **Sign in
+  from Settings** link for a service that needs a typed token or workspace URL;
+  unavailable, for a service the account no longer sees; signing in; failed or
+  cancelled, reported on the row with Sign in available again. Host and custom
+  servers carry no account state.
 - `codex-plugin-skills`: typing `$` lists enabled Codex plugin skills in both
   composers, including cached plugins whose marketplace inventory is unavailable.
   Selecting a row inserts its namespaced identifier.
@@ -145,8 +152,10 @@ and steers messages while the agent is busy.
 - Type `/` in the message box; attach files with the button, by paste, or by
   dropping them on the transcript.
 - Select `/mcp` to replace the suggestions with the MCP servers enabled for the
-  session. An empty list points to Settings; the command is absent on the
-  new-session composer.
+  session. A registry service that needs sign-in shows **Sign in**; click it
+  and finish the popup, or follow **Sign in from Settings** for a token or
+  workspace service. An empty list points to Settings; the command is absent
+  on the new-session composer.
 - For Codex plugin skills, type `$<skill-name>` in Chat and select the
   namespaced suggestion. The vendor terminal owns its own completion menu.
 - Click the microphone button, or press ⌘/Ctrl+Alt+V, to dictate into the
@@ -394,6 +403,18 @@ Other connection providers alone do not enable the managed MCP picker.
   its loading status stays visible alongside agent entries; a session without a
   known host shows unavailable status rather than an empty inventory. Click
   **Go to Settings** and confirm the session’s harness and host are selected.
+  Registry states: `web/src/components/SlashCommandMenu.test.tsx` covers the
+  row labels, the Sign in / Signing in… / error renderings and the Settings
+  link; `ChatPage.composer.test.tsx` covers the catalog join (sign-in from the
+  panel through to Connected, cancellation with retry, the Settings link for a
+  token service, an unavailable service, a catalog read failure, and no
+  registry read when the server has it off or no row needs it);
+  `web/src/hooks/useMcpRegistry.test.tsx` covers the sign-in hook's abort and
+  confirmation paths, and a reopened panel shows no state from the previous
+  open. Manually, with the registry on, attach an OAuth service
+  that is not connected, select `/mcp`, expect **Sign-in required** and
+  **Sign in**, complete the popup and expect **Connected**; cancel it instead
+  and expect the message on the row with Sign in still offered.
 - **`codex-plugin-skills`, both composers:**
   `tests/e2e_ui/chat/test_codex_plugin_skills.py::test_plugin_skill_in_both_composers_after_inventory_failure`
   installs an enabled local plugin using the real Codex CLI, moves away its

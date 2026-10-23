@@ -203,6 +203,7 @@ import { useFileDropTarget } from "@/hooks/useFileDropTarget";
 import { useComposerAttachments } from "@/hooks/useComposerAttachments";
 import { useSlashCompletion } from "@/hooks/useSlashCompletion";
 import { isBrandHarness, useHostMcpServers } from "@/hooks/useHarnessInventory";
+import { useMcpRegistryCatalog, useRegistrySignIn } from "@/hooks/useMcpRegistry";
 import {
   getSessionHost,
   sessionRoutingHostId,
@@ -210,6 +211,7 @@ import {
 } from "@/lib/sessionHost";
 import { HostBadge } from "@/components/HostBadge";
 import {
+  type McpServerRow,
   BUILTIN_SLASH_COMMANDS,
   isSlashCommandText,
   matchSlashCommandInvocation,
@@ -2563,7 +2565,7 @@ function ComposerImpl(
     hostMcpRoutingId,
     mcpPanelRequested && hostMcpHarness !== null,
   );
-  const mcpServersStatus =
+  const hostMcpStatus =
     hostMcpHarness === null
       ? undefined
       : hostMcpRoutingId === null
@@ -3335,8 +3337,35 @@ function ComposerImpl(
   );
   const skillLabels = useMemo(() => skillDisplayNames(skills, skillPrefix), [skills, skillPrefix]);
   const selectedAgent = agents?.find((agent) => agent.id === boundAgentId);
+  const composerServerInfo = useServerInfo();
+  const registryEnabled =
+    composerServerInfo !== "loading" && !!composerServerInfo.enabled_connections?.includes("mcp");
+  const hasRegistryServers =
+    registryEnabled &&
+    (selectedAgent?.mcp_servers ?? []).some((server) => server.transport === "registry");
+  // Load account state only while `/mcp` shows registry rows.
+  const registryCatalog = useMcpRegistryCatalog(mcpPanelRequested && hasRegistryServers);
+  const registrySignIn = useRegistrySignIn(registryCatalog.refresh);
+  const { signIn: signInToRegistryService, clearError: clearRegistrySignInError } = registrySignIn;
+  const onMcpSignIn = useCallback(
+    (name: string) => {
+      const service = registryCatalog.services.find((s) => s.id === name);
+      if (service) void signInToRegistryService(service);
+    },
+    [registryCatalog.services, signInToRegistryService],
+  );
+  // Both can be true at once (an unreachable host and an unreadable catalog).
+  const mcpServersStatus =
+    [
+      hostMcpStatus,
+      hasRegistryServers && registryCatalog.error
+        ? "Couldn’t check MCP service connections."
+        : undefined,
+    ]
+      .filter(Boolean)
+      .join(" ") || undefined;
   const mcpServers = useMemo(() => {
-    const byName = new Map(
+    const byName = new Map<string, McpServerRow>(
       (hostMcpQuery.data ?? [])
         .filter((server) => server.harness === hostMcpHarness)
         .map((server) => [
@@ -3350,11 +3379,38 @@ function ComposerImpl(
           },
         ]),
     );
+    const catalogLoaded = !registryCatalog.loading && !registryCatalog.error;
     for (const server of selectedAgent?.mcp_servers ?? []) {
-      byName.set(server.name, { name: server.name, description: server.description ?? undefined });
+      const row: McpServerRow = {
+        name: server.name,
+        description: server.description ?? undefined,
+      };
+      // Only a catalog read that finished this open can be trusted: a stale
+      // "sign-in required" would offer a popup the user no longer needs.
+      if (hasRegistryServers && server.transport === "registry" && catalogLoaded) {
+        const service = registryCatalog.services.find((s) => s.id === server.name);
+        if (service) {
+          row.description = service.description || row.description;
+          row.connection = service.connected ? "connected" : "sign-in-required";
+          // A token or workspace URL has to be typed, which the panel has no room for.
+          if (!service.connected && (service.auth === "bearer" || service.auth === "databricks"))
+            row.signInHref = "/settings/mcp";
+        } else {
+          row.connection = "unavailable";
+        }
+      }
+      byName.set(server.name, row);
     }
     return [...byName.values()];
-  }, [hostMcpHarness, hostMcpQuery.data, selectedAgent?.mcp_servers]);
+  }, [
+    hasRegistryServers,
+    hostMcpHarness,
+    hostMcpQuery.data,
+    registryCatalog.error,
+    registryCatalog.loading,
+    registryCatalog.services,
+    selectedAgent?.mcp_servers,
+  ]);
 
   const slashCompletionCommands = mcpPanelRequested
     ? { "/mcp": BUILTIN_SLASH_COMMANDS["/mcp"]! }
@@ -3378,6 +3434,11 @@ function ComposerImpl(
     clearText: () => setValue(""),
   });
   const showMcpServers = mcpPanelRequested && !slashCompletion.inline;
+  // Clear on both edges: a popup that rejects after the panel closes would
+  // otherwise greet the next open with a stale message.
+  useEffect(() => {
+    clearRegistrySignInError();
+  }, [showMcpServers, clearRegistrySignInError]);
 
   // Auto-grow the textarea from 1 row up to 10 rows, then let it scroll.
   // Growth stays in the flex column so the transcript viewport ends where the
@@ -3985,6 +4046,13 @@ function ComposerImpl(
                   mcpServers={mcpServers}
                   mcpServersStatus={mcpServersStatus}
                   mcpSettingsHref={mcpSettingsHref}
+                  onMcpSignIn={onMcpSignIn}
+                  mcpAuthorizingName={registrySignIn.authorizing}
+                  mcpSignInError={
+                    registrySignIn.error
+                      ? { name: registrySignIn.error.id, message: registrySignIn.error.message }
+                      : null
+                  }
                 />
               )}
               {/* "@"-file-mention browser — native coding-agent sessions only.
