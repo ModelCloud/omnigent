@@ -47,6 +47,7 @@ import {
 import type { RightRailTab } from "@/shell/railTabs";
 import type { ChangedSort } from "@/shell/FlatFileList";
 import { WorkspacePanel } from "@/shell/WorkspacePanel";
+import { citedFilePosition } from "@/shell/filePositionState";
 import { useGridSessions } from "./GridSessionsContext";
 
 export type GridWorkspacePanelProps = Pick<
@@ -212,9 +213,7 @@ export function GridSessionPane({
     (path: string, options?: OpenFileOptions) => {
       navigateWorkspace(path, options, () => {
         onOpenWorkspace();
-        setPosition(
-          options?.line === undefined ? undefined : { line: options.line, column: options.column },
-        );
+        setPosition(citedFilePosition(options));
         setWorkspace((previous) => ({
           ...previous,
           selectedFilePath: path,
