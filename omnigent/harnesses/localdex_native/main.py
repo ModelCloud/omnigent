@@ -35,6 +35,7 @@ def _materialize_localdex_agent_spec(tmpdir: Path, *, model: str | None) -> Path
                 "executor": {
                     "harness": "localdex-native",
                     "model": selected_model,
+                    "reasoning_effort": "max",
                 },
                 "llm": {
                     "model": selected_model,
