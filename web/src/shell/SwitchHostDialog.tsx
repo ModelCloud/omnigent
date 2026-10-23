@@ -16,7 +16,10 @@ import { SESSION_ACTIONS_LOADING } from "@/lib/sessionCapabilities";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
+  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -25,7 +28,7 @@ import { WorkspacePickerDialog } from "./WorkspacePickerDialog";
 import { WorkspacePathField } from "./WorkspacePathField";
 import { HostLabel } from "./HostLabel";
 import { normalizeWorkspacePath } from "./NewChatDialog";
-import { useHosts } from "@/hooks/useHosts";
+import { compareHostsByName, useHosts } from "@/hooks/useHosts";
 import { useHostFilesystem } from "@/hooks/useHostFilesystem";
 import { useRecentWorkspaces } from "@/hooks/useRecentWorkspaces";
 import { launchRunner, updateSession } from "@/lib/sessionsApi";
@@ -133,12 +136,21 @@ function SupportedSwitchHostDialog({
   // Only online hosts can accept a runner, and moving to the host the
   // session is already on is a no-op — until a half-finished switch
   // leaves it unbound, when the origin is a target like any other and
-  // moving back is the quickest way out.
+  // moving back is the quickest way out. Both groups sort A→Z by name;
+  // offline hosts render disabled at the bottom so a dead machine is
+  // explained instead of silently missing.
   const targetHosts = useMemo(
     () =>
-      (hosts ?? []).filter(
-        (h) => h.status === "online" && (stranded || h.host_id !== originHostId),
-      ),
+      (hosts ?? [])
+        .filter((h) => h.status === "online" && (stranded || h.host_id !== originHostId))
+        .sort(compareHostsByName),
+    [hosts, originHostId, stranded],
+  );
+  const offlineHosts = useMemo(
+    () =>
+      (hosts ?? [])
+        .filter((h) => h.status !== "online" && (stranded || h.host_id !== originHostId))
+        .sort(compareHostsByName),
     [hosts, originHostId, stranded],
   );
 
@@ -291,6 +303,24 @@ function SupportedSwitchHostDialog({
                       <HostLabel host={host} />
                     </SelectItem>
                   ))}
+                  {offlineHosts.length > 0 && (
+                    <>
+                      <SelectSeparator />
+                      <SelectGroup>
+                        <SelectLabel>Offline</SelectLabel>
+                        {offlineHosts.map((host) => (
+                          <SelectItem
+                            key={host.host_id}
+                            value={host.host_id}
+                            disabled
+                            data-testid={`switch-host-option-${host.host_id}`}
+                          >
+                            <HostLabel host={host} />
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </>
+                  )}
                 </SelectContent>
               </Select>
             </div>

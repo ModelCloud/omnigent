@@ -3506,9 +3506,12 @@ describe("Sidebar view options", () => {
     fireEvent.click(screen.getByTestId("session-show-environment"));
     fireEvent.click(screen.getByTestId("session-show-updated"));
 
-    // Environment text is available to screen readers without widening the metadata row.
-    expect(within(row).getByTestId("session-row-meta")).toHaveTextContent("Remote·fix/retries");
-    expect(within(row).getByText("Remote")).toHaveClass("sr-only");
+    // Environment shows as a compact visible pill naming the host.
+    expect(within(row).getByTestId("session-row-meta")).toHaveTextContent("Build Mac·fix/retries");
+    const envPill = within(row).getByTestId("session-row-environment");
+    expect(envPill).toHaveTextContent("Build Mac");
+    expect(envPill).toHaveClass("rounded-full");
+    expect(envPill).not.toHaveClass("sr-only");
     expect(within(row).getByTestId("session-row-updated")).toHaveTextContent("2m");
     // With a second line, the controls and the timestamp stay on the title line.
     expect(controls()).toHaveClass("top-4", "md:top-3.5");
@@ -3516,7 +3519,8 @@ describe("Sidebar view options", () => {
     // A session without a branch omits that part rather than leaving a gap.
     const bare = screen.getByText("conv_no_branch").closest("li")!;
     expect(within(bare).getByTestId("session-row-meta")).toHaveTextContent(/^Local machine$/);
-    expect(within(bare).getByText("Local machine")).toHaveClass("sr-only");
+    expect(within(bare).getByTestId("session-row-environment")).toHaveTextContent("Local machine");
+    expect(within(bare).getByTestId("session-row-environment")).not.toHaveClass("sr-only");
     expect(JSON.parse(localStorage.getItem("omnigent:sidebar-view")!).show).toEqual([
       "updated",
       "environment",
@@ -3591,7 +3595,7 @@ describe("Sidebar view options", () => {
       "session-row-meta",
     );
     expect(meta).toHaveTextContent(/^This /);
-    expect(within(meta).getByText(/^This /)).toHaveClass("sr-only");
+    expect(within(meta).getByText(/^This /)).not.toHaveClass("sr-only");
     expect(meta).not.toHaveTextContent("Build Mac");
   });
 

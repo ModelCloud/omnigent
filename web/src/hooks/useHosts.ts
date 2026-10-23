@@ -56,6 +56,15 @@ export async function fetchHosts(includeSandbox: boolean): Promise<Host[]> {
   return body.hosts.filter((h) => !h.sandbox_provider);
 }
 
+/**
+ * Alphabetical-by-name compare for host pickers: users scan for a machine's
+ * name, and the /v1/hosts order (most recently updated first) is arbitrary
+ * for navigation. Case-insensitive so "mac-laptop" and "Mac-Studio" group.
+ */
+export function compareHostsByName(a: Host, b: Host): number {
+  return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+}
+
 interface UseHostsOptions {
   enabled?: boolean;
   includeSandbox?: boolean;

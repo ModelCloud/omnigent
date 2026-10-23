@@ -8,7 +8,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { ArrowUpIcon, Loader2Icon, SquareIcon } from "lucide-react";
+import { ArrowUpIcon, Loader2Icon, RotateCcwIcon, SquareIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { isImeCompositionKeyEvent } from "@/lib/ime";
@@ -464,9 +464,11 @@ export const ComposerSendButton = forwardRef<
     label: string;
     busy?: boolean;
     interrupt?: boolean;
+    /** Failed/disconnected-session recovery affordance — replaces Send. */
+    resume?: boolean;
   }
 >(function ComposerSendButton(
-  { label, busy = false, interrupt = false, className, ...props },
+  { label, busy = false, interrupt = false, resume = false, className, ...props },
   ref,
 ) {
   return (
@@ -489,6 +491,8 @@ export const ComposerSendButton = forwardRef<
         <Loader2Icon className="size-4 animate-spin" />
       ) : interrupt ? (
         <SquareIcon className="size-4 fill-current" />
+      ) : resume ? (
+        <RotateCcwIcon className="size-4" />
       ) : (
         <ArrowUpIcon className="size-4" viewBox="4 4 16 16" />
       )}

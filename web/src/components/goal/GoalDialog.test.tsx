@@ -176,6 +176,24 @@ describe("GoalDialog", () => {
     expect(onGoalChange).toHaveBeenLastCalledWith(null);
   });
 
+  it("keeps the action row reachable when a long objective fills the editor", async () => {
+    renderDialog({ goal: { ...ACTIVE_GOAL, objective: "Very long goal. ".repeat(200) } });
+    await waitFor(() => expect(mockGetGoal).toHaveBeenCalled());
+    fireEvent.change(screen.getByTestId("goal-objective"), {
+      target: { value: "Long goal. ".repeat(500) },
+    });
+
+    // The dialog caps at 85dvh with a fixed footer row; the editor scrolls
+    // instead of growing the dialog past the screen and squeezing Save out.
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveClass("max-h-[85dvh]", "grid-rows-[auto_1fr_auto]");
+    const scrollBody = dialog.querySelector(".overflow-y-auto");
+    expect(scrollBody).not.toBeNull();
+    const save = screen.getByTestId("goal-save");
+    expect(save).toBeEnabled();
+    expect(scrollBody).not.toContainElement(save);
+  });
+
   it("disables write actions in read-only mode", async () => {
     renderDialog({ readOnly: true });
     await waitFor(() => expect(mockGetGoal).toHaveBeenCalled());
