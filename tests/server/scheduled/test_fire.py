@@ -773,6 +773,7 @@ async def test_native_wrapper_task_stamps_terminal_first_labels() -> None:
     assert conv_store.label_writes["conv_1"] == {
         "omnigent.ui": "terminal",
         "omnigent.wrapper": PI_NATIVE_AGENT_NAME,
+        "omnigent.automation": "nightly",
     }
 
 
@@ -799,15 +800,20 @@ async def test_non_native_host_bound_task_stamps_repl_terminal_label() -> None:
     await on_fire(0, "task_1")
     await _drain()
 
-    assert conv_store.label_writes["conv_1"] == {"omnigent.ui": "terminal"}
+    assert conv_store.label_writes["conv_1"] == {
+        "omnigent.ui": "terminal",
+        "omnigent.automation": "nightly",
+    }
 
 
 @pytest.mark.asyncio
-async def test_non_native_task_without_agent_cache_stamps_no_labels() -> None:
+async def test_non_native_task_without_agent_cache_stamps_only_automation_label() -> None:
     """A non-native SDK task without an agent cache stays Chat-only.
 
     The REPL-terminal branch needs the cache to resolve the harness, so with no
     cache it can't confirm a terminal — Chat-only, and the fire still succeeds.
+    The ``omnigent.automation`` marker lands regardless so the session list can
+    badge automation-spawned sessions.
     """
     conv_store = FakeConversationStore()
     store = FakeScheduledTaskStore(rows={"task_1": _task()})
@@ -824,7 +830,7 @@ async def test_non_native_task_without_agent_cache_stamps_no_labels() -> None:
     await _drain()
 
     assert len(conv_store.created) == 1
-    assert conv_store.label_writes == {}
+    assert conv_store.label_writes == {"conv_1": {"omnigent.automation": "nightly"}}
 
 
 @pytest.mark.asyncio
@@ -856,6 +862,7 @@ async def test_native_wrapper_labels_resolve_without_agent_cache() -> None:
     assert conv_store.label_writes["conv_1"] == {
         "omnigent.ui": "terminal",
         "omnigent.wrapper": PI_NATIVE_AGENT_NAME,
+        "omnigent.automation": "nightly",
     }
 
 

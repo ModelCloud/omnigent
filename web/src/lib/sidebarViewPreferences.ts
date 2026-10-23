@@ -4,7 +4,7 @@ const STORAGE_KEY = "omnigent:sidebar-view";
 
 export type SidebarGrouping = "default" | "status" | "created" | "updated";
 export type SidebarOrdering = "updated" | "created";
-export type SidebarShowField = "updated" | "environment" | "repo" | "branch";
+export type SidebarShowField = "updated" | "environment" | "automation" | "repo" | "branch";
 
 export interface SidebarViewPreferences {
   grouping: SidebarGrouping;
@@ -22,6 +22,7 @@ export const SIDEBAR_ORDERINGS: readonly SidebarOrdering[] = ["updated", "create
 export const SIDEBAR_SHOW_FIELDS: readonly SidebarShowField[] = [
   "updated",
   "environment",
+  "automation",
   "repo",
   "branch",
 ];

@@ -35,6 +35,7 @@ import {
   ArchiveIcon,
   ArrowUpDownIcon,
   ArchiveRestoreIcon,
+  CalendarClockIcon,
   CheckIcon as CheckMarkIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -3305,6 +3306,7 @@ const ORDERING_LABELS: Record<SidebarOrdering, string> = { updated: "Updated", c
 const SHOW_LABELS: Record<SidebarShowField, string> = {
   updated: "Updated",
   environment: "Environment",
+  automation: "Automation",
   repo: "Repo",
   branch: "Branch",
 };
@@ -4326,6 +4328,11 @@ function sessionEnvironmentLabel(
   return hostsById.get(hostId)?.name ?? hostId;
 }
 
+/** The automation name stamped on a scheduled-task-fired session, null otherwise. */
+function sessionAutomationName(conversation: Conversation): string | null {
+  return conversation.labels?.["omnigent.automation"] ?? null;
+}
+
 /** A managed-sandbox session's repo name from its first `omnigent.sandbox.repo` label; null otherwise. */
 function sessionRepoName(conversation: Conversation): string | null {
   const labels = conversation.labels ?? {};
@@ -4354,15 +4361,19 @@ function SessionUpdatedLabel({ updatedAt }: { updatedAt: number }) {
 // A row's second line: the "Show" environment and branch, each omitted when empty.
 function SessionMetaLine({
   environment,
+  automation,
   repo,
   branch,
 }: {
   environment: ReactNode;
+  automation: string | null;
   repo: string | null;
   branch: string | null;
 }) {
   const parts: { key: string; icon: LucideIcon; value: ReactNode }[] = [];
   if (environment != null) parts.push({ key: "environment", icon: LaptopIcon, value: environment });
+  if (automation !== null)
+    parts.push({ key: "automation", icon: CalendarClockIcon, value: automation });
   if (repo !== null) parts.push({ key: "repo", icon: FolderGit2Icon, value: repo });
   if (branch !== null) parts.push({ key: "branch", icon: GitBranchIcon, value: branch });
   if (parts.length === 0) return null;
@@ -4374,11 +4385,12 @@ function SessionMetaLine({
       {parts.map(({ key, icon: Icon, value }, i) => (
         <Fragment key={key}>
           {i > 0 && <span aria-hidden>·</span>}
-          {key === "environment" ? (
-            // The machine a session runs on matters enough to show by name,
-            // as a compact pill that truncates before it crowds the row.
+          {key === "environment" || key === "automation" ? (
+            // The machine a session runs on (and which automation spawned it)
+            // matter enough to show as compact pills that truncate before
+            // crowding the row.
             <span
-              data-testid="session-row-environment"
+              data-testid={`session-row-${key}`}
               className="flex min-w-0 max-w-[55%] items-center gap-1 rounded-full border border-border/60 bg-muted/60 px-1.5 py-px text-[11px] leading-4"
             >
               <Icon aria-hidden className="size-3 shrink-0" />
@@ -4829,6 +4841,7 @@ function ConversationRowImpl({
   const metaEnvironment = show.includes("environment") ? (
     <SessionEnvironmentLabel conversation={conversation} hostsById={hostsById} />
   ) : null;
+  const metaAutomation = show.includes("automation") ? sessionAutomationName(conversation) : null;
   const metaRepo = show.includes("repo") ? sessionRepoName(conversation) : null;
   const loadBranch = show.includes("branch") && gitBranch === null;
   const { data: worktrees } = useSessionWorktrees(
@@ -4846,7 +4859,7 @@ function ConversationRowImpl({
   // Overlays (checkbox, badges, controls; each also `-translate-y-1/2`) center on
   // the row, or on the title line — padding + half its 20px box — above a meta line.
   const overlayTop =
-    metaEnvironment !== null || metaRepo !== null || metaBranch !== null
+    metaEnvironment !== null || metaAutomation !== null || metaRepo !== null || metaBranch !== null
       ? "top-4 md:top-3.5"
       : "top-1/2";
 
@@ -5137,7 +5150,12 @@ function ConversationRowImpl({
         </span>
       </div>
       {/* Row 2: the "Show" metadata, each part omitted when it has no value. */}
-      <SessionMetaLine environment={metaEnvironment} repo={metaRepo} branch={metaBranch} />
+      <SessionMetaLine
+        environment={metaEnvironment}
+        automation={metaAutomation}
+        repo={metaRepo}
+        branch={metaBranch}
+      />
     </Link>
   );
 
