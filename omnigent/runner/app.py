@@ -2079,7 +2079,7 @@ def create_runner_app(
                     session_id,
                     resp.status_code,
                 )
-        except Exception:  # noqa: BLE001 — best-effort, but surface it
+        except Exception:  # best-effort, but surface it
             _logger.warning(
                 "legacy model_override fallback for %s failed; a model-pinned "
                 "first turn may respawn",
@@ -3771,8 +3771,8 @@ def create_runner_app(
             bridge_dir = _cxb.bridge_dir_for_bridge_id(conv_id)
 
         _server_url = _required_runner_env("RUNNER_SERVER_URL")
-        _factory = _make_auth_token_factory()
-        _token = _factory() if _factory is not None else None
+        _factory = await asyncio.to_thread(_make_auth_token_factory)
+        _token = await asyncio.to_thread(_factory) if _factory is not None else None
         return await asyncio.to_thread(
             write_cost_popup_config,
             bridge_dir,
@@ -4080,7 +4080,7 @@ def create_runner_app(
                 conv_id,
                 extra={"session_id": conv_id},
             )
-        except Exception:  # noqa: BLE001 — best-effort: harness may have exited
+        except Exception:  # best-effort: harness may have exited
             _logger.warning(
                 "Interrupt forward to harness failed for %s",
                 conv_id,
@@ -4823,7 +4823,7 @@ def create_runner_app(
                     _publish_event,
                     now=asyncio.get_running_loop().time(),
                 )
-            except Exception:  # noqa: BLE001 — best-effort observer; never fail the hook
+            except Exception:  # best-effort observer; never fail the hook
                 _logger.warning(
                     "native file-change recording failed for session=%s",
                     _captured_session_id,
@@ -7133,12 +7133,14 @@ def create_runner_app(
             # more than consent (an MCP ``requestedSchema``). Dropping it here
             # is what used to make the awaiting caller invent one.
             _elicit_content = _data.get("content")
-            pending_approvals.resolve(
+            runner_owned_approval = pending_approvals.resolve(
                 _data.get("elicitation_id", ""),
                 _elicit_action == "accept",
                 _elicit_content if isinstance(_elicit_content, dict) else None,
             )
-            if _elicit_action == "decline":
+            # Ordinary Pi dialog rejection is an answer, not a tool denial.
+            pi_dialog = str(_data.get("elicitation_id", "")).startswith("elicit_pi_")
+            if _elicit_action == "decline" and (runner_owned_approval or not pi_dialog):
                 try:
                     _int_client = await process_manager.get_client(conversation_id, "any")
                     await _int_client.post(
@@ -7720,7 +7722,7 @@ def create_runner_app(
         if resource_registry is not None:
             try:
                 resource_registry.resync_session_statuses()
-            except Exception:  # noqa: BLE001 — best-effort; never block catch-up.
+            except Exception:  # best-effort; never block catch-up.
                 _logger.warning(
                     "Session status resync failed after reconnect",
                     exc_info=True,
