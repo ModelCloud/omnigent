@@ -70,8 +70,14 @@ and steers messages while the agent is busy.
   that runs the popup sign-in and flips the row to connected, or a **Sign in
   from Settings** link for a service that needs a typed token or workspace URL;
   unavailable, for a service the account no longer sees; signing in; failed or
-  cancelled, reported on the row with Sign in available again. Host and custom
-  servers carry no account state.
+  cancelled, reported on the row with Sign in available again. A host-native
+  server, including one pinned by an organization's managed Claude config,
+  shows connected or sign-in required when the host's sign-in manager
+  reports it (via `~/.omnigent/mcp-auth-status.json`, see
+  `docs/MCP_AUTH_STATUS.md`); its **Sign
+  in** opens the reported URL in a new tab and the panel re-reads the host
+  inventory every few seconds until the row is connected. Custom agent servers
+  carry no account state.
 - `codex-plugin-skills`: typing `$` lists enabled Codex plugin skills in both
   composers, including cached plugins whose marketplace inventory is unavailable.
   Selecting a row inserts its namespaced identifier.
@@ -154,7 +160,8 @@ and steers messages while the agent is busy.
 - Select `/mcp` to replace the suggestions with the MCP servers enabled for the
   session. A registry service that needs sign-in shows **Sign in**; click it
   and finish the popup, or follow **Sign in from Settings** for a token or
-  workspace service. An empty list points to Settings; the command is absent
+  workspace service. A host server that needs sign-in shows **Sign in** too,
+  opening the page its host reported in a new tab. An empty list points to Settings; the command is absent
   on the new-session composer.
 - For Codex plugin skills, type `$<skill-name>` in Chat and select the
   namespaced suggestion. The vendor terminal owns its own completion menu.
@@ -411,7 +418,14 @@ Other connection providers alone do not enable the managed MCP picker.
   registry read when the server has it off or no row needs it);
   `web/src/hooks/useMcpRegistry.test.tsx` covers the sign-in hook's abort and
   confirmation paths, and a reopened panel shows no state from the previous
-  open. Manually, with the registry on, attach an OAuth service
+  open. Host account state: `tests/host/test_mcp_inventory.py` (the status
+  file), `tests/host/test_frames.py` (what survives the tunnel),
+  `tests/server/routes/test_mcp_servers.py` (the route) and
+  `ChatPage.composer.test.tsx` (row state, the new-tab Sign in, polling).
+  Manually, on a host whose sign-in manager writes the status file, expect a
+  host row to read **Sign-in required** with a Sign in that opens the reported
+  page, and to flip to **Connected** within 5s of the file changing. With the
+  registry on, attach an OAuth service
   that is not connected, select `/mcp`, expect **Sign-in required** and
   **Sign in**, complete the popup and expect **Connected**; cancel it instead
   and expect the message on the row with Sign in still offered.
