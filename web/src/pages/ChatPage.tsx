@@ -2089,6 +2089,7 @@ export function buildSlashCommandMap(
   skillPrefix: "/" | "$" = "/",
   supportsModelReset = false,
   showMcp = false,
+  showClear = false,
 ): Record<string, string> {
   const m: Record<string, string> = {};
   for (const [name, description] of Object.entries(BUILTIN_SLASH_COMMANDS)) {
@@ -2096,6 +2097,7 @@ export function buildSlashCommandMap(
     if (name === "/model" && !showModel) continue;
     if (name === "/compact" && !showCompact) continue;
     if (name === "/mcp" && !showMcp) continue;
+    if (name === "/clear" && !showClear) continue;
     // /btw is a Claude Code CLI built-in — only offer it on claude-native.
     if (name === "/btw" && !showBtw) continue;
     // /side is a Codex CLI built-in (ephemeral fork) — only offer it on codex-native.
@@ -2856,6 +2858,9 @@ function ComposerImpl(
   // for claude-sdk, whose runner sends /compact to the live SDK client to
   // trigger native compaction. Other SDK harnesses don't support it yet.
   const showCompact = isNativeWrapper || sessionHarness === "claude-sdk";
+  // /clear runs the harness's own /clear in the session terminal, which moves
+  // the terminal onto a fresh session the view then follows.
+  const showClear = sessionHarness === "claude-native" || sessionHarness === "codex-native";
   // /btw is a Claude Code CLI built-in (side chat), so offer it only on
   // claude-native sessions. Selected/typed, it sends as plaintext to the
   // vendor TUI (see submit) — the forwarder relays its answer to the overlay.
@@ -2877,6 +2882,7 @@ function ComposerImpl(
         skillPrefix,
         supportsModelReset,
         composerSessionId !== null,
+        showClear,
       ),
     [
       skills,
@@ -2888,6 +2894,7 @@ function ComposerImpl(
       skillPrefix,
       supportsModelReset,
       composerSessionId,
+      showClear,
     ],
   );
   const slashCommandNames = useMemo(() => Object.keys(slashCommands), [slashCommands]);
@@ -3113,6 +3120,26 @@ function ComposerImpl(
         setValue("");
         setCommandError(null);
         onNewSession();
+        return true;
+      }
+      case "/clear": {
+        if (!showClear) {
+          setCommandError("/clear is not supported for this agent type");
+          return true;
+        }
+        if (arg) {
+          setCommandError("/clear does not accept arguments");
+          return true;
+        }
+        dirtyRef.current = true;
+        setValue("");
+        setCommandError(null);
+        void useChatStore
+          .getState()
+          .clearContext()
+          .catch((err: unknown) => {
+            setCommandError(err instanceof Error ? err.message : "Clear failed");
+          });
         return true;
       }
       case "/compact": {
