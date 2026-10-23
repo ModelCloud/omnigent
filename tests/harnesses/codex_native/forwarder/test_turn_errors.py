@@ -283,10 +283,11 @@ async def test_handle_event_surfaces_non_retrying_error_notification(tmp_path: P
 async def test_handle_event_ignores_retrying_error_notification(
     tmp_path: Path, shape: str
 ) -> None:
-    """Retryable Codex errors remain internal while Codex retries the turn.
+    """Retryable Codex errors stay non-terminal while Codex retries the turn.
 
-    Without launcher certificate evidence, neither the legacy retry shape nor
-    Codex's reconnect notification posts a status edge or interrupts the turn.
+    Without launcher certificate evidence the turn is not failed or
+    interrupted; the reason is surfaced once on the working indicator as
+    ``blocked_on``.
     """
     client = _RecordingClient()
     codex_client = _InterruptRecordingCodexClient()
@@ -313,8 +314,98 @@ async def test_handle_event_ignores_retrying_error_notification(
         codex_client=codex_client,  # type: ignore[arg-type]
     )
 
-    assert client.posts == []
+    assert client.posts == [
+        (
+            "/v1/sessions/conv_x/events",
+            {
+                "type": "external_session_status",
+                "data": {
+                    "status": "running",
+                    "blocked_on": params["error"]["message"],
+                },
+            },
+        )
+    ]
     assert codex_client.requests == []
+
+
+@pytest.mark.asyncio
+async def test_handle_event_surfaces_capacity_retry_once_per_message(
+    tmp_path: Path,
+) -> None:
+    """A model-at-capacity retry shows on the working indicator, deduplicated.
+
+    Codex retries ``server_is_overloaded`` forever, so the same notification
+    repeats every cycle; the forwarder posts the ``blocked_on`` edge once per
+    (turn, message) and never fails the turn.
+    """
+    client = _RecordingClient()
+    _seed_active_turn(tmp_path, "turn_123")
+    forwarder_state = fwd._CodexForwarderState()
+    message = "Selected model is at capacity. Please try a different model. Retrying in 1.0s..."
+    params = {
+        "threadId": "thread_123",
+        "turnId": "turn_123",
+        "willRetry": True,
+        "error": {
+            "message": message,
+            "codexErrorInfo": {"serverOverloaded": {}},
+        },
+    }
+
+    for _ in range(2):
+        await fwd._handle_event(
+            client,  # type: ignore[arg-type]
+            session_id="conv_x",
+            bridge_dir=tmp_path,
+            event={"method": "error", "params": params},
+            usage_coalescer=fwd._SessionUsageCoalescer(client, "conv_x"),  # type: ignore[arg-type]
+            elicitation_tracker=fwd._CodexElicitationTaskTracker(),
+            expected_thread_id="thread_123",
+            forwarder_state=forwarder_state,
+        )
+
+    assert client.posts == [
+        (
+            "/v1/sessions/conv_x/events",
+            {
+                "type": "external_session_status",
+                "data": {"status": "running", "blocked_on": message},
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_handle_event_drops_capacity_retry_for_a_stale_turn(
+    tmp_path: Path,
+) -> None:
+    """A capacity retry naming a turn that is not active is ignored."""
+    client = _RecordingClient()
+    _seed_active_turn(tmp_path, "turn_999")
+    forwarder_state = fwd._CodexForwarderState()
+    params = {
+        "threadId": "thread_123",
+        "turnId": "turn_123",
+        "willRetry": True,
+        "error": {
+            "message": "Selected model is at capacity. Retrying in 1.0s...",
+            "codexErrorInfo": {"serverOverloaded": {}},
+        },
+    }
+
+    await fwd._handle_event(
+        client,  # type: ignore[arg-type]
+        session_id="conv_x",
+        bridge_dir=tmp_path,
+        event={"method": "error", "params": params},
+        usage_coalescer=fwd._SessionUsageCoalescer(client, "conv_x"),  # type: ignore[arg-type]
+        elicitation_tracker=fwd._CodexElicitationTaskTracker(),
+        expected_thread_id="thread_123",
+        forwarder_state=forwarder_state,
+    )
+
+    assert client.posts == []
 
 
 @pytest.mark.asyncio
@@ -1263,13 +1354,18 @@ async def test_handle_event_retry_with_http_status_is_not_blamed_on_certificate(
         codex_client=codex_client,  # type: ignore[arg-type]
     )
 
-    assert client.posts == []
+    assert [body["data"]["status"] for _url, body in client.posts] == ["running"]
+    assert all("blocked_on" in body["data"] for _url, body in client.posts)
     assert codex_client.requests == []
 
 
 @pytest.mark.asyncio
 async def test_handle_event_without_turn_state_leaves_retry_to_codex(tmp_path: Path) -> None:
-    """Without per-turn state (child sessions) the forwarder neither interrupts nor posts."""
+    """Without per-turn state (child sessions) the forwarder does not interrupt.
+
+    The retry reason is still surfaced on the working indicator so a blocked
+    turn is not silently stuck.
+    """
     client = _RecordingClient()
     codex_client = _InterruptRecordingCodexClient()
     _seed_active_turn(tmp_path, "turn_123")
@@ -1286,7 +1382,7 @@ async def test_handle_event_without_turn_state_leaves_retry_to_codex(tmp_path: P
         codex_client=codex_client,  # type: ignore[arg-type]
     )
 
-    assert client.posts == []
+    assert [body["data"]["status"] for _url, body in client.posts] == ["running"]
     assert codex_client.requests == []
     state = read_bridge_state(tmp_path)
     assert state is not None and state.active_turn_id == "turn_123"

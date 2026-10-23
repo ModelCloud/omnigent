@@ -473,6 +473,9 @@ class _CodexForwarderState:
     :param surfaced_terminal_error_turns: Turn ids whose standalone terminal
         ``error`` notification was already surfaced. Used to suppress a later
         terminal boundary for the same turn.
+    :param surfaced_retrying_errors: ``(turn_id, message)`` pairs already
+        surfaced as a ``blocked_on`` status edge from ``willRetry`` error
+        notifications, so a fast retry loop does not repost the same reason.
     :param posted_user_turns: Turn ids whose ``userMessage`` has been
         posted to Omnigent this connection, e.g. ``{"turn_123"}``. Used to
         enforce user-before-assistant ordering: before posting a turn's
@@ -530,6 +533,7 @@ class _CodexForwarderState:
     child_streams: dict[str, _CodexChildStream] = field(default_factory=dict)
     synced_item_keys: set[str] = field(default_factory=set)
     surfaced_terminal_error_turns: set[str] = field(default_factory=set)
+    surfaced_retrying_errors: set[tuple[str | None, str]] = field(default_factory=set)
     posted_user_turns: set[str] = field(default_factory=set)
     posted_tool_calls: set[str] = field(default_factory=set)
     partial_text_by_turn: dict[str, list[_PartialTextBuffer]] = field(default_factory=dict)
@@ -3745,6 +3749,55 @@ async def _maybe_fail_turn_on_certificate_failure(
     return True
 
 
+async def _maybe_surface_retrying_error(
+    client: httpx.AsyncClient,
+    *,
+    session_id: str,
+    bridge_dir: Path | None,
+    params: _JsonObject,
+    forwarder_state: _CodexForwarderState | None,
+) -> None:
+    """
+    Surface a retryable turn error as the session's ``blocked_on`` reason.
+
+    Codex keeps retrying such errors internally (e.g. a model-at-capacity
+    ``server_is_overloaded`` retry or a network reconnect), so the turn must
+    not fail — but the user should see why it is stalled. A ``running``
+    status edge with ``blocked_on`` renders the reason on the working
+    indicator and the next status edge clears it.
+
+    :param client: HTTP client for Omnigent event posts.
+    :param session_id: Omnigent conversation id, e.g. ``"conv_abc123"``.
+    :param bridge_dir: Native Codex bridge directory, used to confirm the
+        error belongs to the in-flight turn (stale notifications are
+        dropped).
+    :param params: Codex ``error`` notification params carrying ``willRetry``.
+    :param forwarder_state: Optional forwarder state for deduplication.
+    :returns: None.
+    """
+    error = params.get("error")
+    if not isinstance(error, dict):
+        return
+    message = error.get("message")
+    if not isinstance(message, str) or not message.strip():
+        return
+    turn_id = _turn_id_from_payload(params)
+    if bridge_dir is not None:
+        state = read_bridge_state(bridge_dir)
+        if (
+            state is None
+            or state.active_turn_id is None
+            or (turn_id is not None and state.active_turn_id != turn_id)
+        ):
+            return
+    if forwarder_state is not None:
+        key = (turn_id, message)
+        if key in forwarder_state.surfaced_retrying_errors:
+            return
+        forwarder_state.surfaced_retrying_errors.add(key)
+    await _post_status(client, session_id, "running", blocked_on=message)
+
+
 async def _maybe_handle_turn_event(
     client: httpx.AsyncClient,
     *,
@@ -3790,6 +3843,13 @@ async def _maybe_handle_turn_event(
                     codex_client=codex_client,
                     forwarder_state=forwarder_state,
                 )
+            await _maybe_surface_retrying_error(
+                client,
+                session_id=session_id,
+                bridge_dir=bridge_dir,
+                params=params,
+                forwarder_state=forwarder_state,
+            )
             return True
         async with _conversation_item_delivery_scope(session_id):
             if delta_coalescer is not None:
@@ -7056,6 +7116,7 @@ async def _post_status(
     reauth_required: bool = False,
     compaction_model: str | None = None,
     selected_model: str | None = None,
+    blocked_on: str | None = None,
 ) -> None:
     """
     Publish a native Codex status edge.
@@ -7074,6 +7135,9 @@ async def _post_status(
     :param compaction_model: Previous model a failed pre-turn compaction ran
         on, so the server can explain that switching models won't help.
     :param selected_model: The thread's selected model for that failure.
+    :param blocked_on: Optional human-readable blocker reason shown on the
+        working indicator while a ``running`` session retries internally,
+        e.g. a model-at-capacity notice. Cleared by the next status edge.
     :returns: None.
     """
     data: _JsonObject = {"status": status}
@@ -7086,6 +7150,8 @@ async def _post_status(
     if compaction_model is not None and selected_model is not None:
         data["compaction_model"] = compaction_model
         data["selected_model"] = selected_model
+    if blocked_on is not None:
+        data["blocked_on"] = blocked_on
     response = await _post_session_event(
         client,
         session_id,
