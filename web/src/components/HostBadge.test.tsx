@@ -292,7 +292,9 @@ describe("HostBadge", () => {
     useHostsMock.mockReturnValue({ data: [] });
     render(<HostBadge sessionId="conv_1" appearance="composer" />);
     fireEvent.pointerDown(screen.getByTestId("composer-host-select"), { button: 0 });
-    expect(screen.getByText("host_a1b2")).toBeInTheDocument();
+    const menu = screen.getByRole("menu");
+    // The name appears on the trigger (visible label) and again as the menu row.
+    expect(within(menu).getByText("host_a1b2")).toBeInTheDocument();
     const item = screen.getByRole("menuitem", { name: "Switch host…" });
     expect(item).toHaveAttribute("aria-disabled", "true");
     expect(item).toHaveAccessibleDescription(SESSION_ACTIONS_UNAVAILABLE);

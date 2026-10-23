@@ -4307,7 +4307,7 @@ function sessionLocationLabel(
     : (host?.name ?? conversation.host_id);
 }
 
-/** A row's short environment: the sandbox type, this device, or "Remote"; the tooltip names the host. */
+/** A row's short environment: the sandbox type, this device, or the host's name. */
 function sessionEnvironmentLabel(
   conversation: Conversation,
   hostsById: ReadonlyMap<string, Host>,
@@ -4320,9 +4320,10 @@ function sessionEnvironmentLabel(
   const onlineHostIds = [...hostsById.values()]
     .filter((h) => h.status === "online" && !h.sandbox_provider)
     .map((h) => h.host_id);
-  return hostId === resolveThisMachineHostId(desktopHostId, isCurrentServerLocal(), onlineHostIds)
-    ? localMachineLabel(navigator.userAgent)
-    : "Remote";
+  if (hostId === resolveThisMachineHostId(desktopHostId, isCurrentServerLocal(), onlineHostIds)) {
+    return localMachineLabel(navigator.userAgent);
+  }
+  return hostsById.get(hostId)?.name ?? hostId;
 }
 
 /** A managed-sandbox session's repo name from its first `omnigent.sandbox.repo` label; null otherwise. */
@@ -4373,10 +4374,22 @@ function SessionMetaLine({
       {parts.map(({ key, icon: Icon, value }, i) => (
         <Fragment key={key}>
           {i > 0 && <span aria-hidden>·</span>}
-          <span className="flex min-w-0 items-center gap-1">
-            <Icon aria-hidden className="size-3.5 shrink-0" />
-            <span className={key === "environment" ? "sr-only" : "truncate"}>{value}</span>
-          </span>
+          {key === "environment" ? (
+            // The machine a session runs on matters enough to show by name,
+            // as a compact pill that truncates before it crowds the row.
+            <span
+              data-testid="session-row-environment"
+              className="flex min-w-0 max-w-[55%] items-center gap-1 rounded-full border border-border/60 bg-muted/60 px-1.5 py-px text-[11px] leading-4"
+            >
+              <Icon aria-hidden className="size-3 shrink-0" />
+              <span className="truncate">{value}</span>
+            </span>
+          ) : (
+            <span className="flex min-w-0 items-center gap-1">
+              <Icon aria-hidden className="size-3.5 shrink-0" />
+              <span className="truncate">{value}</span>
+            </span>
+          )}
         </Fragment>
       ))}
     </span>

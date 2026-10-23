@@ -38,6 +38,14 @@ describe("shared composer controls", () => {
     expect(screen.getByRole("button", { name: "This machine" })).toHaveClass("w-11", "md:h-7");
   });
 
+  it("shows the host name next to the icon when one is provided", () => {
+    render(<ComposerHostTrigger label="Host: Build Mac" status="online" hostName="Build Mac" />);
+    const trigger = screen.getByRole("button", { name: "Host: Build Mac" });
+    expect(trigger).toHaveClass("w-auto");
+    expect(screen.getByTestId("composer-host-name")).toHaveTextContent("Build Mac");
+    expect(screen.getByTestId("composer-host-name")).toHaveClass("truncate");
+  });
+
   it("lets workspace labels use half the bar instead of a fixed pixel cap", () => {
     render(
       <ComposerWorkspaceBar>

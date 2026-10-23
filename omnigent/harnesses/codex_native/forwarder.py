@@ -208,6 +208,9 @@ _CODEX_APPLY_PATCH_APPROVAL_METHOD = "applyPatchApproval"
 _CODEX_SERVER_REQUEST_RESOLVED_METHOD = "serverRequest/resolved"
 _EXTERNAL_SESSION_INTERRUPTED_TYPE = "external_session_interrupted"
 _EXTERNAL_ELICITATION_RESOLVED_TYPE = "external_elicitation_resolved"
+# Dedup key for a surfaced connection retry; the real message varies per
+# retry, so one stable key keeps ``blocked_on`` from re-posting per attempt.
+_CONNECTION_RETRY_SURFACE_KEY = "<connection-retry>"
 # Sessions event carrying a Codex plan mapped to the todo-list schema so the
 # web TodoPanel renders it like Claude's TodoWrite output.
 _EXTERNAL_SESSION_TODOS_TYPE = "external_session_todos"
@@ -3137,8 +3140,18 @@ async def _handle_event(
         child_stream = forwarder_state.child_stream(client, child_thread_id, route_session_id)
         if not child_stream.accepts_event(method, params):
             return
-        event_state = child_stream.state
         delta_coalescer = child_stream.delta_coalescer
+        event_state = child_stream.state
+    # A surfaced retry parked the indicator on ``blocked_on``; the next item
+    # event proves the turn recovered, so drop it — a resumed turn may stream
+    # for a while before the terminal edge that would clear it on its own.
+    if (
+        method.startswith("item/")
+        and event_state is not None
+        and event_state.surfaced_retrying_errors
+    ):
+        event_state.surfaced_retrying_errors.clear()
+        await _post_status(client, route_session_id, "running")
     # First model-produced item settles the synthesized MCP startup round
     # mid-turn — codex defers turn execution until the round ends, so
     # assistant-side output proves startup is over before the idle edge.
@@ -3791,8 +3804,12 @@ async def _maybe_surface_retrying_error(
             or (turn_id is not None and state.active_turn_id != turn_id)
         ):
             return
+    key = (turn_id, message)
+    if is_connection_retry(params):
+        # Each reconnect retry re-sends near-identical detail; dedup on a
+        # stable per-turn key so the indicator can't flicker per cycle.
+        key = (turn_id, _CONNECTION_RETRY_SURFACE_KEY)
     if forwarder_state is not None:
-        key = (turn_id, message)
         if key in forwarder_state.surfaced_retrying_errors:
             return
         forwarder_state.surfaced_retrying_errors.add(key)
