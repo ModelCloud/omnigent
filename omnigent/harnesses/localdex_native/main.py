@@ -15,7 +15,7 @@ from .config import LOCALDEX_BINARY, load_localdex_config
 
 # Server-side built-in-agent seeding must be credential-free. The host validates
 # and materializes the dedicated LocalDex config immediately before launch.
-_DEFAULT_LOCALDEX_MODEL = "QB/DSV4.1-Flash"
+_DEFAULT_LOCALDEX_MODEL = "DeepSeek v4.1-Flash-1017"
 _LOCALDEX_REQUEST_TIMEOUT_S = 900
 
 

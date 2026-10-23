@@ -27,7 +27,7 @@ LOCALDEX_CONFIG_ROOT = Path.home() / ".local" / "share" / "localdex"
 LOCALDEX_CONFIG_PATH = LOCALDEX_CONFIG_ROOT / "config.toml"
 LOCALDEX_MODELS_PATH = LOCALDEX_CONFIG_ROOT / "models.toml"
 LOCALDEX_BINARY = Path.home() / ".local" / "bin" / "codex"
-LOCALDEX_MODEL = "QB/DSV4.1-Flash"
+LOCALDEX_MODEL = "DeepSeek v4.1-Flash-1017"
 LOCALDEX_RUNTIME_CAPABILITIES_FILE = "localdex-runtime-capabilities.json"
 
 
@@ -42,11 +42,12 @@ def localdex_model_picker_row(
     fabricating an id-only row: the web client intentionally hides its effort
     control when a model has no ``supportedReasoningEfforts`` metadata.
 
-    This mirrors LocalDex's bundled ``ModelInfo`` for DSV4.1 Flash. The model
-    accepts ``off``, ``low``, ``high``, and ``max``; in particular, do not
-    offer Codex's generic ``medium`` value because the endpoint rejects it.
-    ``off`` is intentionally explicit and unambiguous; the inference endpoint
-    also accepts Responses' legacy ``none`` alias for compatibility.
+    This mirrors LocalDex's bundled ``ModelInfo`` for DeepSeek
+    v4.1-Flash-1017. The model accepts ``off``, ``low``, ``high``, and
+    ``max``; in particular, do not offer Codex's generic ``medium`` value
+    because the endpoint rejects it. ``off`` is intentionally explicit and
+    unambiguous; the inference endpoint also accepts Responses' legacy
+    ``none`` alias for compatibility.
     """
     model = model_registration or next(
         (item for item in localdex_models(config) if item.model == config.local_model), None
@@ -165,9 +166,7 @@ def localdex_models(config: LocalDexConfig) -> tuple[LocalDexModelRegistration, 
             model=config.local_model,
             provider=getattr(config, "provider", "localdex"),
             display_name=(
-                "DeepSeek V4.1 Flash"
-                if config.local_model == LOCALDEX_MODEL
-                else config.local_model
+                LOCALDEX_MODEL if config.local_model == LOCALDEX_MODEL else config.local_model
             ),
             base_url=getattr(config, "base_url", ""),
             env_key=config.env_key,
@@ -178,7 +177,7 @@ def localdex_models(config: LocalDexConfig) -> tuple[LocalDexModelRegistration, 
 
 def localdex_runtime_provider_id(provider: str) -> str:
     """Map a LocalDex config name into a private Codex provider namespace."""
-    # LocalDex's Codex fork routes QB models through the canonical `localdex`
+    # LocalDex's Codex fork routes its canonical model through the `localdex`
     # provider id, including during `thread/settings/update`. Keep that one
     # provider id stable so the catalog, startup config, and live model switch
     # all resolve the same table. Other provider names remain namespaced to
@@ -364,7 +363,7 @@ def localdex_model_for_selection(
         return LocalDexModelRegistration(
             model=config.local_model,
             provider=config.provider,
-            display_name="DeepSeek V4.1 Flash"
+            display_name="DeepSeek v4.1-Flash-1017"
             if config.local_model == LOCALDEX_MODEL
             else config.local_model,
             base_url=config.base_url,
