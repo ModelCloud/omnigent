@@ -906,9 +906,11 @@ async def _create_session(deps: FireDeps, task: ScheduledTask) -> Conversation:
     # the override reload above) so the labels land on the conversation returned
     # to the launch/dispatch caller, not a stale pre-label reload of it.
     labels = await _presentation_labels(deps, task)
-    if labels:
-        await asyncio.to_thread(deps.conversation_store.set_labels, conv.id, labels)
-        conv.labels.update(labels)
+    # Mark the session as automation-spawned so the UI can badge it; the name
+    # is human-readable and survives even if the task row is later deleted.
+    labels["omnigent.automation"] = task.name
+    await asyncio.to_thread(deps.conversation_store.set_labels, conv.id, labels)
+    conv.labels.update(labels)
     return conv
 
 

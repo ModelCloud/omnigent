@@ -67,7 +67,10 @@ vi.mock("@/shell/NewChatDialog", () => ({
     onOpenChange?: (open: boolean) => void;
     effectiveAgentId: string | null;
     agentLabel: string;
-    host?: { host_id: string } | null;
+    host?: {
+      host_id: string;
+      configured_harnesses?: Record<string, boolean | string> | null;
+    } | null;
     dropdownModal?: boolean;
     contentClassName?: string;
     harnessEntries: AvailableAgent[];
@@ -79,6 +82,7 @@ vi.mock("@/shell/NewChatDialog", () => ({
       // Surface the host the dialog feeds the picker for badge computation, so
       // a test can assert it's populated even when no host is pinned.
       data-badge-host={host?.host_id ?? ""}
+      data-configured={JSON.stringify(host?.configured_harnesses ?? null)}
       data-dropdown-modal={dropdownModal === false ? "false" : "true"}
       data-content-class={contentClassName}
       data-harness-entries={harnessEntries.map((agent) => agent.name).join(",")}
@@ -101,6 +105,20 @@ vi.mock("@/shell/NewChatDialog", () => ({
       </button>
       <button
         type="button"
+        data-testid="pick-harness-codex"
+        onClick={() =>
+          onSelectAgent(
+            testAgent("ag_codex_native", "codex-native-ui", {
+              display_name: "LocalDex",
+              harness: "codex-native",
+            }),
+          )
+        }
+      >
+        pick codex harness
+      </button>
+      <button
+        type="button"
         data-testid="pick-agent-polly"
         onClick={() =>
           onSelectAgent(
@@ -120,15 +138,18 @@ vi.mock("@/shell/NewChatDialog", () => ({
   ),
 }));
 
-// nativeAgentHasCapability(claude-native, "permissionMode") must be true so the
-// model/effort knobs map onto the payload; polly (claude-sdk) has no knobs.
+// claude-native-ui carries modelPicker + permissionMode; codex-native-ui
+// carries approvalMode only (its model surface comes from the harness check);
+// polly (claude-sdk) has no knobs.
 vi.mock("@/lib/nativeCodingAgents", async (orig) => {
   const actual = await orig<typeof NativeCodingAgentsModule>();
   return {
     ...actual,
-    isNativeCodingAgent: (a: AvailableAgent) => a?.name === "claude-native-ui",
+    isNativeCodingAgent: (a: AvailableAgent) =>
+      a?.name === "claude-native-ui" || a?.name === "codex-native-ui",
     nativeAgentHasCapability: (a: AvailableAgent | undefined | null, cap: string) =>
-      a?.name === "claude-native-ui" && cap === "permissionMode",
+      (a?.name === "claude-native-ui" && (cap === "permissionMode" || cap === "modelPicker")) ||
+      (a?.name === "codex-native-ui" && cap === "approvalMode"),
   };
 });
 
@@ -137,6 +158,10 @@ const AGENTS: AvailableAgent[] = [
   testAgent("ag_claude_native", "claude-native-ui", {
     display_name: "Claude Code",
     harness: "claude-native",
+  }),
+  testAgent("ag_codex_native", "codex-native-ui", {
+    display_name: "LocalDex",
+    harness: "codex-native",
   }),
 ];
 
@@ -228,6 +253,107 @@ describe("agent picker readiness (needs-setup badges)", () => {
     expect(picker.getAttribute("data-badge-host")).toBe("host_1");
   });
 
+  it("merges readiness across all online hosts so harnesses configured anywhere stay offered", () => {
+    // With no host pinned the task resolves one at fire time, so a harness that
+    // is configured on ANY online host must stay a first-class pick — gating on
+    // the first online host alone would hide it ("Localdex is the only option").
+    vi.mocked(hostsHook.useHosts).mockReturnValue({
+      data: [
+        {
+          host_id: "host_1",
+          name: "laptop",
+          owner: "me",
+          status: "online",
+          configured_harnesses: { "codex-native": true },
+        },
+        {
+          host_id: "host_2",
+          name: "server",
+          owner: "me",
+          status: "online",
+          configured_harnesses: { "claude-native": true, "codex-native": "needs-auth" },
+        },
+      ],
+    } as unknown as ReturnType<typeof hostsHook.useHosts>);
+    renderDialog();
+    const picker = screen.getByTestId("agent-picker-stub");
+    expect(picker.getAttribute("data-badge-host")).toBe("host_1");
+    // Best availability wins per harness: codex ready on host_1 outranks
+    // needs-auth on host_2; claude exists only on host_2 but must still be
+    // selectable at fire time.
+    expect(picker.getAttribute("data-configured")).toBe(
+      JSON.stringify({ "codex-native": true, "claude-native": true }),
+    );
+  });
+
+  it("uses only the pinned host's readiness once a host is chosen", async () => {
+    vi.mocked(hostsHook.useHosts).mockReturnValue({
+      data: [
+        {
+          host_id: "host_1",
+          name: "laptop",
+          owner: "me",
+          status: "online",
+          configured_harnesses: { "codex-native": true },
+        },
+        {
+          host_id: "host_2",
+          name: "server",
+          owner: "me",
+          status: "online",
+          configured_harnesses: { "claude-native": true },
+        },
+      ],
+    } as unknown as ReturnType<typeof hostsHook.useHosts>);
+    renderDialog();
+    fireEvent.click(screen.getByTestId("task-host-trigger"));
+    fireEvent.click(await screen.findByText("server"));
+    // Pinned to host_2: readiness is that host's map alone, not the merge —
+    // the fire lands exactly there, so codex's host_1 readiness is irrelevant.
+    expect(screen.getByTestId("agent-picker-stub").getAttribute("data-configured")).toBe(
+      JSON.stringify({ "claude-native": true }),
+    );
+  });
+
+  it("shows model + effort for a codex-native agent — no permission control", () => {
+    renderDialog();
+    fireEvent.click(screen.getByTestId("pick-harness-codex"));
+    // LocalDex carries a model + effort surface (approvalMode capability, not
+    // modelPicker): the pickers render, while the Claude-only permission
+    // control stays hidden.
+    expect(screen.getByTestId("task-model-effort-field")).toBeInTheDocument();
+    expect(screen.getByTestId("task-model-trigger")).toBeInTheDocument();
+    expect(screen.getByTestId("task-effort-trigger")).toBeInTheDocument();
+    expect(screen.queryByTestId("task-permission-control")).not.toBeInTheDocument();
+  });
+
+  it("sends model + effort overrides for a codex agent without a permission field", async () => {
+    renderDialog();
+    fireEvent.click(screen.getByTestId("pick-harness-codex"));
+    fireEvent.change(screen.getByTestId("task-name-input"), {
+      target: { value: "Nightly review" },
+    });
+    fireEvent.change(screen.getByTestId("task-prompt-input"), {
+      target: { value: "Review the branch" },
+    });
+    // Codex has no static catalog with no host pinned — the model control is a
+    // free-text input.
+    fireEvent.change(screen.getByTestId("task-model-trigger"), {
+      target: { value: "gpt-5.5" },
+    });
+    fireEvent.click(screen.getByTestId("task-effort-trigger"));
+    fireEvent.click(await screen.findByText("High"));
+    fireEvent.click(screen.getByTestId("create-scheduled-task-submit"));
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalled());
+    const payload = mutateAsync.mock.calls[0][0];
+    expect(payload).toMatchObject({
+      agentId: "ag_codex_native",
+      modelOverride: "gpt-5.5",
+      reasoningEffort: "high",
+    });
+    expect(payload).not.toHaveProperty("permissionMode");
+  });
+
   it("embeds the agent dropdown in non-modal mode so inside-dialog clicks only close the menu", () => {
     renderDialog();
     expect(screen.getByTestId("agent-picker-stub")).toHaveAttribute("data-dropdown-modal", "false");
@@ -258,7 +384,10 @@ describe("agent picker readiness (needs-setup badges)", () => {
     renderDialog();
 
     const picker = screen.getByTestId("agent-picker-stub");
-    expect(picker).toHaveAttribute("data-harness-entries", "claude-native-ui,jcode,grok");
+    expect(picker).toHaveAttribute(
+      "data-harness-entries",
+      "claude-native-ui,codex-native-ui,jcode,grok",
+    );
     expect(picker).toHaveAttribute("data-agent-entries", "polly");
   });
 });

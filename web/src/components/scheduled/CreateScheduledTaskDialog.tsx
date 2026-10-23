@@ -31,7 +31,11 @@ import { useHosts } from "@/hooks/useHosts";
 import { useServerInfo } from "@/lib/CapabilitiesContext";
 import { sandboxOptionLabel } from "@/lib/capabilities";
 import { useCreateScheduledTask, useUpdateScheduledTask } from "@/hooks/useScheduledTasks";
-import { isNativeCodingAgent, nativeAgentHasCapability } from "@/lib/nativeCodingAgents";
+import {
+  isNativeCodingAgent,
+  nativeAgentHasCapability,
+  nativeCodingAgentForAvailableAgent,
+} from "@/lib/nativeCodingAgents";
 import { isAcpHarnessAgent, selectableSessionAgents } from "@/lib/agentGrouping";
 import {
   isBackdropOverlay,
@@ -150,15 +154,19 @@ export function CreateScheduledTaskDialog({
     setPickedPermission(backToOriginal ? (editingTask?.permissionMode ?? "") : "");
   }
 
-  // Model + effort are surfaced only for native coding agents that carry the
-  // model/effort surface — the same `permissionMode` capability the interactive
-  // dialog gates its Model/Effort/Permissions block on (Claude Code). Agents
-  // without it (plain SDK agents like Polly, or native harnesses with no
-  // model-picker surface) show no model/effort controls, exactly like
-  // interactive. Resolved from the full agent list so a task bound to an agent
-  // the picker hides still gates on its real capabilities.
+  // Model + effort are surfaced for the same agents the interactive dialog
+  // shows a model picker for (its `agentHasModelSettings`): the `modelPicker`
+  // and `devinMode` capabilities, plus the codex-native harness which carries
+  // model+effort but not `modelPicker`. Permission mode stays gated on
+  // `permissionMode` (Claude Code) — the wire field is Claude-only. Agents
+  // without a model surface (plain SDK agents like Polly) show no controls.
   const modelEffortAgent = agents?.find((a) => a.id === effectiveAgentId);
-  const showModelEffort = nativeAgentHasCapability(modelEffortAgent, "permissionMode");
+  const modelEffortHarness = nativeCodingAgentForAvailableAgent(modelEffortAgent)?.harness ?? null;
+  const supportsPermissionMode = nativeAgentHasCapability(modelEffortAgent, "permissionMode");
+  const showModelEffort =
+    nativeAgentHasCapability(modelEffortAgent, "modelPicker") ||
+    nativeAgentHasCapability(modelEffortAgent, "devinMode") ||
+    modelEffortHarness === "codex-native";
 
   // ── Nested dropdown dismiss guard ─────────────────────────────────────────
   // The agent picker and host/schedule Selects portal dropdowns OUTSIDE DialogContent.
@@ -255,7 +263,7 @@ export function CreateScheduledTaskDialog({
     wasOpen.current = open;
   }, [open, initialName, initialPrompt, editingTask]);
 
-  const hostOptions = hosts ?? [];
+  const hostOptions = useMemo(() => hosts ?? [], [hosts]);
   const preservePinnedHost = isEdit && editingTask?.hostId != null;
   // The resolved Host for the pinned id, or undefined when none is pinned.
   const selectedHost = hostId === "" ? undefined : hostOptions.find((h) => h.host_id === hostId);
@@ -267,8 +275,29 @@ export function CreateScheduledTaskDialog({
   // stays "" = resolve-at-fire); it just gives the picker a readiness map so
   // unconfigured agents show "needs setup" immediately, matching how the
   // interactive New Chat dialog auto-selects the first online host on mount.
-  const badgeHost =
-    selectedHost ?? hostOptions.find((h) => h.status === "online") ?? hostOptions[0];
+  // When no host is pinned the task resolves one at fire time, so readiness
+  // must not come from a single host — a harness runnable on ANY online host
+  // stays a first-class pick. Merge `configured_harnesses` across hosts,
+  // keeping each harness's best availability so "needs setup" badges appear
+  // only for harnesses no host can run.
+  const badgeHost = useMemo(() => {
+    if (selectedHost) return selectedHost;
+    const online = hostOptions.filter((h) => h.status === "online");
+    const mergeSource = online.length > 0 ? online : hostOptions;
+    const first = mergeSource[0];
+    if (first === undefined) return undefined;
+    const rank = (availability: unknown) =>
+      availability === true ? 3 : availability === "needs-auth" ? 2 : 1;
+    const merged: Record<string, boolean | string> = {};
+    for (const host of mergeSource) {
+      for (const [harness, availability] of Object.entries(host.configured_harnesses ?? {})) {
+        if (availability !== undefined && rank(availability) > rank(merged[harness])) {
+          merged[harness] = availability;
+        }
+      }
+    }
+    return { ...first, configured_harnesses: merged };
+  }, [selectedHost, hostOptions]);
 
   // A workspace is only valid with a host — mirror the server's pairing rule so
   // the user gets inline feedback instead of a 400. In sandbox mode there is no
@@ -340,7 +369,9 @@ export function CreateScheduledTaskDialog({
           ? {
               modelOverride: pickedModel === "" ? null : pickedModel,
               reasoningEffort: pickedEffort === "" ? null : pickedEffort,
-              permissionMode: pickedPermission === "" ? null : pickedPermission,
+              ...(supportsPermissionMode
+                ? { permissionMode: pickedPermission === "" ? null : pickedPermission }
+                : {}),
             }
           : {};
         await updateMutation.mutateAsync({
@@ -363,7 +394,7 @@ export function CreateScheduledTaskDialog({
           // the create uses the agent's configured defaults.
           ...(showModelEffort && pickedModel !== "" ? { modelOverride: pickedModel } : {}),
           ...(showModelEffort && pickedEffort !== "" ? { reasoningEffort: pickedEffort } : {}),
-          ...(showModelEffort && pickedPermission !== ""
+          ...(showModelEffort && supportsPermissionMode && pickedPermission !== ""
             ? { permissionMode: pickedPermission }
             : {}),
         });
@@ -500,6 +531,8 @@ export function CreateScheduledTaskDialog({
                 model={pickedModel}
                 effort={pickedEffort}
                 permissionMode={pickedPermission}
+                harness={modelEffortHarness ?? "claude-native"}
+                supportsPermissionMode={supportsPermissionMode}
                 hostId={hostId}
                 onModelChange={setPickedModel}
                 onEffortChange={setPickedEffort}
@@ -507,9 +540,10 @@ export function CreateScheduledTaskDialog({
                 onSelectOpenChange={handleSelectOpenChange}
               />
               <p className="mt-1.5 text-sm text-muted-foreground">
-                Leave on Default to use the agent&apos;s configured model, effort, and permission
-                mode. Automations run unattended, so a prompting mode (Manual or Plan) will wait for
-                approval that never comes.
+                Leave on Default to use the agent&apos;s configured model and effort
+                {supportsPermissionMode
+                  ? ", and permission mode. Automations run unattended, so a prompting mode (Manual or Plan) will wait for approval that never comes."
+                  : "."}
               </p>
             </div>
           )}
