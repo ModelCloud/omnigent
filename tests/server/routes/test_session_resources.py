@@ -3303,6 +3303,82 @@ async def test_github_pr_edit_relays_the_runner_refusal(
 
 
 @pytest.mark.asyncio
+async def test_github_attachment_forwards_the_bytes_and_relays_the_refusal(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The file's raw bytes reach the runner with the PR and name, under the upload wait."""
+    from omnigent.runner import github_resource
+    from omnigent.server.routes.sessions import routes_resources
+
+    path = "/v1/sessions/79b22ebd2309e48fdeb450c65611d51b/resources/github/attachments"
+    pr_url = "https://github.com/acme/widgets/pull/17"
+    asset = {
+        "object": "session.github.pr_attachment",
+        "url": "https://github.com/user-attachments/assets/1",
+    }
+    fake_runner = _FakeRunnerClient()
+    set_runner_router(_FakeRunnerRouter(fake_runner))  # type: ignore[arg-type]
+    forwarded: list[tuple[str, dict[str, str], bytes, float | None]] = []
+    answers = [httpx.Response(200, json=asset), httpx.Response(400, json={"detail": "No push"})]
+
+    async def post(
+        url: str,
+        *,
+        params: dict[str, str],
+        content: bytes,
+        headers: dict[str, str],
+        timeout: float | None = None,
+    ) -> httpx.Response:
+        assert headers == {"Content-Type": "application/octet-stream"}
+        forwarded.append((url, params, content, timeout))
+        return answers.pop(0)
+
+    fake_runner.post = post  # type: ignore[method-assign]
+    upload = {"file": ("shot.png", b"\x89PNG-bytes", "image/png")}
+
+    uploaded = await client.post(path, data={"pr_url": pr_url}, files=upload)
+    refused = await client.post(path, data={"pr_url": pr_url}, files=upload)
+    monkeypatch.setattr(routes_resources, "_MAX_PR_ATTACHMENT_BYTES", 4)
+    oversized = await client.post(path, data={"pr_url": pr_url}, files=upload)
+
+    assert (uploaded.status_code, uploaded.json()) == (200, asset)
+    assert (refused.status_code, refused.json()["detail"]) == (400, "No push")
+    assert oversized.status_code == 413
+    assert (
+        forwarded
+        == [
+            (
+                path,
+                {"pr_url": pr_url, "name": "shot.png"},
+                b"\x89PNG-bytes",
+                routes_resources._PR_ATTACHMENT_PROXY_TIMEOUT_S,
+            )
+        ]
+        * 2
+    )
+    assert (
+        github_resource._ATTACHMENT_REQUEST_SECONDS
+        < routes_resources._PR_ATTACHMENT_PROXY_TIMEOUT_S
+    )
+
+
+def test_pr_attachments_fit_one_tunnel_frame() -> None:
+    """The largest attachment, base64-encoded, fits a runner or host tunnel frame.
+
+    A bigger frame is refused with close code 1009, which drops every request on
+    that tunnel. The host's ``websockets.connect`` uses the same 100 MB limit.
+    """
+    from omnigent.runner import pr_resource
+    from omnigent.server.routes.sessions import routes_resources
+    from omnigent.util.tunnel_limits import RUNNER_TUNNEL_MAX_MESSAGE_BYTES
+
+    largest = routes_resources._MAX_PR_ATTACHMENT_BYTES
+    assert largest == pr_resource._MAX_VIDEO_ATTACHMENT_BYTES
+    encoded_length = 4 * -(-largest // 3)  # base64's exact output length
+    assert encoded_length < RUNNER_TUNNEL_MAX_MESSAGE_BYTES * 0.95
+
+
+@pytest.mark.asyncio
 async def test_github_merge_relays_the_runner_refusal(client: httpx.AsyncClient) -> None:
     """A refused merge keeps the runner's status and message, with the PR edit wait."""
     from omnigent.server.routes.sessions import routes_resources
@@ -9164,8 +9240,7 @@ class _OfflineRunnerClient:
         del params, timeout
         raise OmnigentError(f"runner is not connected ({url})", code=ErrorCode.RUNNER_UNAVAILABLE)
 
-    async def post(self, url: str, *, json: Any = None, timeout: float | None = None) -> Any:
-        del json, timeout
+    async def post(self, url: str, **_kwargs: Any) -> Any:
         raise OmnigentError(f"runner is not connected ({url})", code=ErrorCode.RUNNER_UNAVAILABLE)
 
 
@@ -9837,6 +9912,12 @@ async def test_pr_attachment_uses_bound_session_when_runner_offline(
             {"add": [], "remove": [{"login": "octocat", "kind": "user"}]},
         ),
         (
+            "/details",
+            {"title": "Renamed"},
+            "github_details_update",
+            {"title": "Renamed", "body": None},
+        ),
+        (
             "/merge",
             {"merge_method": "squash", "expected_head": "a" * 40},
             "github_merge",
@@ -9873,6 +9954,42 @@ async def test_pr_edit_reaches_offline_host(
     assert captured["op"] == op
     assert captured["session_id"] == _OFFLINE_SESSION
     assert captured["params"] == {"pr_url": url, **params}
+
+
+@pytest.mark.asyncio
+async def test_pr_attachment_reaches_offline_host_base64_encoded(
+    offline_env_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With the runner offline the file crosses the host tunnel, within the frame limit."""
+    import base64
+
+    from omnigent.server.routes import _host_filesystem
+    from omnigent.server.routes.sessions import routes_resources
+
+    captured: list[dict[str, Any]] = []
+    asset = {
+        "object": "session.github.pr_attachment",
+        "url": "https://github.com/user-attachments/assets/1",
+    }
+
+    async def write(**kwargs: Any) -> dict[str, Any]:
+        captured.append(kwargs)
+        return asset
+
+    monkeypatch.setattr(_host_filesystem, "write_workspace_from_host", write)
+    path = f"/v1/sessions/{_OFFLINE_SESSION}/resources/github/attachments"
+    url = "https://github.com/example/second/pull/42"
+    upload = {"file": ("shot.png", b"\x89PNG-bytes", "image/png")}
+
+    uploaded = await offline_env_client.post(path, data={"pr_url": url}, files=upload)
+
+    assert (uploaded.status_code, uploaded.json()) == (200, asset), uploaded.text
+    [call] = captured
+    assert call["op"] == "github_attachment_upload"
+    assert call["timeout"] == routes_resources._PR_ATTACHMENT_PROXY_TIMEOUT_S
+    params = call["params"]
+    assert (params["pr_url"], params["name"]) == (url, "shot.png")
+    assert base64.b64decode(params["content_base64"]) == b"\x89PNG-bytes"
 
 
 @pytest.mark.asyncio

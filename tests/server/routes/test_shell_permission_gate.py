@@ -945,6 +945,8 @@ _MERGE_PATH = "/v1/sessions/conv_share/resources/github/merge"
 _MERGE_OPTIONS_PATH = "/v1/sessions/conv_share/resources/github/merge-options"
 _DISABLE_AUTO_MERGE_PATH = "/v1/sessions/conv_share/resources/github/disable-auto-merge"
 _MERGE_BODY = {"pr_url": _LABELS_PR_URL, "merge_method": "squash", "expected_head": "a" * 40}
+_DETAILS_PATH = "/v1/sessions/conv_share/resources/github/details"
+_ATTACHMENTS_PATH = "/v1/sessions/conv_share/resources/github/attachments"
 
 
 @pytest.mark.asyncio
@@ -986,14 +988,57 @@ async def test_pr_merge_routes_require_edit(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "caller,expected",
+    [("owner@example.com", 200), ("viewer@example.com", 403)],
+    ids=["edit-allowed", "read-denied"],
+)
+async def test_pr_details_route_requires_edit(
+    client: httpx.AsyncClient,
+    runner_client: _RecordingRunnerClient,
+    caller: str,
+    expected: int,
+) -> None:
+    """Editing the title or description acts as the host's account, so viewers are refused."""
+    edited = await client.post(
+        _DETAILS_PATH,
+        json={"pr_url": _LABELS_PR_URL, "title": "Renamed", "session_id": "untrusted"},
+        headers={"X-Forwarded-Email": caller},
+    )
+
+    assert edited.status_code == expected, edited.text
+    expected_posts = [
+        (_DETAILS_PATH, {"pr_url": _LABELS_PR_URL, "title": "Renamed", "body": None})
+    ]
+    assert runner_client.posts == ([] if expected == 403 else expected_posts)
+
+
+@pytest.mark.asyncio
+async def test_pr_attachment_upload_refuses_viewers_before_the_runner(
+    client: httpx.AsyncClient, runner_client: _RecordingRunnerClient
+) -> None:
+    """An upload lands on the provider as the host's account, so viewers cannot send one."""
+    uploaded = await client.post(
+        _ATTACHMENTS_PATH,
+        data={"pr_url": _LABELS_PR_URL},
+        files={"file": ("shot.png", b"\x89PNG", "image/png")},
+        headers={"X-Forwarded-Email": "viewer@example.com"},
+    )
+
+    assert uploaded.status_code == 403
+    assert runner_client.posts == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "path,body",
     [
         (_LABELS_PATH, {"pr_url": _LABELS_PR_URL, "add": ["bug"]}),
         (_REVIEWERS_PATH, {"pr_url": _LABELS_PR_URL, "add": [_REVIEWER]}),
+        (_DETAILS_PATH, {"pr_url": _LABELS_PR_URL, "title": "Renamed"}),
         (_MERGE_PATH, _MERGE_BODY),
         (_DISABLE_AUTO_MERGE_PATH, {"pr_url": _LABELS_PR_URL}),
     ],
-    ids=["labels", "reviewers", "merge", "disable-auto-merge"],
+    ids=["labels", "reviewers", "details", "merge", "disable-auto-merge"],
 )
 async def test_pr_edit_requires_a_json_body(
     client: httpx.AsyncClient,
