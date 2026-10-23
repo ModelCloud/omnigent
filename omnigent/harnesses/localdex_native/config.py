@@ -66,7 +66,7 @@ def localdex_model_picker_row(
         return row
     row.update(
         {
-            "defaultReasoningEffort": "high",
+            "defaultReasoningEffort": "max",
             "supportedReasoningEfforts": [
                 {
                     "reasoningEffort": "off",
@@ -93,12 +93,13 @@ def localdex_model_picker_row(
 def with_localdex_model_picker_row(
     rows: Sequence[Mapping[str, object]], config: LocalDexConfig
 ) -> list[dict[str, object]]:
-    """Insert the canonical LocalDex row once, preserving a selected default.
+    """Insert the canonical LocalDex row once and make it the harness default.
 
     A live app-server row or a previously written host catalog can already
     contain the local model. Replace it with the capability-complete row so
-    stale id-only rows cannot suppress the effort UI, and remove duplicates
-    before returning the shared picker catalog.
+    stale id-only rows cannot suppress the effort UI. The local model leads the
+    LocalDex picker, and any upstream row marked default is demoted so the
+    session starts on the configured local endpoint.
     """
     registered_rows: list[dict[str, object]] = []
     models = localdex_models(config)
@@ -111,6 +112,7 @@ def with_localdex_model_picker_row(
         }
         if item.model == LOCALDEX_MODEL:
             row = localdex_model_picker_row(config, item)
+            row["isDefault"] = True
         if any(
             source.get("isDefault") is True
             and (source.get("id") == item.model or source.get("model") == item.model)
@@ -118,14 +120,15 @@ def with_localdex_model_picker_row(
         ):
             row["isDefault"] = True
         registered_rows.append(row)
-    return [
-        *registered_rows,
-        *[
-            dict(row)
-            for row in rows
-            if row.get("id") not in registered_ids and row.get("model") not in registered_ids
-        ],
+    remaining_rows = [
+        dict(row)
+        for row in rows
+        if row.get("id") not in registered_ids and row.get("model") not in registered_ids
     ]
+    if any(row.get("isDefault") is True for row in registered_rows):
+        for row in remaining_rows:
+            row.pop("isDefault", None)
+    return [*registered_rows, *remaining_rows]
 
 
 @dataclass(frozen=True)

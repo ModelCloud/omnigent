@@ -7117,7 +7117,8 @@ async def test_handle_model_options_serves_localdex_from_the_native_codex_catalo
     assert [row["id"] for row in result.models] == ["QB/DSV4.1-Flash", "gpt-5.6"]
     assert result.models[0]["model"] == "QB/DSV4.1-Flash"
     assert result.models[0]["displayName"] == "DeepSeek V4.1 Flash"
-    assert result.models[0]["defaultReasoningEffort"] == "high"
+    assert result.models[0]["isDefault"] is True
+    assert result.models[0]["defaultReasoningEffort"] == "max"
     assert result.models[0]["supportedReasoningEfforts"][0]["reasoningEffort"] == "off"
     assert result.routable_models == ["QB/DSV4.1-Flash", "gpt-5.6"]
     _cleanup_host(host)
