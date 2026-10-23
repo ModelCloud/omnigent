@@ -64,7 +64,7 @@ def test_localdex_turn_refreshes_runtime_context_capability(
     from omnigent.harnesses.localdex_native import config as localdex_config
 
     registration = localdex_config.LocalDexConfig(
-        local_model="DeepSeek v4.1-Flash-1017",
+        local_model="DS v4.1 Flash 1017",
         provider="localdex",
         base_url="http://127.0.0.1:2120/v1",
         env_key="BEARER_TOKEN",
@@ -98,12 +98,12 @@ def test_localdex_turn_refreshes_runtime_context_capability(
 
     actual = asyncio.run(
         codex_native_executor._localdex_runtime_settings_overrides(
-            state, {"model": "DeepSeek v4.1-Flash-1017"}
+            state, {"model": "DS v4.1 Flash 1017"}
         )
     )
 
     assert actual == {
-        "model": "DeepSeek v4.1-Flash-1017",
+        "model": "DS v4.1 Flash 1017",
         "modelProvider": localdex_config.localdex_runtime_provider_id("localdex"),
     }
     assert writes == [(tmp_path / "codex-home", 262_144)]
@@ -114,7 +114,7 @@ def test_localdex_runtime_capability_snapshot_is_session_private(tmp_path: Path)
     from omnigent.harnesses.localdex_native import config as localdex_config
 
     registration = localdex_config.LocalDexConfig(
-        local_model="DeepSeek v4.1-Flash-1017",
+        local_model="DS v4.1 Flash 1017",
         provider="localdex",
         base_url="http://127.0.0.1:2120/v1",
         env_key="BEARER_TOKEN",
@@ -129,7 +129,7 @@ def test_localdex_runtime_capability_snapshot_is_session_private(tmp_path: Path)
 
     snapshot = tmp_path / localdex_config.LOCALDEX_RUNTIME_CAPABILITIES_FILE
     assert json.loads(snapshot.read_text()) == {
-        "model": "DeepSeek v4.1-Flash-1017",
+        "model": "DS v4.1 Flash 1017",
         "context_window": 262_144,
         "max_prompt_tokens": 262_142,
     }
@@ -146,7 +146,7 @@ def test_localdex_discovery_failure_discards_a_stale_larger_limit(
     from omnigent.harnesses.localdex_native import config as localdex_config
 
     registration = localdex_config.LocalDexConfig(
-        local_model="DeepSeek v4.1-Flash-1017",
+        local_model="DS v4.1 Flash 1017",
         provider="localdex",
         base_url="http://127.0.0.1:2120/v1",
         env_key="BEARER_TOKEN",
@@ -176,12 +176,12 @@ def test_localdex_discovery_failure_discards_a_stale_larger_limit(
 
     actual = asyncio.run(
         codex_native_executor._localdex_runtime_settings_overrides(
-            state, {"model": "DeepSeek v4.1-Flash-1017"}
+            state, {"model": "DS v4.1 Flash 1017"}
         )
     )
 
     assert actual == {
-        "model": "DeepSeek v4.1-Flash-1017",
+        "model": "DS v4.1 Flash 1017",
         "modelProvider": localdex_config.localdex_runtime_provider_id("localdex"),
     }
     assert not (tmp_path / localdex_config.LOCALDEX_RUNTIME_CAPABILITIES_FILE).exists()
@@ -190,7 +190,7 @@ def test_localdex_discovery_failure_discards_a_stale_larger_limit(
 @pytest.mark.parametrize(
     ("stale_model", "stale_provider"),
     [
-        ("DeepSeek v4.1-Flash-1017", "localdex"),
+        ("DS v4.1 Flash 1017", "localdex"),
         ("gpt-6-sol", "openai"),
     ],
 )
@@ -204,7 +204,7 @@ def test_localdex_runtime_preserves_live_provider_without_model_selection(
     from omnigent.harnesses.localdex_native import config as localdex_config
 
     registration = localdex_config.LocalDexConfig(
-        local_model="DeepSeek v4.1-Flash-1017",
+        local_model="DS v4.1 Flash 1017",
         provider="localdex",
         base_url="http://127.0.0.1:2120/v1",
         env_key="BEARER_TOKEN",
@@ -248,7 +248,7 @@ def test_localdex_turn_routes_official_model_to_openai(
     from omnigent.harnesses.localdex_native import config as localdex_config
 
     registration = localdex_config.LocalDexConfig(
-        local_model="DeepSeek v4.1-Flash-1017",
+        local_model="DS v4.1 Flash 1017",
         provider="localdex",
         base_url="http://127.0.0.1:2120/v1",
         env_key="BEARER_TOKEN",
@@ -282,7 +282,7 @@ def test_localdex_switch_restores_the_resolved_non_local_provider(
     from omnigent.harnesses.localdex_native import config as localdex_config
 
     registration = localdex_config.LocalDexConfig(
-        local_model="DeepSeek v4.1-Flash-1017",
+        local_model="DS v4.1 Flash 1017",
         provider="localdex",
         base_url="http://127.0.0.1:2120/v1",
         env_key="BEARER_TOKEN",

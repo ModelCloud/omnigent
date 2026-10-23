@@ -4027,14 +4027,14 @@ def test_populate_codex_home_config_adds_provider_to_resumed_session(tmp_path: P
     target = tmp_path / "private_codex_home"
     target.mkdir()
     (target / "config.toml").write_text(
-        'model_provider = "localdex"\nmodel = "DeepSeek v4.1-Flash-1017"\n'
+        'model_provider = "localdex"\nmodel = "DS v4.1 Flash 1017"\n'
     )
 
     _populate_codex_home_config(target, source)
     _populate_codex_home_config(target, source)
 
     config = tomllib.loads((target / "config.toml").read_text())
-    assert config["model"] == "DeepSeek v4.1-Flash-1017"
+    assert config["model"] == "DS v4.1 Flash 1017"
     assert config["model_provider"] == "localdex"
     assert config["model_providers"]["localdex"]["base_url"] == "http://10.0.13.33:2120/v1"
     assert "model_providers" in tomllib.loads((source / "config.toml").read_text())

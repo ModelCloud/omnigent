@@ -11,14 +11,14 @@ def test_materialized_localdex_spec_disables_stream_retries(tmp_path: Path) -> N
 
     spec_path = _materialize_localdex_agent_spec(
         tmp_path,
-        model="DeepSeek v4.1-Flash-1017",
+        model="DS v4.1 Flash 1017",
     )
     spec = yaml.safe_load(spec_path.read_text(encoding="utf-8"))
 
-    assert spec["executor"]["model"] == "DeepSeek v4.1-Flash-1017"
+    assert spec["executor"]["model"] == "DS v4.1 Flash 1017"
     assert spec["executor"]["reasoning_effort"] == "max"
     assert spec["llm"] == {
-        "model": "DeepSeek v4.1-Flash-1017",
+        "model": "DS v4.1 Flash 1017",
         "retry": {
             "max_retries": 0,
             "timeout_per_request_s": 900,

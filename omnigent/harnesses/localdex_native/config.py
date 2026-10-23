@@ -27,7 +27,7 @@ LOCALDEX_CONFIG_ROOT = Path.home() / ".local" / "share" / "localdex"
 LOCALDEX_CONFIG_PATH = LOCALDEX_CONFIG_ROOT / "config.toml"
 LOCALDEX_MODELS_PATH = LOCALDEX_CONFIG_ROOT / "models.toml"
 LOCALDEX_BINARY = Path.home() / ".local" / "bin" / "codex"
-LOCALDEX_MODEL = "DeepSeek v4.1-Flash-1017"
+LOCALDEX_MODEL = "DS v4.1 Flash 1017"
 LOCALDEX_RUNTIME_CAPABILITIES_FILE = "localdex-runtime-capabilities.json"
 
 
@@ -363,7 +363,7 @@ def localdex_model_for_selection(
         return LocalDexModelRegistration(
             model=config.local_model,
             provider=config.provider,
-            display_name="DeepSeek v4.1-Flash-1017"
+            display_name="DS v4.1 Flash 1017"
             if config.local_model == LOCALDEX_MODEL
             else config.local_model,
             base_url=config.base_url,
