@@ -257,7 +257,9 @@ the new session opens beside that board; on narrow screens, Back to canvas
 returns to it. Reloading a temporary session before creation finishes returns to
 the same board. Open sidebar appears on the board or, when the board is hidden,
 in the conversation header. On desktop, hovering previews the sidebar and clicking
-opens it. The macOS app uses its existing titlebar toggle, Search, and Settings.
+opens it. At md and wider, the macOS app uses its existing titlebar toggle, Search,
+and Settings; in a narrower window it uses the conversation header's Open sidebar
+button and the drawer's Search and Settings, all right of or below the window buttons.
 On macOS desktop, the board and its controls stay below the window title bar,
 including while focusing a conversation or using a narrow window.
 Open a Canvas session outside the loaded sidebar pages to see its current host
