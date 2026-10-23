@@ -82,16 +82,25 @@ checks host ownership, stops any local startup still active for the run, and ask
 that the prompt was never sent. Recovery must inspect the session and resources
 before deciding what to preserve or clean up. It never sends another prompt.
 
-Each server runs one recovery sweep at a time. The sweep handles expired runs in
-pages, then removes eligible history for deleted tasks. Slow recovery does not
-block new runs, but a large backlog can delay deleted-task cleanup. Deleting a
-task immediately hides it and prevents new runs; unfinished claimed runs remain
-until their result or cleanup is recorded.
+Each server runs one recovery pass at a time. Each pass inspects at most
+`batch_size` expired runs, then removes a bounded page of eligible history for
+deleted tasks. The next pass continues where it left off. The scan keeps its
+original expiry cutoff until it reaches the end, then starts over to revisit
+uncertain outcomes and include newly expired leases. Slow recovery does not block
+new runs, and deletion cleanup gets a turn between recovery pages.
+
+A failed deletion is logged and skipped until the next scan so other tasks can
+be cleaned up. Deleting a task immediately hides it and prevents new runs;
+unfinished claimed runs remain until their result or cleanup is recorded.
 
 Shutdown cancels and waits for local startup and recovery work. Unfinished runs
 remain in the database for a later recovery sweep.
 
 ## Execution and recovery callbacks
+
+Give each application its own scheduled-task store instance. `create_app()` sets
+that object's scheduling mode; sharing it lets one app overwrite another's mode.
+Separate instances can share a database, with all replicas using the same mode.
 
 The application supplies these through `ScheduledTaskDispatchHooks`, passed to
 `create_app(scheduled_task_dispatch=...)`:
@@ -189,7 +198,10 @@ Persistent startup normally just launches the polling loop; database failures
 inside that loop retry at `poll_seconds`, not `startup_retry_seconds`.
 Database reads and cursor resets run off the event loop. Shutdown stops scheduling
 before the sandbox reaper and waits for an ongoing cursor reset to finish, so a
-slow database write can delay shutdown.
+slow database write can delay shutdown. Shutdown does not wait for a pending
+legacy task read: its worker thread may keep a connection until the query finishes,
+but its result cannot arm timers after shutdown. Process exit may still wait for
+the thread pool to finish. Configure database/driver timeouts to bound that wait.
 
 All replicas sharing a database must use the same mode, because legacy timers do
 not claim occurrences. Changing the environment of a running server does not
