@@ -107,9 +107,11 @@ export const ComposerHostTrigger = forwardRef<
     status?: "online" | "offline" | "unknown";
     cloud?: boolean;
     testIdPrefix?: string;
+    /** Visible host name next to the icon; omitted keeps the icon-only trigger. */
+    hostName?: string;
   }
 >(function ComposerHostTrigger(
-  { label, status, cloud = false, testIdPrefix = "composer", className, ...props },
+  { label, status, cloud = false, testIdPrefix = "composer", hostName, className, ...props },
   ref,
 ) {
   const Icon = cloud ? MonitorCloudIcon : LaptopIcon;
@@ -120,6 +122,7 @@ export const ComposerHostTrigger = forwardRef<
       aria-label={label}
       className={cn(
         "flex h-8 w-11 shrink-0 cursor-pointer items-center justify-center gap-0.5 rounded-lg bg-transparent pl-1 pr-2 text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground data-[state=open]:bg-muted data-[state=open]:text-foreground dark:hover:bg-muted/50 disabled:cursor-default md:h-7",
+        hostName && "w-auto gap-1 pl-1.5 text-xs",
         className,
       )}
       {...props}
@@ -139,6 +142,11 @@ export const ComposerHostTrigger = forwardRef<
         )}
         <Icon className="size-4 shrink-0" data-testid={`${testIdPrefix}-host-icon`} />
       </span>
+      {hostName && (
+        <span className="max-w-28 truncate md:max-w-40" data-testid={`${testIdPrefix}-host-name`}>
+          {hostName}
+        </span>
+      )}
     </button>
   );
 });

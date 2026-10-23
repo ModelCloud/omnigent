@@ -494,6 +494,63 @@ describe("Composer starting-session cancellation", () => {
   );
 });
 
+describe("Composer resume button", () => {
+  beforeEach(() => {
+    clearSessionDrafts();
+    setComposerState({
+      conversationId: "conv_failed",
+      blocks: [],
+      sessionStatus: "failed",
+      pendingUserMessages: [],
+      queuedMessages: [],
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+    clearSessionDrafts();
+    setComposerState({ sessionStatus: "idle", pendingUserMessages: [] });
+  });
+
+  it("replaces Send with Resume for an idle failed session and calls onResume", async () => {
+    const onResume = vi.fn().mockResolvedValue(undefined);
+    const props = composerProps({ onResume });
+    render(<Composer {...props} />);
+
+    const button = screen.getByRole("button", { name: "Resume" });
+    expect(button).toBeEnabled();
+    fireEvent.click(button);
+
+    await waitFor(() => expect(onResume).toHaveBeenCalledTimes(1));
+    // Recovery sends no prompt — onSend must stay untouched.
+    expect(props.onSend).not.toHaveBeenCalled();
+    expect(props.onStop).not.toHaveBeenCalled();
+  });
+
+  it("reverts to Send once the user types a draft", () => {
+    render(<Composer {...composerProps({ onResume: vi.fn() })} />);
+    expect(screen.getByRole("button", { name: "Resume" })).toBeInTheDocument();
+
+    fireEvent.change(textarea(), { target: { value: "actually, start over" } });
+    expect(screen.queryByRole("button", { name: "Resume" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+  });
+
+  it("keeps Interrupt while a turn is live even when resumable", () => {
+    render(
+      <Composer {...composerProps({ status: "streaming", isWorking: true, onResume: vi.fn() })} />,
+    );
+    expect(screen.getByRole("button", { name: "Interrupt" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Resume" })).not.toBeInTheDocument();
+  });
+
+  it("shows the plain Send button when the session needs no recovery", () => {
+    render(<Composer {...composerProps()} />);
+    expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Resume" })).not.toBeInTheDocument();
+  });
+});
+
 describe("Composer growth layout", () => {
   afterEach(() => {
     cleanup();

@@ -68,6 +68,7 @@ import {
   useHarnessEffortFamilies,
 } from "@/lib/agentLabels";
 import { usePermissions, useSessionOwner } from "@/hooks/usePermissions";
+import type { ErrorBlock } from "@/lib/blocks";
 import type { NativeModelOption, Session, SessionStatus, SkillSummary } from "@/lib/types";
 import { usePromptHistory } from "@/hooks/usePromptHistory";
 import { useReplyDraft } from "@/hooks/useReplyDraft";
@@ -83,7 +84,7 @@ import {
 } from "@/lib/permissionsApi";
 import { getCurrentAuthorId } from "@/lib/identity";
 import { toast } from "sonner";
-import { ApiError, createSideChat, retrySession } from "@/lib/sessionsApi";
+import { ApiError, continueFailedTurn, createSideChat, retrySession } from "@/lib/sessionsApi";
 import { getProject } from "@/lib/projectsApi";
 import { PROJECT_LABEL_KEY } from "@/lib/sessionListCache";
 import { codexEffortLevelsForModel, findNativeModelOption } from "@/lib/codexNativeModels";
@@ -274,6 +275,7 @@ import { useOmnigentAnalytics } from "@/lib/analyticsEmit";
 import { GoalDialog, CommandGoalDialog, GoalStatusPill, useGoalState } from "@/components/goal";
 import { useIsCoarsePointer } from "@/hooks/useIsCoarsePointer";
 import { useIsMobileViewport } from "@/hooks/useIsMobileViewport";
+import { CONTINUE_TURN_ERROR_CODES } from "@/components/blocks/StatusBlocks";
 import { ConnectionIndicator } from "./ChatIndicators";
 import { Transcript } from "@/components/chat/Transcript";
 
@@ -1706,6 +1708,10 @@ const MainAgentSurface = memo(function MainAgentSurfaceImpl({
   // chunk defers until after first paint. Returning to an already-warm
   // background session is still same-commit (it's already in warmTerminals).
   const renderedTerminals = warmTerminals;
+  // Mirror the page-level predicate: the session is unreachable and a message
+  // can't wake it — but an in-flight sandbox launch is the opposite.
+  const isUnreachable =
+    !sandboxLaunching && (liveness.kind === "host_offline" || liveness.kind === "local_stranded");
   const handleTerminalResume = useCallback(async () => {
     if (!conversationId) throw new Error("Session is not available");
     if (liveness.kind === "host_offline" || liveness.kind === "local_stranded") {
@@ -1717,6 +1723,43 @@ const MainAgentSurface = memo(function MainAgentSurfaceImpl({
       throw new Error("The session is already connected; no recovery was performed");
     }
   }, [conversationId, liveness.kind, onShowReconnectHelp]);
+
+  // Composer's one-click Resume: same dispatch as the error card's retry —
+  // continuable turn errors replay the turn in place, everything else
+  // recovers the runner (which restarts the turn or rebinds the harness).
+  // A dead host needs the reconnect flow, and neither path posts a prompt.
+  const handleResumeSession = useCallback(async () => {
+    if (!conversationId || isTempConvId(conversationId)) return;
+    if (isUnreachable) {
+      onShowReconnectHelp();
+      return;
+    }
+    const errorCode = [...useChatStore.getState().blocks]
+      .reverse()
+      .find((b): b is ErrorBlock => b.type === "error" && b.code.length > 0)?.code;
+    try {
+      if (errorCode !== undefined && CONTINUE_TURN_ERROR_CODES.has(errorCode)) {
+        await continueFailedTurn(conversationId);
+        return;
+      }
+      await retrySession(conversationId);
+    } catch (error) {
+      toast.error(
+        `Couldn't resume the session${error instanceof Error ? `: ${error.message}` : "."}`,
+      );
+    }
+  }, [conversationId, isUnreachable, onShowReconnectHelp]);
+  // Resume replaces the send button only while idle and undrafted: a typed
+  // draft keeps Send (and its own unreachable/reconnect handling), and a
+  // live turn keeps Interrupt.
+  const sessionStatus = useChatStore((s) => s.sessionStatus);
+  const sessionResumable =
+    conversationId !== null &&
+    !isWorking &&
+    (isUnreachable ||
+      liveness.kind === "runner_asleep" ||
+      liveness.kind === "host_asleep" ||
+      sessionStatus === "failed");
   const terminalSurfaces = renderedTerminals.map((entry) => {
     const isActive = mountTerminal && entry.conversationId === conversationId;
     const isShown = isActive && showTerminal;
@@ -1830,6 +1873,7 @@ const MainAgentSurface = memo(function MainAgentSurfaceImpl({
               (liveness.kind === "host_offline" || liveness.kind === "local_stranded")
             }
             onShowReconnectHelp={onShowReconnectHelp}
+            onResume={sessionResumable ? handleResumeSession : undefined}
             costRoutingEligible={costRoutingEligible}
             subagentRoutingEligible={subagentRoutingEligible}
             subAgentLabel={subAgentLabel}
@@ -1980,6 +2024,13 @@ interface ComposerProps {
    * its bound host is offline and reconnectable.
    */
   onShowReconnectHelp?: () => void;
+  /**
+   * One-click session recovery, shown only while the session is idle and
+   * needs it (turn failed, runner/sandbox asleep, host unreachable): the
+   * send button turns into "Resume" and continues the last turn — or
+   * reconnects what stopped — without a typed prompt.
+   */
+  onResume?: () => void | Promise<void>;
   /** Session passes `isCostRoutingSession` (polly orchestrator, not a child); see that predicate. */
   costRoutingEligible?: boolean;
   /**
@@ -2311,6 +2362,7 @@ function ComposerImpl(
     isNativeWrapper = false,
     unreachable = false,
     onShowReconnectHelp,
+    onResume,
     costRoutingEligible = false,
     subAgentLabel = null,
     wrapperLabel = null,
@@ -2881,6 +2933,25 @@ function ComposerImpl(
       hasPendingElicitation ||
       isTempConvId(conversationId) ||
       hasPendingInitialMessage);
+  // Resume takes over the send slot for an idle, errored/disconnected
+  // session — a typed draft reverts it to Send so the user's text keeps
+  // priority over the recovery affordance.
+  const [resumeBusy, setResumeBusy] = useState(false);
+  const showResumeButton =
+    onResume !== undefined &&
+    !isWorking &&
+    !hasDraft &&
+    !hasPendingElicitation &&
+    !composerLockedByBtw;
+  const handleResume = async () => {
+    if (onResume === undefined || resumeBusy) return;
+    setResumeBusy(true);
+    try {
+      await onResume();
+    } finally {
+      setResumeBusy(false);
+    }
+  };
 
   // Drain externally-queued attachments (file viewer "Attach to agent") into
   // the local mention chips, deduping against what's already tagged, then
@@ -3480,6 +3551,10 @@ function ComposerImpl(
       onStop();
       return;
     }
+    if (showResumeButton) {
+      void handleResume();
+      return;
+    }
     submit({ resetNativeInputSession: true });
   };
 
@@ -4052,20 +4127,32 @@ function ComposerImpl(
                   <TooltipTrigger asChild>
                     <ComposerSendButton
                       interrupt={showInterruptButton}
+                      resume={showResumeButton}
+                      busy={resumeBusy}
                       disabled={
-                        showInterruptButton
-                          ? isReadOnly
-                          : !hasDraft ||
-                            disabled ||
-                            isReadOnly ||
-                            sendDisabledReason !== null ||
-                            hasPendingElicitation
+                        showResumeButton
+                          ? isReadOnly || resumeBusy
+                          : showInterruptButton
+                            ? isReadOnly
+                            : !hasDraft ||
+                              disabled ||
+                              isReadOnly ||
+                              sendDisabledReason !== null ||
+                              hasPendingElicitation
                       }
-                      title={showInterruptButton ? "Interrupt" : (sendDisabledReason ?? undefined)}
-                      label={showInterruptButton ? "Interrupt" : "Send"}
+                      title={
+                        showResumeButton
+                          ? "Resume"
+                          : showInterruptButton
+                            ? "Interrupt"
+                            : (sendDisabledReason ?? undefined)
+                      }
+                      label={
+                        showResumeButton ? "Resume" : showInterruptButton ? "Interrupt" : "Send"
+                      }
                     />
                   </TooltipTrigger>
-                  {!showInterruptButton && !preventsKeyboardSubmit && (
+                  {!showInterruptButton && !showResumeButton && !preventsKeyboardSubmit && (
                     <KeyboardShortcutTooltipContent
                       label="Send"
                       keys={composerSendShortcutKeys(submitWithModEnter)}

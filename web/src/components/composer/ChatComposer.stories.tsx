@@ -77,3 +77,16 @@ export const Interrupt: Story = {
     },
   },
 };
+
+export const Resume: Story = {
+  args: {
+    input: {
+      "aria-label": "Message",
+      placeholder: "Resume the errored session, or type a new message",
+    },
+    actions: {
+      leading: <span className="text-ui text-muted-foreground">Context controls</span>,
+      trailing: <ComposerSendButton label="Resume" resume />,
+    },
+  },
+};

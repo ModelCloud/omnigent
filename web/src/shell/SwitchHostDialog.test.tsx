@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type * as UseHostsModule from "@/hooks/useHosts";
 import type * as WorkspacePickerModule from "./WorkspacePicker";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
@@ -57,7 +58,10 @@ vi.mock("./WorkspacePicker", async (importActual) => ({
 vi.mock("./HostLabel", () => ({
   HostLabel: ({ host }: { host: { name: string } }) => <span>{host.name}</span>,
 }));
-vi.mock("@/hooks/useHosts", () => ({ useHosts: vi.fn() }));
+vi.mock("@/hooks/useHosts", async (importOriginal) => ({
+  ...(await importOriginal<typeof UseHostsModule>()),
+  useHosts: vi.fn(),
+}));
 vi.mock("@/hooks/useSession", () => ({ useSession: vi.fn() }));
 vi.mock("@/hooks/useHostFilesystem", () => ({ useHostFilesystem: vi.fn() }));
 vi.mock("@/hooks/useRecentWorkspaces", () => ({
@@ -87,16 +91,21 @@ vi.mock("@/components/ui/select", () => ({
   SelectTrigger: ({ children }: { children: ReactNode }) => children,
   SelectValue: () => null,
   SelectContent: ({ children }: { children: ReactNode }) => children,
+  SelectGroup: ({ children }: { children: ReactNode }) => <optgroup>{children}</optgroup>,
+  SelectLabel: ({ children }: { children: ReactNode }) => <span>{children}</span>,
+  SelectSeparator: () => null,
   SelectItem: ({
     value,
     children,
+    disabled,
     "data-testid": testId,
   }: {
     value: string;
     children: ReactNode;
+    disabled?: boolean;
     "data-testid"?: string;
   }) => (
-    <option value={value} data-testid={testId}>
+    <option value={value} disabled={disabled} data-testid={testId}>
       {children}
     </option>
   ),
@@ -308,6 +317,34 @@ describe("SwitchHostDialog", () => {
     expect(error.textContent).toContain("isn't running anywhere");
     expect(error.textContent).toContain("host is offline");
     expect(screen.getByTestId("switch-host-option-host_old")).toBeInTheDocument();
+  });
+
+  it("lists online targets A→Z by name with offline hosts disabled at the bottom", async () => {
+    useHostsMock.mockReturnValue({
+      data: [
+        { host_id: "host_old", name: "mac-laptop", owner: "alice", status: "online" },
+        { host_id: "host_zed", name: "zebra", owner: "alice", status: "online" },
+        { host_id: "host_alpha", name: "alpha-box", owner: "alice", status: "online" },
+        { host_id: "host_dead2", name: "zombie-box", owner: "alice", status: "offline" },
+        { host_id: "host_dead1", name: "broken-box", owner: "alice", status: "offline" },
+      ],
+    } as unknown as ReturnType<typeof useHosts>);
+    renderDialog();
+
+    await screen.findByTestId("switch-host-option-host_alpha");
+    const options = screen.getByTestId("mock-host-select").querySelectorAll("option");
+    expect([...options].map((o) => o.textContent)).toEqual([
+      "alpha-box",
+      "zebra",
+      "broken-box",
+      "zombie-box",
+    ]);
+    // Offline entries stay visible but can't be selected.
+    const enabled = [...options].filter((o) => !o.disabled).map((o) => o.value);
+    expect(enabled).toEqual(["host_alpha", "host_zed"]);
+    // A dead origin still can't be re-picked — it's excluded like the online case.
+    expect(screen.queryByTestId("switch-host-option-host_old")).toBeNull();
+    expect(screen.getByText("Offline")).toBeInTheDocument();
   });
 
   it("enables the switch for a typed tilde path without opening the browser", async () => {

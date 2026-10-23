@@ -197,6 +197,7 @@ export function HostBadge({
                 label={label}
                 status={launchStatus ? undefined : (badge?.status ?? "unknown")}
                 cloud={!!launchStatus || !!host?.sandbox_provider}
+                hostName={launchStatus ? launchHost : badge?.label}
                 data-testid="composer-host-select"
               />
             </DropdownMenuTrigger>

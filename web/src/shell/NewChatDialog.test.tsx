@@ -3800,10 +3800,35 @@ describe("NewChatLandingScreen", () => {
     },
   );
 
+  it("lists online hosts A→Z by name regardless of API order", async () => {
+    mockHosts([
+      host("online", 1), // machine-1
+      { host_id: "host_z", name: "zebra-box", owner: "me", status: "online" },
+      { host_id: "host_a", name: "alpha-box", owner: "me", status: "online" },
+    ]);
+    renderLanding();
+
+    const chip = screen.getByTestId("new-chat-landing-host-chip");
+    await waitFor(() => expect(chip).toHaveAccessibleName(/, Online$/));
+    fireEvent.pointerDown(chip, { button: 0 });
+
+    const menu = screen.getByTestId("new-chat-landing-host-menu");
+    const ids = within(menu)
+      .getAllByRole("menuitem")
+      .map((row) => row.getAttribute("data-testid"))
+      .filter((id) => id?.startsWith("new-chat-landing-host-"));
+    expect(ids).toEqual([
+      "new-chat-landing-host-host_a",
+      "new-chat-landing-host-host_1",
+      "new-chat-landing-host-host_z",
+    ]);
+  });
+
   it("keeps offline hosts collapsed and reveals them five at a time", async () => {
     mockHosts([
       host("online", 1),
-      // API recency order deliberately differs from name/id order.
+      // API recency order deliberately differs from name order: the offline
+      // group still lists hosts A→Z by name.
       ...[4, 2, 8, 3, 6, 7, 5, 10, 9, 12, 13, 11].map((i) => host("offline", i)),
     ]);
     renderLanding();
@@ -3823,7 +3848,7 @@ describe("NewChatLandingScreen", () => {
       within(offline)
         .getAllByRole("menuitem")
         .map((row) => row.getAttribute("data-testid")),
-    ).toEqual([4, 2, 8, 3, 6].map((i) => `new-chat-landing-host-host_${i}`));
+    ).toEqual([10, 11, 12, 13, 2].map((i) => `new-chat-landing-host-host_${i}`));
     expect(screen.getByTestId("new-chat-landing-host-host_2")).toHaveAttribute(
       "aria-disabled",
       "true",
