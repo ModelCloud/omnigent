@@ -3528,6 +3528,35 @@ describe("Sidebar view options", () => {
     ]);
   });
 
+  it("badges automation-spawned sessions with the task name when Automation is shown", () => {
+    localStorage.setItem("omnigent:sidebar-view", JSON.stringify({ show: ["automation"] }));
+    mockConversations([
+      conv("conv_auto", "Codex", { labels: { "omnigent.automation": "Nightly review" } }),
+      conv("conv_manual", "Codex"),
+    ]);
+    renderGroupingSidebar();
+    const row = screen.getByText("conv_auto").closest("li")!;
+    const pill = within(row).getByTestId("session-row-automation");
+    expect(pill).toHaveTextContent("Nightly review");
+    expect(pill).toHaveClass("rounded-full");
+    // A manually-created session carries no automation label — no pill, and
+    // no empty meta line either.
+    const manual = screen.getByText("conv_manual").closest("li")!;
+    expect(within(manual).queryByTestId("session-row-meta")).toBeNull();
+  });
+
+  it("toggles the automation badge from the Show menu", () => {
+    mockConversations([
+      conv("conv_auto", "Codex", { labels: { "omnigent.automation": "Nightly review" } }),
+    ]);
+    renderGroupingSidebar();
+    expect(screen.queryByTestId("session-row-automation")).toBeNull();
+    openViewSubmenu("session-show-menu");
+    fireEvent.click(screen.getByTestId("session-show-automation"));
+    expect(screen.getByTestId("session-row-automation")).toHaveTextContent("Nightly review");
+    expect(JSON.parse(localStorage.getItem("omnigent:sidebar-view")!).show).toEqual(["automation"]);
+  });
+
   it("resolves an unrecorded branch only when Branch is shown, without a GitHub lookup", () => {
     useSessionWorktreesMock.mockReturnValue({
       data: {
