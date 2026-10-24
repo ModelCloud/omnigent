@@ -1033,7 +1033,7 @@ def test_build_codex_native_server_retains_agent_retry_policy(tmp_path: Path) ->
         socket_path=tmp_path / "codex.sock",
         codex_home=tmp_path / "codex-home",
         cwd=tmp_path,
-        model="QB/DSV4.1-Flash",
+        model="DS v4.1 Flash 1017",
         profile=None,
         bridge_dir=tmp_path / "bridge",
         codex_path=sys.executable,

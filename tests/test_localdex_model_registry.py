@@ -33,9 +33,9 @@ requires_openai_auth = false
     models = tmp_path / "models.toml"
     models.write_text(
         """
-[models."QB/DSV4.1-Flash"]
+[models."DS v4.1 Flash 1017"]
 provider = "dsv"
-display_name = "DSV Flash"
+display_name = "DS v4.1 Flash 1017"
 discover_capabilities = true
 
 [models."lab/coder-32b"]
@@ -47,7 +47,7 @@ display_name = "Lab Coder"
 
     registration = load_localdex_config(providers, models_path=models, require_token=False)
 
-    dsv = localdex_model_for_selection(registration, "QB/DSV4.1-Flash")
+    dsv = localdex_model_for_selection(registration, "DS v4.1 Flash 1017")
     assert dsv is not None
     assert (dsv.provider, dsv.env_key, dsv.base_url, dsv.discover_capabilities) == (
         "dsv",
@@ -70,7 +70,7 @@ display_name = "Lab Coder"
 
     rows = with_localdex_model_picker_row([], registration)
     assert [(row["id"], row["displayName"]) for row in rows] == [
-        ("QB/DSV4.1-Flash", "DSV Flash"),
+        ("DS v4.1 Flash 1017", "DS v4.1 Flash 1017"),
         ("lab/coder-32b", "Lab Coder"),
     ]
     assert rows[0]["isDefault"] is True
@@ -92,7 +92,7 @@ requires_openai_auth = false
     )
     models = tmp_path / "models.toml"
     models.write_text(
-        '[models."QB/DSV4.1-Flash"]\nprovider = "localdex"\n',
+        '[models."DS v4.1 Flash 1017"]\nprovider = "localdex"\n',
         encoding="utf-8",
     )
     registration = load_localdex_config(providers, models_path=models, require_token=False)
@@ -102,7 +102,7 @@ requires_openai_auth = false
         registration,
     )
 
-    assert rows[0]["id"] == "QB/DSV4.1-Flash"
+    assert rows[0]["id"] == "DS v4.1 Flash 1017"
     assert rows[0]["isDefault"] is True
     assert "isDefault" not in rows[1]
 
