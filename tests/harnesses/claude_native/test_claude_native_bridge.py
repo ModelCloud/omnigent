@@ -8784,9 +8784,39 @@ def test_ensure_trusted_creates_config_when_missing(
     # Global onboarding gate — without this Claude shows the theme/login
     # flow on a never-onboarded machine.
     assert data["hasCompletedOnboarding"] is True
+    # Declined auto-mode default question — without this Claude asks "Make
+    # auto mode your default permission mode?" when settings pin another mode.
+    assert data["hasSeenAutoDefaultNudge"] is True
     # Per-directory trust gate, keyed by the RESOLVED absolute path —
     # without this Claude shows "Do you trust the files in this folder?".
     assert data["projects"][str(workspace.resolve())]["hasTrustDialogAccepted"] is True
+
+
+def test_ensure_trusted_declines_auto_default_question_for_onboarded_user(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    An onboarded, trusted config gains only the auto-mode default answer.
+
+    Claude Code asks "Make auto mode your default permission mode?" at
+    startup until this key is set, and its pre-selected "Yes" rewrites the
+    user's default mode. Declining it writes only ``hasSeenAutoDefaultNudge``,
+    so seeding must leave every other key, including the user's mode, alone.
+    """
+    config_path = _redirect_home(monkeypatch, tmp_path / "home")
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    existing = {
+        "oauthAccount": {"emailAddress": "user@example.com"},
+        "hasCompletedOnboarding": True,
+        "projects": {str(workspace.resolve()): {"hasTrustDialogAccepted": True}},
+    }
+    config_path.write_text(json.dumps(existing))
+
+    ensure_claude_workspace_trusted(workspace)
+
+    assert json.loads(config_path.read_text()) == {**existing, "hasSeenAutoDefaultNudge": True}
 
 
 def test_ensure_trusted_preserves_existing_state(
@@ -8794,7 +8824,7 @@ def test_ensure_trusted_preserves_existing_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    Seeding adds only the two gates; all other config is preserved.
+    Seeding adds only the gates; all other config is preserved.
 
     The file holds the user's OAuth account, MCP config, and per-project
     history. Clobbering any of it would be a regression, so this asserts
@@ -8838,7 +8868,7 @@ def test_ensure_trusted_idempotent_does_not_rewrite(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    When both gates are already set, the file is left byte-for-byte alone.
+    When every gate is already set, the file is left byte-for-byte alone.
 
     The seed file is written in compact form; the helper's writer uses
     two-space indentation. So if the ``if not changed: return`` short-
@@ -8851,6 +8881,7 @@ def test_ensure_trusted_idempotent_does_not_rewrite(
     workspace.mkdir(parents=True)
     already = {
         "hasCompletedOnboarding": True,
+        "hasSeenAutoDefaultNudge": True,
         "projects": {str(workspace.resolve()): {"hasTrustDialogAccepted": True}},
     }
     # Compact, no indentation — distinct from the helper's indent=2 output.
