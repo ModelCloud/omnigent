@@ -4307,7 +4307,7 @@ def test_build_runner_env_forwards_declared_localdex_key_to_codex_only(
     from omnigent.harnesses.localdex_native import config as localdex_config
 
     registration = localdex_config.LocalDexConfig(
-        local_model="QB/DSV4.1-Flash",
+        local_model="DS v4.1 Flash 1017",
         provider="localdex",
         base_url="http://10.0.13.33:2120/v1",
         env_key="LOCALDEX_API_KEY",
@@ -7149,7 +7149,7 @@ async def test_handle_model_options_serves_localdex_from_the_native_codex_catalo
         localdex_config,
         "load_localdex_config",
         lambda *, require_token: SimpleNamespace(
-            local_model="QB/DSV4.1-Flash", env_key="LOCALDEX_TEST_BEARER"
+            local_model="DS v4.1 Flash 1017", env_key="LOCALDEX_TEST_BEARER"
         ),
     )
     monkeypatch.setenv("LOCALDEX_TEST_BEARER", "test-token")
@@ -7160,13 +7160,13 @@ async def test_handle_model_options_serves_localdex_from_the_native_codex_catalo
 
     assert result.status == "ok"
     assert result.request_id == "req_localdex"
-    assert [row["id"] for row in result.models] == ["QB/DSV4.1-Flash", "gpt-5.6"]
-    assert result.models[0]["model"] == "QB/DSV4.1-Flash"
-    assert result.models[0]["displayName"] == "DeepSeek V4.1 Flash"
+    assert [row["id"] for row in result.models] == ["DS v4.1 Flash 1017", "gpt-5.6"]
+    assert result.models[0]["model"] == "DS v4.1 Flash 1017"
+    assert result.models[0]["displayName"] == "DS v4.1 Flash 1017"
     assert result.models[0]["isDefault"] is True
     assert result.models[0]["defaultReasoningEffort"] == "max"
     assert result.models[0]["supportedReasoningEfforts"][0]["reasoningEffort"] == "off"
-    assert result.routable_models == ["QB/DSV4.1-Flash", "gpt-5.6"]
+    assert result.routable_models == ["DS v4.1 Flash 1017", "gpt-5.6"]
     _cleanup_host(host)
 
 
