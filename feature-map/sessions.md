@@ -69,8 +69,9 @@ the header menu), and each place is a separate entry point.
   itself or explicitly reconnect a remembered Arca host. States: reconnecting
   (spinner), reconnect failed (retry), host offline.
 - `workspace-recovery`: a missing-workspace error offers **Continue in another
-  directory…**. Choose an existing host directory to fork the conversation into
-  a new session; the original remains available and missing files are not restored.
+  directory…**. Choose an existing host directory, optionally with a new git
+  worktree of it, to fork the conversation into a new session; the original
+  remains available and missing files are not restored.
 - `compaction-model-recovery`: a Codex turn that failed while compacting on the
   previous model shows the provider's error and why on a gray error card, with
   **Fork session…**. A spent-budget card is gray for every harness, since it
@@ -97,7 +98,8 @@ the header menu), and each place is a separate entry point.
   cookies from a local Chrome profile into that same session jar (Site scope
   picks the host or a parent domain); the copy is in-memory and never written
   back to Chrome.
-- `canvas-workspace`: Canvas collapses the shared sidebar on entry; clicking a
+- `canvas-workspace`: Main and project boards show only your sessions, including
+  cached previews and reloads. Canvas collapses the shared sidebar on entry; clicking a
   card opens its session beside the project board. Switching cards keeps
   drafts and board state; resize, focus, and close controls adjust the split.
 - `canvas-mobile`: the board and selected session use the standard top-left
@@ -279,9 +281,11 @@ and send a follow-up after its parent runner is replaced.
 **Missing workspace, desktop and mobile:** open a conversation whose working
 directory is no longer available and choose **Continue in another directory…**
 on the error card. The dialog explains the new session and missing files, then
-lets you type or browse for an existing directory on a connected host. Choose
-**Continue** to open the new session with the copied conversation. A missing
-destination stays in the dialog with an error and creates no session.
+lets you type or browse for an existing directory on a connected host. Optionally
+name a branch under **Git worktree** to continue in a new worktree of that
+repository instead. Choose **Continue** to open the new session with the copied
+conversation. A missing destination stays in the dialog with an error and
+creates no session.
 The action also appears on an eligible error card inside a Canvas conversation
 or side chat; it continues that conversation, including when another parent
 conversation is open alongside it.
@@ -707,7 +711,8 @@ plain `uv run pytest`, which starts a private server for the test.
   Workspace open/close, independent focus, maximizing, and pane sizing on wide
   and smaller desktops:
   `tests/e2e_ui/sessions/test_canvas_workspace.py::test_canvas_stays_visible_when_workspace_opens`.
-  Grouping, feature gating, drag persistence, and live updates also run in
+  Ownership filtering on desktop/mobile, grouping, feature gating, drag persistence,
+  and live updates also run in
   `tests/e2e_ui/sessions/test_canvas_page.py`, with selection churn in
   `tests/e2e_ui/sessions/test_canvas_selected_highlight_persists.py::test_clicked_card_keeps_selected_highlight_across_live_updates`.
   The selection journey covers duplicate titles and a long list whose nodes
@@ -827,8 +832,10 @@ plain `uv run pytest`, which starts a private server for the test.
   Native variants of the agent-switch test skip without `LLM_API_KEY`; record
   those skips and use a configured test harness before claiming native coverage.
 - Continuing in another directory preserves conversation history, not files
-  from the missing workspace. Existing worktree recreation and sandbox creation
-  belong to the ordinary fork dialog, not this recovery action.
+  from the missing workspace. A new worktree starts from the `HEAD` of the
+  chosen repository's main checkout, never from the missing worktree's branch.
+  Existing worktree recreation and sandbox creation belong to the ordinary fork
+  dialog, not this recovery action.
 - The reconnect command depends on why the session stopped (host offline vs. a
   stranded local session vs. a sandbox). Reproduce the reporter's reason, not
   just any stopped session.

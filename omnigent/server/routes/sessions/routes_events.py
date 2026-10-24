@@ -120,6 +120,7 @@ from omnigent.server.routes._errors import session_not_found as _session_not_fou
 from omnigent.server.routes._sessions.common import (
     _ALLOWED_EVENT_TYPES,
     _APPROVAL_TYPE,
+    _CLEAR_TYPE,
     _CODEX_NATIVE_SUBAGENT_THREAD_ID_LABEL_KEY,
     _COMPACT_TYPE,
     _EXTERNAL_ACP_SUBAGENT_START_TYPE,
@@ -181,6 +182,7 @@ from omnigent.server.routes._sessions.helpers import (
     _build_skill_slash_command_policy_body,
     _dispatch_skill_slash_command_to_runner,
     _evaluate_output_policy,
+    _extract_user_text_from_event,
     _filesystem_attachment_in_history,
     _filesystem_attachment_policy,
     _forward_session_change_to_runner,
@@ -1170,6 +1172,7 @@ def register_events_routes(
             _APPROVAL_TYPE,
             _MCP_ELICITATION_TYPE,
             _COMPACT_TYPE,
+            _CLEAR_TYPE,
             _SLASH_COMMAND_TYPE,
             _STOP_SESSION_TYPE,
             _RETRY_SESSION_TYPE,
@@ -1265,6 +1268,23 @@ def register_events_routes(
                 parse_client_side_tool_specs(body.tools)
             except ValueError as exc:
                 raise OmnigentError(str(exc), code=ErrorCode.INVALID_INPUT) from exc
+        if body.type == "message" and body.data.get("role", "user") == "user":
+            from omnigent.harnesses.claude_native.bridge import is_auth_slash_command
+
+            if is_auth_slash_command(_extract_user_text_from_event(body)) and (
+                await asyncio.to_thread(
+                    _native_pane_harness,
+                    conv,
+                    agent_store=agent_store,
+                    agent_cache=agent_cache,
+                )
+                == "claude-native"
+            ):
+                raise OmnigentError(
+                    "Claude Code's /login and /logout commands require its terminal. "
+                    "Run omni setup on the host to sign in or out, then retry.",
+                    code=ErrorCode.INVALID_INPUT,
+                )
         if (
             body.type == _RETRY_SESSION_TYPE
             or (body.type == "message" and body.data.get("role") == "user")
@@ -1963,6 +1983,42 @@ def register_events_routes(
                 )
             raise OmnigentError(
                 "/compact is not available for this session type.",
+                code=ErrorCode.INVALID_INPUT,
+            )
+        if body.type == _CLEAR_TYPE:
+            # Like /compact, /clear runs in the vendor TUI: the runner types the
+            # harness's own /clear, and the harness rotates the terminal onto a
+            # fresh session that viewers follow via ``session.superseded``.
+            clear_result = await _forward_session_change_to_runner(
+                session_id,
+                runner_router,
+                {"type": _CLEAR_TYPE},
+                timeout_s=_TUI_INJECT_FORWARD_TIMEOUT_S,
+            )
+            if clear_result is None and _is_native_terminal_session(conv):
+                conv, woke_client = await _wake_bound_runner_for_control(conv)
+                if woke_client is None:
+                    raise OmnigentError(
+                        "Can't clear this session while its runner is offline. "
+                        "Reconnect the session (send a message to wake it), then "
+                        "run /clear again.",
+                        code=ErrorCode.RUNNER_UNAVAILABLE,
+                    )
+                clear_result = await _forward_session_change_to_runner(
+                    session_id,
+                    runner_router,
+                    {"type": _CLEAR_TYPE},
+                    timeout_s=_TUI_INJECT_FORWARD_TIMEOUT_S,
+                )
+            if clear_result is not None and clear_result.status_code == 200:
+                return {"queued": False}
+            if clear_result is not None and clear_result.status_code != 204:
+                raise OmnigentError(
+                    f"Clear failed: runner returned {clear_result.status_code}",
+                    code=ErrorCode.INTERNAL_ERROR,
+                )
+            raise OmnigentError(
+                "/clear is not available for this session type.",
                 code=ErrorCode.INVALID_INPUT,
             )
         if body.type == "compaction":
