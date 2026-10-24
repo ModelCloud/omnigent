@@ -40,16 +40,19 @@ class _FakeAck:
 class _FakeTerminalRegistry:
     def __init__(self) -> None:
         self.closed: list[str] = []
+        self.entries: list[Any] = []
 
     def list_for_conversation(self, conv_id: str) -> list[Any]:
-        return []
+        return list(self.entries)
 
 
 class _FakeResourceRegistry:
     def __init__(self) -> None:
         self.terminal_registry = _FakeTerminalRegistry()
+        self.closed_terminals: list[str] = []
 
     async def close_terminal(self, conv_id: str, terminal_id: str) -> bool:
+        self.closed_terminals.append(terminal_id)
         return True
 
 
@@ -551,10 +554,10 @@ async def test_uniform_stop_kill_failure_returns_503_without_idle(
 
 
 @pytest.mark.asyncio
-async def test_codex_and_pi_stop_route_to_interrupt(
+async def test_pi_stop_routes_to_interrupt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """codex/pi have no distinct stop — stop() routes to their interrupt handler."""
+    """pi has no distinct stop — stop() routes to its interrupt handler."""
     import omnigent.harnesses.pi_native.bridge as pi_bridge
 
     calls: list[str] = []
@@ -569,6 +572,93 @@ async def test_codex_and_pi_stop_route_to_interrupt(
     assert isinstance(resp, Response) and resp.status_code == 204
     # The interrupt path ran (enqueue_interrupt), not a kill_session.
     assert calls == ["conv_p"]
+
+
+@pytest.mark.asyncio
+async def test_codex_stop_interrupts_tears_down_and_goes_idle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A codex stop interrupts, tears down the terminal + forwarder, goes idle.
+
+    Interrupting alone leaves the ``localdex --remote`` pane attached; when its
+    app-server connection later drops, the TUI's auto-reconnect re-resumes the
+    session the user just stopped.
+    """
+    from omnigent.runner.native import interrupt as interrupt_mod
+
+    cancelled_forwarders: list[str] = []
+
+    async def _cancel_forwarder(session_id: str) -> None:
+        cancelled_forwarders.append(session_id)
+
+    monkeypatch.setattr(interrupt_mod, "_cancel_auto_forwarder_task", _cancel_forwarder)
+
+    resource_registry = _FakeResourceRegistry()
+    resource_registry.terminal_registry.entries = [
+        SimpleNamespace(terminal_name="codex", session_key="s1")
+    ]
+    runner, captured = _make_runner(resource_registry=resource_registry)
+    # A stop that follows an unresolved interrupt settles it: the teardown is
+    # confirmed, so no grace-timer cancel may fire later.
+    runner._pending_interrupts["conv_cx"] = "work-1"
+    resp = await runner.stop("codex-native", "conv_cx")
+
+    assert isinstance(resp, Response) and resp.status_code == 204
+    assert runner.take_pending_interrupt("conv_cx")[0] is False
+    assert resource_registry.closed_terminals != []
+    assert cancelled_forwarders == ["conv_cx"]
+    idle = [e for _, e in captured["published"] if e.get("status") == "idle"]
+    assert idle == [{"type": "session.status", "status": "idle"}]
+    assert captured["wakes"] == [("conv_cx", "cancelled", None)]
+
+
+@pytest.mark.asyncio
+async def test_codex_stop_propagates_interrupt_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed codex interrupt is surfaced; no teardown or idle is published."""
+    from omnigent.runner.native import interrupt as interrupt_mod
+
+    cancelled_forwarders: list[str] = []
+
+    async def _cancel_forwarder(session_id: str) -> None:
+        cancelled_forwarders.append(session_id)
+
+    async def _codex_state(conv_id: str, *, action: str, **_kw: Any) -> tuple[Any | None, Path]:
+        del conv_id, action
+        return SimpleNamespace(
+            socket_path="/tmp/codex.sock",
+            thread_id="thr_1",
+            active_turn_id="turn_1",
+        ), Path("unused-bridge-dir")
+
+    class _FailingCodexClient:
+        async def connect(self) -> None:
+            return None
+
+        async def request(self, method: str, params: dict[str, Any]) -> Any:
+            raise RuntimeError("app-server unreachable")
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(interrupt_mod, "_cancel_auto_forwarder_task", _cancel_forwarder)
+    runner, captured = _make_runner(codex_bridge_state_for_session=_codex_state)
+
+    import omnigent.harnesses.codex_native.app_server as codex_app_server
+
+    monkeypatch.setattr(
+        codex_app_server,
+        "client_for_transport",
+        lambda *a, **kw: _FailingCodexClient(),
+    )
+
+    resp = await runner.stop("codex-native", "conv_cf")
+
+    assert resp is not None and resp.status_code == 503
+    assert cancelled_forwarders == []
+    assert [e for _, e in captured["published"] if e.get("status") == "idle"] == []
+    assert captured["wakes"] == []
 
 
 @pytest.mark.asyncio

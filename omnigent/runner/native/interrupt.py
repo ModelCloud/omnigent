@@ -389,8 +389,8 @@ class NativeInterruptRunner:
     async def stop(self, harness_name: str | None, conv_id: str) -> Response | None:
         """Dispatch a stop_session to the harness's bridge.
 
-        codex/pi have no distinct stop — they route to their interrupt handler,
-        exactly as the original dispatch chain did.
+        pi has no distinct stop — it routes to its interrupt handler, exactly
+        as the original dispatch chain did.
 
         :returns: A response when this harness has a stop handler, else ``None``
             so the caller falls through to the in-process turn cancel.
@@ -401,7 +401,9 @@ class NativeInterruptRunner:
         key = agent.key
         if key == "claude":
             return await self._claude_stop(conv_id)
-        if key in ("codex", "pi"):
+        if key == "codex":
+            return await self._codex_stop(conv_id)
+        if key == "pi":
             return await self.interrupt(harness_name, conv_id)
         spec = _UNIFORM_STOP.get(key)
         if spec is None:
@@ -703,6 +705,16 @@ class NativeInterruptRunner:
         return Response(status_code=204)
 
     async def _codex_interrupt(self, conv_id: str) -> Response:
+        response, _idle_published = await self._codex_interrupt_impl(conv_id)
+        return response
+
+    async def _codex_interrupt_impl(self, conv_id: str) -> tuple[Response, bool]:
+        """Interrupt the active Codex turn.
+
+        :returns: ``(response, idle_published)`` — ``idle_published`` is ``True``
+            when the stale-turn reconcile already emitted ``session.status:
+            idle``, so a caller that reports its own idle must not duplicate it.
+        """
         from omnigent.harnesses.codex_native.app_server import (
             CodexAppServerResponseError,
             client_for_transport,
@@ -717,14 +729,14 @@ class NativeInterruptRunner:
 
         state, bridge_dir = await self._codex_bridge_state_for_session(conv_id, action="interrupt")
         if state is None:
-            return Response(status_code=204)
+            return Response(status_code=204), False
         pending_mcp = cancel_pending_mcp_startup(bridge_dir)
         if state.active_turn_id is None and not pending_mcp:
             self._logger.info(
                 "Codex-native interrupt skipped for %s: no active turn or MCP startup.",
                 conv_id,
             )
-            return Response(status_code=204)
+            return Response(status_code=204), False
         if pending_mcp:
             self._logger.info(
                 "Codex-native interrupt for %s cancels MCP startup: %s",
@@ -745,6 +757,7 @@ class NativeInterruptRunner:
                     "Failed to publish cancelled MCP startup for %s", conv_id, exc_info=True
                 )
 
+        idle_published = False
         codex_client = client_for_transport(
             state.socket_path,
             client_name="omnigent-codex-native-runner",
@@ -782,6 +795,8 @@ class NativeInterruptRunner:
                         # if still recorded and publish idle under the bridge lock,
                         # so a turn starting mid-interrupt is not masked by this idle.
                         def _publish_idle() -> None:
+                            nonlocal idle_published
+                            idle_published = True
                             # Runs under the bridge state lock: stay quick, do not
                             # touch bridge state, and never raise (the clear is done).
                             try:
@@ -825,7 +840,7 @@ class NativeInterruptRunner:
                     # The targeted turn ended or was superseded, so skip the
                     # deferred parent-wake cancel. A dropped sub-agent completion
                     # can still leave its parent waiting; reconciled separately.
-                    return Response(status_code=204)
+                    return Response(status_code=204), idle_published
         except Exception as exc:  # surface active-turn interrupt failures.
             self._logger.warning(
                 "Codex-native turn/interrupt failed for session=%s thread=%s turn=%s",
@@ -842,11 +857,44 @@ class NativeInterruptRunner:
                         exc, context="codex-native interrupt"
                     ),
                 },
-            )
+            ), False
         finally:
             with contextlib.suppress(Exception):
                 await codex_client.close()
         self._defer_parent_wake_after_native_interrupt(conv_id)
+        return Response(status_code=204), idle_published
+
+    async def _codex_stop(self, conv_id: str) -> Response:
+        """Stop a Codex/LocalDex native session without leaving a live TUI.
+
+        Interrupting alone leaves the ``localdex --remote`` pane attached: when
+        its app-server connection drops it treats that as a transport error and
+        its auto-reconnect resumes the thread the user just stopped.
+        """
+        interrupt_response, idle_published = await self._codex_interrupt_impl(conv_id)
+        if interrupt_response.status_code >= 400:
+            return interrupt_response
+        await self._teardown_session_terminals(conv_id)
+        await _cancel_auto_forwarder_task(conv_id)
+        if not idle_published:
+            self._publish_event(conv_id, {"type": "session.status", "status": "idle"})
+        # The teardown is confirmed, so this ``cancelled`` is truthful and
+        # settles any interrupt still waiting on its outcome.
+        self.clear_pending_interrupt(conv_id)
+        delivery_ack = self._mark_subagent_terminal_and_wake(
+            conv_id,
+            status="cancelled",
+            output=None,
+        )
+        if not delivery_ack.delivered and (
+            delivery_ack.entry is not None or conv_id in self._session_sub_agent_names
+        ):
+            self._logger.warning(
+                "Codex-native stop succeeded but sub-agent delivery was "
+                "not confirmed; session=%s reason=%s",
+                conv_id,
+                delivery_ack.reason,
+            )
         return Response(status_code=204)
 
     async def _opencode_interrupt(self, conv_id: str) -> Response | None:
