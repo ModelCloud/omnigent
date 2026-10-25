@@ -642,6 +642,13 @@ export interface FusionDescriptor {
 
 /** One runner-owned native model-picker row. */
 export interface NativeModelOption {
+  /** Logical model shared across providers, distinct from the wire model id. */
+  modelFamily?: string;
+  modelLabel?: string;
+  /** Short configured provider id, never an endpoint hostname. */
+  providerId?: string;
+  /** Serving variant supported by this exact provider/model combination. */
+  variant?: string;
   /** Native picker id (a Claude alias or Codex model id). */
   id: string;
   /** Provider-facing model id the native harness will run. */

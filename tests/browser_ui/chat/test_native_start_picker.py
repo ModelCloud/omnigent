@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -11,6 +12,7 @@ from playwright.sync_api import Page, Request, expect
 
 from tests._helpers.picker_routes import OWN_AGENTS
 from tests.browser_ui.chat.session_contract import ChatSessionContract
+from tests.browser_ui.chat.test_model_catalog import _deepseek_model_rows
 
 
 def _open_picker(
@@ -136,3 +138,37 @@ def test_native_picker_hides_sdk_kimi(
     expect(page.get_by_test_id("new-chat-landing-harness-more")).to_have_count(0)
     expect(page.get_by_test_id("new-chat-landing-agent-ag_kimi_sdk")).to_have_count(0)
     expect(page.locator("[data-harness-menu-row]")).to_have_count(1)
+
+
+def test_deepseek_start_selectors_submit_explicit_lithos_speed(
+    page: Page, chat_session_contract: ChatSessionContract, tmp_path: Path
+) -> None:
+    chat = chat_session_contract
+    creates = _open_picker(page, chat, "codex-native")
+    chat.contract.json(
+        re.compile(r"/v1/hosts/[^/]+/harnesses/[^/]+/model-options(?:\?.*)?$"),
+        {"models": _deepseek_model_rows()},
+    )
+    page.reload()
+    page.get_by_test_id("new-chat-landing-agent-select").click()
+    page.get_by_test_id("new-chat-landing-agent-config-ag_codex-native_browser").click()
+    selectors = page.get_by_test_id("native-model-selectors")
+    expect(selectors.get_by_role("combobox")).to_have_count(4)
+    selectors.get_by_role("combobox", name="Provider", exact=True).click()
+    page.get_by_role("option", name="Lithos", exact=True).click()
+    expect(selectors.get_by_role("combobox", name="Speed", exact=True)).to_have_text("Regular")
+    selectors.get_by_role("combobox", name="Speed", exact=True).click()
+    page.get_by_role("option", name="Ultra", exact=True).click()
+    expect(selectors.get_by_role("combobox", name="Reasoning", exact=True)).to_contain_text("Max")
+    page.screenshot(path=tmp_path / "new-session-lithos-ultra.png")
+    page.keyboard.press("Escape")
+    page.keyboard.press("Escape")
+    page.get_by_test_id("new-chat-landing-input").fill("Check the workspace")
+    with page.expect_response(
+        lambda response: (
+            response.request.method == "POST" and response.url.endswith("/v1/sessions")
+        )
+    ):
+        page.get_by_test_id("new-chat-landing-submit").click()
+    assert len(creates) == 1
+    assert creates[0]["model_override"] == "deepseek-ai/DeepSeek-V4.1-Flash-ultra"

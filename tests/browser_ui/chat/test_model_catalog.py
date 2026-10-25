@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from urllib.parse import urlparse
 
 import pytest
@@ -17,6 +18,52 @@ def _open_models(page: Page) -> None:
     gear.click()
     page.get_by_test_id("composer-agent-edit").click()
     expect(page.get_by_test_id("composer-agent-config-menu")).to_be_visible()
+
+
+def _deepseek_model_rows() -> list[dict]:
+    return [
+        {
+            **model_option(model, display_name="DeepSeek v4.1 Flash", is_default=index == 0),
+            "modelFamily": "ds-v4.1-flash-1017",
+            "modelLabel": "DeepSeek v4.1 Flash",
+            "providerId": provider,
+            "variant": variant,
+            "defaultReasoningEffort": "max",
+            "supportedReasoningEfforts": [{"reasoningEffort": "max"}],
+        }
+        for index, (model, provider, variant) in enumerate(
+            [
+                ("DS v4.1 Flash 1017", "localdex", "regular"),
+                ("deepseek/deepseek-v4.1-flash-1017", "openrouter", "regular"),
+                ("deepseek-ai/DeepSeek-V4.1-Flash", "lithos", "regular"),
+                ("deepseek-ai/DeepSeek-V4.1-Flash-fast", "lithos", "fast"),
+                ("deepseek-ai/DeepSeek-V4.1-Flash-ultra", "lithos", "ultra"),
+            ]
+        )
+    ]
+
+
+def test_deepseek_session_selectors_use_provider_wire_id(
+    page: Page, chat_session_contract: ChatSessionContract, tmp_path: Path
+) -> None:
+    chat = chat_session_contract
+    chat.set_catalog(
+        harness="codex-native", models=_deepseek_model_rows(), selected_model="DS v4.1 Flash 1017"
+    )
+    page.goto(chat.url)
+    _open_models(page)
+    selectors = page.get_by_test_id("native-model-selectors")
+    expect(selectors.get_by_role("combobox")).to_have_count(4)
+    expect(selectors.get_by_role("combobox", name="Model", exact=True)).to_have_text(
+        "DeepSeek v4.1 Flash"
+    )
+    page.screenshot(path=tmp_path / "session-deepseek-selectors.png")
+    selectors.get_by_role("combobox", name="Provider", exact=True).click()
+    with page.expect_request(
+        lambda req: req.method == "PATCH" and req.url.endswith(f"/v1/sessions/{chat.session_id}")
+    ) as patch:
+        page.get_by_role("option", name="Lithos", exact=True).click()
+    assert patch.value.post_data_json == {"model_override": "deepseek-ai/DeepSeek-V4.1-Flash"}
 
 
 def test_catalog_rows_render_for_every_native_picker(

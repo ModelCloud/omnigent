@@ -44,14 +44,18 @@ model_provider = "profile-provider"
     assert effective_codex_model_provider(parsed) == "profile-provider"
 
 
-@pytest.mark.parametrize("env_key", ["OPENROUTER_API_KEY", "CUSTOM_OPENROUTER_KEY"])
+@pytest.mark.parametrize(
+    "provider,default_key", [("openrouter", "OPENROUTER_API_KEY"), ("lithos", "LITHOS_API_KEY")]
+)
+@pytest.mark.parametrize("custom_key", [False, True])
 @pytest.mark.parametrize("value", [None, "", "   ", "test-key"])
 def test_openrouter_builtin_readiness_uses_local_env(
-    tmp_path: Path, env_key: str, value: str | None
+    tmp_path: Path, provider: str, default_key: str, custom_key: bool, value: str | None
 ) -> None:
-    body = 'model_provider = "openrouter"\n'
-    if env_key != "OPENROUTER_API_KEY":
-        body += f'[model_providers.openrouter]\nenv_key = "{env_key}"\n'
+    env_key = "CUSTOM_PROVIDER_KEY" if custom_key else default_key
+    body = f'model_provider = "{provider}"\n'
+    if custom_key:
+        body += f'[model_providers.{provider}]\nenv_key = "{env_key}"\n'
     path = _config(tmp_path, body)
     env = {} if value is None else {env_key: value}
     expected = "provider-ready" if value and value.strip() else "provider-auth-missing"

@@ -23,11 +23,25 @@ from urllib.parse import quote, urlparse
 
 import httpx
 
+from omnigent.models.model_fallbacks import LOCALDEX_DEEPSEEK_LITHOS, LOCALDEX_DEEPSEEK_OPENROUTER
+
 LOCALDEX_CONFIG_ROOT = Path.home() / ".local" / "share" / "localdex"
 LOCALDEX_CONFIG_PATH = LOCALDEX_CONFIG_ROOT / "config.toml"
 LOCALDEX_MODELS_PATH = LOCALDEX_CONFIG_ROOT / "models.toml"
 LOCALDEX_BINARY = Path.home() / ".local" / "bin" / "codex"
+
 LOCALDEX_MODEL = "DS v4.1 Flash 1017"
+DEEPSEEK_MODEL_LABEL = "DeepSeek v4.1 Flash"
+DEEPSEEK_SELECTOR_MODELS = {
+    LOCALDEX_MODEL: ("localdex", "regular"),
+    **dict.fromkeys(LOCALDEX_DEEPSEEK_OPENROUTER.model_ids, ("openrouter", "regular")),
+    **{
+        model: ("lithos", variant)
+        for model, variant in zip(
+            LOCALDEX_DEEPSEEK_LITHOS.model_ids, ("regular", "fast", "ultra"), strict=True
+        )
+    },
+}
 LOCALDEX_RUNTIME_CAPABILITIES_FILE = "localdex-runtime-capabilities.json"
 
 
@@ -61,9 +75,11 @@ def localdex_model_picker_row(
     row: dict[str, object] = {
         "id": model.model,
         "model": model.model,
-        "displayName": model.display_name,
+        "displayName": DEEPSEEK_MODEL_LABEL
+        if model.model in DEEPSEEK_SELECTOR_MODELS or model.model_family == "ds-v4.1-flash-1017"
+        else model.display_name,
     }
-    if model.model != LOCALDEX_MODEL:
+    if model.model not in DEEPSEEK_SELECTOR_MODELS and model.model_family != "ds-v4.1-flash-1017":
         return row
     row.update(
         {
@@ -112,11 +128,31 @@ def with_localdex_model_picker_row(
         )
         row = dict(source)
         row.update({"id": item.model, "model": item.model})
+        family = item.model_family
+        if item.model in DEEPSEEK_SELECTOR_MODELS:
+            family = "ds-v4.1-flash-1017"
+        row.update(
+            {
+                "modelFamily": family or item.model,
+                "modelLabel": item.model_label
+                or (DEEPSEEK_MODEL_LABEL if family == "ds-v4.1-flash-1017" else item.display_name),
+                "providerId": item.provider,
+                "variant": item.variant,
+            }
+        )
         if item.display_name != item.model or not row.get("displayName"):
             row["displayName"] = item.display_name
+        if family == "ds-v4.1-flash-1017":
+            fallback = localdex_model_picker_row(config, item)
+            if item.model == LOCALDEX_MODEL:
+                row.update(fallback)
+            else:
+                for key, value in fallback.items():
+                    row.setdefault(key, value)
         if item.model == LOCALDEX_MODEL:
-            row.update(localdex_model_picker_row(config, item))
             row["isDefault"] = True
+        if family == "ds-v4.1-flash-1017":
+            row["displayName"] = DEEPSEEK_MODEL_LABEL
         if any(
             source.get("isDefault") is True
             and (source.get("id") == item.model or source.get("model") == item.model)
@@ -129,6 +165,19 @@ def with_localdex_model_picker_row(
         for row in rows
         if row.get("id") not in registered_ids and row.get("model") not in registered_ids
     ]
+    for row in remaining_rows:
+        model_id = str(row.get("model") or row.get("id") or "")
+        if model_id in DEEPSEEK_SELECTOR_MODELS:
+            provider, variant = DEEPSEEK_SELECTOR_MODELS[model_id]
+            row.update(
+                {
+                    "modelFamily": "ds-v4.1-flash-1017",
+                    "modelLabel": DEEPSEEK_MODEL_LABEL,
+                    "displayName": DEEPSEEK_MODEL_LABEL,
+                    "providerId": provider,
+                    "variant": variant,
+                }
+            )
     if any(row.get("isDefault") is True for row in registered_rows):
         for row in remaining_rows:
             row.pop("isDefault", None)
@@ -146,6 +195,9 @@ class LocalDexModelRegistration:
     env_key: str
     discover_capabilities: bool = False
     provider_config: dict[str, object] = field(default_factory=dict)
+    model_family: str | None = None
+    model_label: str | None = None
+    variant: str = "regular"
 
 
 @dataclass(frozen=True)
@@ -182,7 +234,7 @@ def localdex_runtime_provider_id(provider: str) -> str:
     """Map a LocalDex config name into a private Codex provider namespace."""
     # These endpoint ids are also inferred by LocalDex during live switches.
     # Other registrations must not shadow official or gateway providers.
-    if provider in {"localdex", "openrouter"}:
+    if provider in {"localdex", "openrouter", "lithos"}:
         return provider
     slug = re.sub(r"[^A-Za-z0-9_-]+", "-", provider).strip("-_")[:24] or "provider"
     digest = hashlib.sha256(provider.encode("utf-8")).hexdigest()[:10]
@@ -212,7 +264,7 @@ def localdex_provider_config_overrides(config: LocalDexConfig) -> tuple[str, ...
                 "requires_openai_auth": False,
             }
         )
-        if model.provider == "openrouter":
+        if model.provider in {"openrouter", "lithos"}:
             # The native built-in accepts routing/auth overrides, not a renamed provider.
             provider_config.pop("name", None)
         if model.provider == "localdex":
@@ -261,11 +313,30 @@ def load_localdex_config(
         model_document = tomllib.loads(models_path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         # Read pre-migration installations without changing their user data.
-        model_document = {"models": {LOCALDEX_MODEL: {"provider": "localdex"}}}
+        model_document = {
+            "models": {LOCALDEX_MODEL: {"provider": "localdex"}} if "localdex" in providers else {}
+        }
     except tomllib.TOMLDecodeError as exc:
         raise ValueError(f"LocalDex model registry is invalid TOML: {exc}") from exc
     declared_models = model_document.get("models")
-    if not isinstance(declared_models, dict) or not declared_models:
+    if not isinstance(declared_models, dict):
+        raise ValueError("LocalDex models.toml requires [models.<model-id>] entries")
+    declared_models = dict(declared_models)
+    # Adding the configured Lithos provider opts into its three native variants.
+    # Keep the provider/model mapping explicit even before the first model/list.
+    if isinstance(providers.get("lithos"), dict):
+        for model_id, (provider_id, variant) in DEEPSEEK_SELECTOR_MODELS.items():
+            if provider_id == "lithos":
+                declared_models.setdefault(
+                    model_id,
+                    {
+                        "provider": "lithos",
+                        "model_family": "ds-v4.1-flash-1017",
+                        "model_label": DEEPSEEK_MODEL_LABEL,
+                        "variant": variant,
+                    },
+                )
+    if not declared_models:
         raise ValueError("LocalDex models.toml requires [models.<model-id>] entries")
 
     registered: list[LocalDexModelRegistration] = []
@@ -278,6 +349,14 @@ def load_localdex_config(
             provider = {
                 "base_url": "https://openrouter.ai/api/v1",
                 "env_key": "OPENROUTER_API_KEY",
+                "wire_api": "responses",
+                "requires_openai_auth": False,
+                **(provider or {}),
+            }
+        if provider_name == "lithos" and (provider is None or isinstance(provider, dict)):
+            provider = {
+                "base_url": "https://api.lithosai.cloud/v1",
+                "env_key": "LITHOS_API_KEY",
                 "wire_api": "responses",
                 "requires_openai_auth": False,
                 **(provider or {}),
@@ -343,6 +422,12 @@ def load_localdex_config(
                 env_key=env_key,
                 discover_capabilities=model.get("discover_capabilities") is True,
                 provider_config=dict(provider),
+                model_family=str(model["model_family"]) if model.get("model_family") else None,
+                model_label=str(model["model_label"]) if model.get("model_label") else None,
+                variant=str(
+                    model.get("variant")
+                    or DEEPSEEK_SELECTOR_MODELS.get(model_id, ("", "regular"))[1]
+                ),
             )
         )
     local = next((item for item in registered if item.model == LOCALDEX_MODEL), registered[0])
@@ -374,7 +459,7 @@ def localdex_model_for_selection(
         return LocalDexModelRegistration(
             model=config.local_model,
             provider=config.provider,
-            display_name="DS v4.1 Flash 1017"
+            display_name=DEEPSEEK_MODEL_LABEL
             if config.local_model == LOCALDEX_MODEL
             else config.local_model,
             base_url=config.base_url,

@@ -22,7 +22,15 @@ from pathlib import Path
 from typing import Literal
 
 CODEX_BUILTIN_PROVIDERS = frozenset(
-    {"openai", "amazon-bedrock", "amazon-bedrock-runtime", "ollama", "lmstudio", "openrouter"}
+    {
+        "openai",
+        "amazon-bedrock",
+        "amazon-bedrock-runtime",
+        "ollama",
+        "lmstudio",
+        "openrouter",
+        "lithos",
+    }
 )
 _CODEX_AUTH_HEADER_NAMES = frozenset({"authorization", "api-key", "x-api-key"})
 
@@ -157,14 +165,17 @@ def codex_config_effective_auth(
     # Configured entries cannot replace the built-in OpenAI, Ollama, or LM
     # Studio providers. Bedrock accepts only limited endpoint/auth overrides;
     # none changes whether it requires Codex login.
-    if provider_id in CODEX_BUILTIN_PROVIDERS and provider_id != "openrouter":
+    if provider_id in CODEX_BUILTIN_PROVIDERS and provider_id not in {"openrouter", "lithos"}:
         return "codex-login" if provider_id == "openai" else "provider-ready"
 
     providers = config.get("model_providers")
     configured_table = providers.get(provider_id) if isinstance(providers, dict) else None
     table = configured_table if isinstance(configured_table, dict) else None
-    if provider_id == "openrouter":
-        table = {"env_key": "OPENROUTER_API_KEY", **(table or {})}
+    if provider_id in {"openrouter", "lithos"}:
+        table = {
+            "env_key": "LITHOS_API_KEY" if provider_id == "lithos" else "OPENROUTER_API_KEY",
+            **(table or {}),
+        }
         if provider_table_has_self_contained_auth(table):
             return "provider-ready"
     if table is None:
