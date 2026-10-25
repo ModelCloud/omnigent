@@ -40,7 +40,7 @@ from omnigent.runner.transports.ws_tunnel.serve import (
 )
 from omnigent.util.event_loop_watchdog import monitor_event_loop
 from omnigent.util.threaded_auth import ThreadedAuth
-from omnigent.version import VERSION
+from omnigent.version import display_version
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -54,7 +54,7 @@ _RUNNER_SERVER_URL_ENV_VAR = "RUNNER_SERVER_URL"
 _RUNNER_PREWARM_SPEC_PATH_ENV_VAR = "RUNNER_PREWARM_SPEC_PATH"
 # The runner advertises the omnigent version it is actually running (shared
 # with the CLI/server/host) instead of a hard-coded placeholder.
-_RUNNER_VERSION = VERSION
+_RUNNER_VERSION = display_version()
 _RUNNER_CONFIG_HOME_ENV_VAR = "OMNIGENT_CONFIG_HOME"
 _DEFAULT_RUNNER_IDLE_TIMEOUT_S = 60 * 60
 _RUNNER_IDLE_MONITOR_MAX_POLL_INTERVAL_S = 60.0

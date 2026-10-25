@@ -5730,13 +5730,13 @@ async def _ensure_runner_session_initialized(
                 trigger=trigger,
             )
         else:
-            from omnigent.version import VERSION
+            from omnigent.version import display_version
 
             resp = await runner_client.post(
                 "/v1/sessions",
                 json=build_runner_session_init_payload(
                     conv,
-                    server_version=VERSION,
+                    server_version=display_version(),
                     suppress_recovery_turn=suppress_recovery_turn,
                 ),
                 timeout=_RUNNER_SESSION_INIT_TIMEOUT_S,

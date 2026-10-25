@@ -43,7 +43,7 @@ import httpx
 from omnigent.errors import ErrorPhase, OmnigentError, classify_exception
 from omnigent.process_logging import redact_log_text
 from omnigent.runner.identity import RUNNER_ID_ENV_VAR
-from omnigent.version import VERSION
+from omnigent.version import display_version
 
 CAPTURED_STACK_TRACE_FIELD = "captured_stack_trace"
 
@@ -669,7 +669,7 @@ def record_to_row(record: logging.LogRecord, source: str) -> dict[str, object]:
         "hostname": _HOSTNAME,
         "logger_name": record.name,
         "func_name": record.funcName,
-        "app_version": VERSION,
+        "app_version": display_version(),
         "stack_trace": redact_log_text(stack_trace) if stack_trace is not None else None,
         "attributes": _attributes(record, source),
         "log_id": uuid.uuid4().hex,

@@ -138,9 +138,9 @@ def install_crash_handler(
 
 def _read_version() -> str:
     try:
-        from omnigent.version import VERSION
+        from omnigent.version import display_version
 
-        return VERSION
+        return display_version()
     except Exception:  # noqa: BLE001  pragma: no cover
         return "unknown"
 

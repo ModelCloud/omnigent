@@ -62,10 +62,10 @@ def redact_url(url: str | None) -> str | None:
 
 
 def _local_version() -> str:
-    """The installed CLI/package version (same constant the runtime imports)."""
-    from omnigent.version import VERSION
+    """The installed CLI/package version with build commit (``0.x.y+sha9``)."""
+    from omnigent.version import display_version
 
-    return VERSION
+    return display_version()
 
 
 def _local_auth_source() -> str:

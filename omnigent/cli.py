@@ -1686,32 +1686,27 @@ def _validate_agent_policy_functions(  # type: ignore[explicit-any]  # spec type
 def _format_version() -> str:
     """Render the version line shown by ``--version`` and ``version``.
 
-    Always includes the package version. When the build hook in
-    ``setup.py`` wrote ``omnigent/_build_info.py``, the line is
-    additionally annotated with the short commit SHA and the build
-    time in ISO-8601 UTC. For source checkouts that have never
-    been built, only the bare version prints — matching the
-    behavior before this feature shipped.
+    Always includes the display version — the package version with the
+    build commit appended (``0.20.0.dev0+9e779bef4``), resolved from
+    ``_build_info.py`` on wheels or the git worktree on source checkouts.
+    When ``_build_info.py`` exists the line is additionally annotated with
+    the build time in ISO-8601 UTC.
 
-    :returns: Either ``"omnigent 0.1.0"`` (no build info), or
-        ``"omnigent 0.1.0 (010cf77c, built 2026-05-21T14:34:45Z)"``.
+    :returns: ``"omnigent 0.1.0"`` (no commit known),
+        ``"omnigent 0.1.0+010cf77c9"`` (commit only), or
+        ``"omnigent 0.1.0+010cf77c9 (built 2026-05-21T14:34:45Z)"``.
     """
     import datetime
 
     from omnigent.update_check import _read_build_info
-    from omnigent.version import VERSION
+    from omnigent.version import display_version
 
-    version_str = VERSION
+    version_str = display_version()
     info = _read_build_info()
     if info is None:
         return f"omnigent {version_str}"
-    epoch, sha = info
+    epoch, _sha = info
     when = datetime.datetime.fromtimestamp(epoch, tz=datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-    if sha:
-        # Short SHA (first 8 chars) — enough to disambiguate in bug
-        # reports without making the line unwieldy.
-        return f"omnigent {version_str} ({sha[:8]}, built {when})"
-    # _build_info exists but has no SHA (built without git available).
     return f"omnigent {version_str} (built {when})"
 
 
@@ -1905,11 +1900,10 @@ class _OmnigentCLI(click.Group):
         from omnigent.inner import ui
 
         if ui.show_banner():
-            from omnigent.version import VERSION
+            from omnigent.version import display_version
 
             epilogue = [("Get started", "omnigent setup")]
-            if VERSION:
-                epilogue.insert(0, ("Version", VERSION))
+            epilogue.insert(0, ("Version", display_version()))
             ui.print_landing(tagline="all your agents, one cli", epilogue=epilogue)
         super().format_help(ctx, formatter)
 

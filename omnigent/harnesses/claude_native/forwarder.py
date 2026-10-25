@@ -77,7 +77,7 @@ from omnigent.session_event_batch import (
     encode_session_event_batch,
 )
 from omnigent.util.reasoning_effort import CLAUDE_EFFORTS, EFFORT_CLEAR_VALUES
-from omnigent.version import VERSION
+from omnigent.version import display_version
 
 _FORWARDER_STATE_FILE = "transcript_forwarder.json"
 _HOOK_STATE_FILE = "hook_forwarder.json"
@@ -3879,7 +3879,7 @@ def _stop_failure_context(
         "native_hook_cursor": record.event_cursor,
         "native_hook_offset": record.byte_offset,
         "native_hook_recorded_at": record.recorded_at,
-        "runner_version": VERSION,
+        "runner_version": display_version(),
     }
     if reason and len(parent_claude_session_ids) == 1:
         context["native_parent_session_id"] = next(iter(parent_claude_session_ids))
@@ -3902,7 +3902,7 @@ def _log_transcript_failure(session_id: str, item: ClaudeTranscriptItem) -> None
             "failure_source": "claude_transcript",
             "detail_source": "explicit_api_error",
             "failure_decision": "observed",
-            "runner_version": VERSION,
+            "runner_version": display_version(),
         }
         _logger.info(
             "Claude native API-error evidence observed; session=%s",
@@ -6996,7 +6996,7 @@ async def _post_forwarder_failed_status(
                 "native_harness": "claude-native",
                 "detail_source": "forwarder_delivery_error",
                 "failure_decision": "session_failed",
-                "runner_version": VERSION,
+                "runner_version": display_version(),
                 **_forwarder_rejection_context(http_error),
             },
         )
