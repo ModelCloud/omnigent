@@ -986,8 +986,7 @@ def build_native_controls(
                 multidex = await asyncio.to_thread(load_multidex_config)
             except (FileNotFoundError, ValueError):
                 multidex = None
-            if multidex is not None:
-                rows = with_multidex_model_picker_row(rows, multidex)
+            rows = with_multidex_model_picker_row(rows, multidex)
         return mark_launch_default(rows, active_model)
 
     async def _write_back_codex_catalog(session_id: str, rows: list[_JsonObject]) -> None:

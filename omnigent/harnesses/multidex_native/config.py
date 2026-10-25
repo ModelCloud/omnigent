@@ -113,18 +113,20 @@ def multidex_model_picker_row(
 
 
 def with_multidex_model_picker_row(
-    rows: Sequence[Mapping[str, object]], config: MultiDexConfig
+    rows: Sequence[Mapping[str, object]], config: MultiDexConfig | None
 ) -> list[dict[str, object]]:
-    """Insert the canonical MultiDex row once and make it the harness default.
+    """Normalize native picker rows and add optional provider registrations.
 
     A live app-server row or a previously written host catalog can already
     contain the local model. Replace it with the capability-complete row so
     stale id-only rows cannot suppress the effort UI. The local model leads the
     MultiDex picker, and any upstream row marked default is demoted so the
     session starts on the configured local endpoint.
+    Built-in provider rows need grouping and canonical effort values even
+    without a local registration.
     """
     registered_rows: list[dict[str, object]] = []
-    models = multidex_models(config)
+    models = multidex_models(config) if config is not None else ()
     registered_ids = {item.model for item in models}
     for item in models:
         source = next(
@@ -147,7 +149,7 @@ def with_multidex_model_picker_row(
         )
         if item.display_name != item.model or not row.get("displayName"):
             row["displayName"] = item.display_name
-        if family == "ds-v4.1-flash-1017":
+        if family == "ds-v4.1-flash-1017" and config is not None:
             fallback = multidex_model_picker_row(config, item)
             if item.model == MULTIDEX_MODEL:
                 row.update(fallback)

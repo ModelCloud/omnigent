@@ -810,7 +810,8 @@ def clamp_codex_effort_for_model(
     both ``model/list`` and ``codex debug models`` catalogs; missing or unusable
     capabilities retain the gateway-capped effort, never another model's ladder.
     """
-    effort = clamp_effort_for_model(effort, model)
+    # A previous MultiDex model may have persisted its native ``off`` spelling.
+    effort = clamp_effort_for_model("none" if effort == "off" else effort, model)
     if effort is None or model is None:
         return effort
     entry = _codex_model_catalog_entry(catalog, model)

@@ -3622,7 +3622,7 @@ class HostProcess:
                         ),
                     ]
                 else:
-                    rows = probed.models
+                    rows = with_multidex_model_picker_row(probed.models, None)
                     routable = probed.routable_models
                 return HostModelOptionsResultFrame(
                     request_id=frame.request_id,

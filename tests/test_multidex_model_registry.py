@@ -102,7 +102,7 @@ def test_openrouter_registration_keeps_native_routing_and_picker_metadata(
         "supportsPersonality": False,
         "inputModalities": ["text"],
     }
-    assert with_multidex_model_picker_row([source], registration) == [
+    expected = [
         {
             **source,
             "displayName": "DeepSeek v4.1 Flash",
@@ -117,6 +117,8 @@ def test_openrouter_registration_keeps_native_routing_and_picker_metadata(
             ],
         }
     ]
+    assert with_multidex_model_picker_row([source], registration) == expected
+    assert with_multidex_model_picker_row([source], None) == expected
     assert source["defaultReasoningEffort"] == default_effort
     assert source["supportedReasoningEfforts"][0]["reasoningEffort"] == "off"
 

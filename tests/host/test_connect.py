@@ -7081,9 +7081,8 @@ async def test_handle_model_options_serves_codex_probe_rows_and_caches(
 ) -> None:
     """A Databricks-routed Codex request is answered by the harness probe.
 
-    The probe rows pass through verbatim with their ids as the routable
-    set, and the second request is served from the fingerprint cache —
-    the harness is booted once.
+    Native Off is canonicalized even without local registration. The ids
+    remain the routable set and the fingerprint cache boots the harness once.
     """
     from omnigent.harnesses.codex_native import app_server as codex_native_app_server
 
@@ -7107,7 +7106,12 @@ async def test_handle_model_options_serves_codex_probe_rows_and_caches(
     async def _fake_probe(**_kwargs: object) -> list[dict[str, object]]:
         probe_calls.append(1)
         return [
-            {"id": "gpt-5.6-sol", "displayName": "GPT-5.6-Sol"},
+            {
+                "id": "gpt-5.6-sol",
+                "displayName": "GPT-5.6-Sol",
+                "defaultReasoningEffort": "off",
+                "supportedReasoningEfforts": [{"reasoningEffort": "off"}],
+            },
             {"id": "gpt-5.4", "displayName": "gpt-5.4", "isDefault": True},
         ]
 
@@ -7128,7 +7132,12 @@ async def test_handle_model_options_serves_codex_probe_rows_and_caches(
         request_id="req_1",
         status="ok",
         models=[
-            {"id": "gpt-5.6-sol", "displayName": "GPT-5.6-Sol"},
+            {
+                "id": "gpt-5.6-sol",
+                "displayName": "GPT-5.6-Sol",
+                "defaultReasoningEffort": "none",
+                "supportedReasoningEfforts": [{"reasoningEffort": "none"}],
+            },
             {"id": "gpt-5.4", "displayName": "gpt-5.4", "isDefault": True},
         ],
         routable_models=["gpt-5.6-sol", "gpt-5.4"],

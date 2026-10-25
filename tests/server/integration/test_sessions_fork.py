@@ -470,11 +470,15 @@ async def test_fork_a_fork(
     )
 
 
+@pytest.mark.parametrize("stale_harness", ["localdex", "localdex-native"])
+@pytest.mark.parametrize("target_harness", ["claude-native", "codex-native"])
 async def test_fork_stale_localdex_session_switches_agents(
     client: httpx.AsyncClient,
     app: FastAPI,
     db_uri: str,
     tmp_path: Path,
+    stale_harness: str,
+    target_harness: str,
 ) -> None:
     """A session bound to the retired ``localdex`` agent is rescued by
     forking onto a supported agent.
@@ -493,21 +497,34 @@ async def test_fork_stale_localdex_session_switches_agents(
         name="localdex-native-ui",
         executor={"type": "omnigent", "config": {"harness": "codex-native"}},
     )
-    source = await _create_session(client, stale["id"], title="Stale localdex")
+    source = await _create_session(
+        client,
+        stale["id"],
+        title="Stale localdex",
+        labels={"omnigent.ui": "terminal", "omnigent.wrapper": "localdex-native-ui"},
+    )
 
     stale_bundle = build_agent_bundle(
         name="localdex-native-ui",
-        executor={"type": "omnigent", "config": {"harness": "localdex-native"}},
+        executor={"type": "omnigent", "config": {"harness": stale_harness}},
     )
     bundle_key = f"{stale['id']}/stale-bundle"
     LocalArtifactStore(str(tmp_path / "artifacts")).put(bundle_key, stale_bundle)
     assert app.state.agent_store.update(stale["id"], bundle_key) is not None
-    SqlAlchemyConversationStore(db_uri).update_conversation(
-        source["id"], harness_override="localdex-native"
+    store = SqlAlchemyConversationStore(db_uri)
+    store.update_conversation(
+        source["id"],
+        harness_override=stale_harness,
+        model_override="DS v4.1 Flash 1017",
+        reasoning_effort="none",
     )
     assert native_coding_agent_for_agent_name("localdex-native-ui") is None
 
-    target = await create_test_agent(client, name="supported-agent")
+    target = await create_test_agent(
+        client,
+        name="supported-agent",
+        executor={"type": "omnigent", "config": {"harness": target_harness}},
+    )
     resp = await client.post(
         f"/v1/sessions/{source['id']}/fork",
         json={"agent_id": target["id"]},
@@ -517,6 +534,13 @@ async def test_fork_stale_localdex_session_switches_agents(
     assert fork["agent_id"] == target["id"], (
         f"Fork should be bound to the switch target {target['id']!r}, got {fork['agent_id']!r}."
     )
+    assert fork["harness"] == target_harness
+    assert fork["model_override"] is None
+    assert fork["reasoning_effort"] is None
+    assert fork["labels"].get("omnigent.wrapper") != "localdex-native-ui"
+    unchanged_source = store.get_conversation(source["id"])
+    assert unchanged_source is not None
+    assert unchanged_source.harness_override == stale_harness
 
 
 # ── Fork copies-vs-not-copied semantics ─────────

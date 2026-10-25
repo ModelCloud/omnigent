@@ -1435,7 +1435,7 @@ async def test_codex_native_model_options_query_model_list(
     The Web UI must not carry its own Codex model / effort catalog. The
     runner is the process that can reach the session's Codex app-server, so
     this endpoint should ask Codex for models and return those model objects
-    for the AP snapshot, changing only which one is marked default. Codex's
+    for the AP snapshot, canonicalizing Off and marking the default. Codex's
     own ``isDefault`` is its built-in preference and says nothing about this
     session, so the model named by the session's ``config.toml`` — the one
     the pane launched on — wins when the list offers it.
@@ -1511,8 +1511,9 @@ async def test_codex_native_model_options_query_model_list(
                         "id": "gpt-5.5",
                         "model": "databricks-gpt-5-5",
                         "displayName": "GPT-5.5",
-                        "defaultReasoningEffort": "high",
+                        "defaultReasoningEffort": "off",
                         "supportedReasoningEfforts": [
+                            {"reasoningEffort": "off", "description": "Off"},
                             {"reasoningEffort": "low", "description": "Low"},
                             {"reasoningEffort": "medium", "description": "Medium"},
                         ],
@@ -1584,8 +1585,9 @@ async def test_codex_native_model_options_query_model_list(
             "id": "gpt-5.5",
             "model": "databricks-gpt-5-5",
             "displayName": "GPT-5.5",
-            "defaultReasoningEffort": "high",
+            "defaultReasoningEffort": "none",
             "supportedReasoningEfforts": [
+                {"reasoningEffort": "none", "description": "Off"},
                 {"reasoningEffort": "low", "description": "Low"},
                 {"reasoningEffort": "medium", "description": "Medium"},
             ],
