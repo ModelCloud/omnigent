@@ -277,12 +277,13 @@ def _resolve_extension_assets(
 def _server_version() -> str:
     """Return the server version exposed to clients.
 
-    Reads :data:`omnigent.version.VERSION`, the single source of truth shared
-    with the CLI and the host/runner hello frames.
+    Reads :func:`omnigent.version.display_version`, the single source of
+    truth shared with the CLI and the host/runner hello frames — the
+    package version with the build commit appended (``0.20.0.dev0+sha9``).
     """
-    from omnigent.version import VERSION
+    from omnigent.version import display_version
 
-    return VERSION
+    return display_version()
 
 
 def _register_web_mimetypes() -> None:

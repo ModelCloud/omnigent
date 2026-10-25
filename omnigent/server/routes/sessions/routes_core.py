@@ -237,7 +237,7 @@ from omnigent.util.reasoning_effort import (
 from omnigent.util.session_lifecycle import (
     labels_with_closed_status,
 )
-from omnigent.version import VERSION
+from omnigent.version import display_version
 
 
 def _require_attachment_compatible_history(
@@ -1010,7 +1010,7 @@ def register_core_routes(
                     # twice.
                     init_body = build_runner_session_init_payload(
                         conv,
-                        server_version=VERSION,
+                        server_version=display_version(),
                         suppress_recovery_turn=True,
                     )
                 except Exception:
@@ -2898,7 +2898,7 @@ def register_core_routes(
                             "/v1/sessions",
                             json=build_runner_session_init_payload(
                                 conv,
-                                server_version=VERSION,
+                                server_version=display_version(),
                                 suppress_recovery_turn=conv.labels.get(SIDE_CHAT_LABEL_KEY) == "1",
                             ),
                             timeout=10.0,

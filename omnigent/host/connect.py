@@ -211,7 +211,7 @@ from omnigent.util.tunnel_limits import (
     TUNNEL_KEEPALIVE_PING_INTERVAL_S,
     TUNNEL_KEEPALIVE_PING_TIMEOUT_S,
 )
-from omnigent.version import VERSION
+from omnigent.version import display_version
 
 if TYPE_CHECKING:
     from omnigent.workspace_fs import WorkspaceReader
@@ -4907,7 +4907,7 @@ class HostProcess:
         except Exception:  # noqa: BLE001
             pass
         hello = HostHelloFrame(
-            version=VERSION,
+            version=display_version(),
             frame_protocol_version=1,
             name=self._identity.name,
             runners=self._alive_runner_ids(),
