@@ -3,6 +3,8 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
+import pytest
+
 from omnigent.harnesses.localdex_native.config import (
     load_localdex_config,
     localdex_model_for_selection,
@@ -10,6 +12,55 @@ from omnigent.harnesses.localdex_native.config import (
     localdex_runtime_provider_id,
     with_localdex_model_picker_row,
 )
+
+
+@pytest.mark.parametrize(
+    "provider_fields",
+    [
+        "",
+        'base_url = "https://openrouter.ai/api/v1"\nenv_key = "OPENROUTER_API_KEY"\n'
+        'wire_api = "responses"\nrequires_openai_auth = false\nname = "OpenRouter"\n',
+    ],
+)
+def test_openrouter_registration_keeps_native_routing_and_picker_metadata(
+    tmp_path: Path, provider_fields: str
+) -> None:
+    providers = tmp_path / "config.toml"
+    providers.write_text(
+        "[model_providers.openrouter]\n"
+        + provider_fields
+        + '[model_providers.openrouter.provider]\nonly = ["wafer/mxfp4"]\n'
+        "allow_fallbacks = false\n",
+        encoding="utf-8",
+    )
+    model = "deepseek/deepseek-v4.1-flash-1017"
+    models = tmp_path / "models.toml"
+    models.write_text(f'[models."{model}"]\nprovider = "openrouter"\n', encoding="utf-8")
+    registration = load_localdex_config(providers, models_path=models, require_token=False)
+    assert localdex_runtime_provider_id("openrouter") == "openrouter"
+    provider_config = tomllib.loads(localdex_provider_config_overrides(registration)[0])[
+        "model_providers"
+    ]["openrouter"]
+    assert "name" not in provider_config
+    assert provider_config["env_key"] == "OPENROUTER_API_KEY"
+    assert provider_config["base_url"] == "https://openrouter.ai/api/v1"
+    assert provider_config["provider"] == {
+        "only": ["wafer/mxfp4"],
+        "allow_fallbacks": False,
+    }
+    source = {
+        "id": model,
+        "model": model,
+        "displayName": "DS v4.1 Flash 1017 (OpenRouter)",
+        "defaultReasoningEffort": "max",
+        "supportedReasoningEfforts": [
+            {"reasoningEffort": effort, "description": effort}
+            for effort in ["off", "low", "high", "max"]
+        ],
+        "supportsPersonality": False,
+        "inputModalities": ["text"],
+    }
+    assert with_localdex_model_picker_row([source], registration) == [source]
 
 
 def test_named_localdex_models_map_to_their_explicit_provider(tmp_path: Path) -> None:

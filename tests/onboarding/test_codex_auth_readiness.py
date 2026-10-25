@@ -44,6 +44,29 @@ model_provider = "profile-provider"
     assert effective_codex_model_provider(parsed) == "profile-provider"
 
 
+@pytest.mark.parametrize("env_key", ["OPENROUTER_API_KEY", "CUSTOM_OPENROUTER_KEY"])
+@pytest.mark.parametrize("value", [None, "", "   ", "test-key"])
+def test_openrouter_builtin_readiness_uses_local_env(
+    tmp_path: Path, env_key: str, value: str | None
+) -> None:
+    body = 'model_provider = "openrouter"\n'
+    if env_key != "OPENROUTER_API_KEY":
+        body += f'[model_providers.openrouter]\nenv_key = "{env_key}"\n'
+    path = _config(tmp_path, body)
+    env = {} if value is None else {env_key: value}
+    expected = "provider-ready" if value and value.strip() else "provider-auth-missing"
+    assert codex_config_effective_auth(path, env=env) == expected
+
+
+def test_openrouter_builtin_auth_command_does_not_require_env_key(tmp_path: Path) -> None:
+    path = _config(
+        tmp_path,
+        'model_provider = "openrouter"\n[model_providers.openrouter.auth]\n'
+        'command = "print-token"\n',
+    )
+    assert codex_config_effective_auth(path, env={}) == "provider-ready"
+
+
 @pytest.mark.parametrize("value", ["token", " token "])
 def test_env_key_present_is_provider_ready(tmp_path: Path, value: str) -> None:
     path = _config(tmp_path, _ENV_KEY_CONFIG)
