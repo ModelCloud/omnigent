@@ -1001,6 +1001,8 @@ def test_declared_local_provider_key_keeps_standard_codex_auth_environment(
     monkeypatch.setenv("BEARER_TOKEN", "local-provider-secret")
     monkeypatch.setenv("OPENAI_ORG_ID", "official-openai-org")
     monkeypatch.delenv("CODEX_DISABLE_CLOUD_CONFIG", raising=False)
+    source_home = tmp_path / "source-home"
+    source_home.mkdir()
 
     server = build_codex_native_server(
         socket_path=tmp_path / "codex.sock",
@@ -1010,6 +1012,7 @@ def test_declared_local_provider_key_keeps_standard_codex_auth_environment(
         profile=None,
         bridge_dir=tmp_path / "bridge",
         codex_path=sys.executable,
+        config_source=source_home,
         provider_env_keys=("BEARER_TOKEN",),
         bridge_openai_auth=True,
     )
@@ -1022,6 +1025,39 @@ def test_declared_local_provider_key_keeps_standard_codex_auth_environment(
     terminal_env = codex_terminal_env(server)
     assert terminal_env["BEARER_TOKEN"] == "local-provider-secret"
     assert terminal_env["OPENAI_ORG_ID"] == "official-openai-org"
+
+
+def test_user_provider_key_reaches_app_server_and_terminal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_home = tmp_path / "source-home"
+    source_home.mkdir()
+    (source_home / "config.toml").write_text(
+        '[model_providers.openrouter]\n'
+        'base_url = "https://openrouter.ai/api/v1"\n'
+        'env_key = "OPENROUTER_API_KEY"\n'
+        '[model_providers.ignored]\n'
+        'env_key = "INVALID-KEY"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-only-secret")
+    monkeypatch.setenv("UNDECLARED_SECRET", "must-not-pass")
+
+    server = build_codex_native_server(
+        socket_path=tmp_path / "codex.sock",
+        codex_home=tmp_path / "codex-home",
+        cwd=tmp_path,
+        model="gpt-6-sol",
+        profile=None,
+        bridge_dir=tmp_path / "bridge",
+        codex_path=sys.executable,
+        config_source=source_home,
+    )
+
+    assert server.provider_env_keys == ("OPENROUTER_API_KEY",)
+    assert server.env["OPENROUTER_API_KEY"] == "test-only-secret"
+    assert codex_terminal_env(server)["OPENROUTER_API_KEY"] == "test-only-secret"
+    assert "UNDECLARED_SECRET" not in server.env
 
 
 def test_build_codex_native_server_retains_agent_retry_policy(tmp_path: Path) -> None:
