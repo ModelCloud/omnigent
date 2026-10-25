@@ -709,9 +709,9 @@ def _databricks_pi_provider(entry: ProviderEntry, *, model: str | None) -> PiPro
     # fails (e.g. network blip, new workspace with no endpoints yet).
     #
     # Distinguish two failure modes so the caller can surface the fatal one:
-    #   * credential resolution fails (expired OAuth token) — Pi's per-request
-    #     ``!command`` apiKey will also fail, so the session dies silently. Carry
-    #     a ``credential_warning`` so the caller can tell the user to re-auth.
+    #   * neither the SDK nor Pi's per-request ``!command`` apiKey yields a token
+    #     (expired OAuth login) — the session would die silently. Carry a
+    #     ``credential_warning`` so the caller can tell the user to re-auth.
     #   * model-list fetch fails after creds resolved (network blip, empty
     #     workspace) — benign; just show the single default model.
     credential_warning: str | None = None
@@ -719,17 +719,26 @@ def _databricks_pi_provider(entry: ProviderEntry, *, model: str | None) -> PiPro
     gpt_models: list[_PiModelEntry] = []
     completions_models: list[_PiModelEntry] = []
     gemini_models: list[_PiModelEntry] = []
+    list_host: str | None = None
+    list_token: str | None = None
     try:
         creds = resolve_databricks_workspace(entry.profile)
+        list_host, list_token = creds.host, creds.token
     except Exception:  # noqa: BLE001 — credential failure must not break launch
-        _LOGGER.info(
-            "pi-native: falling back to single-model display (could not resolve credentials)"
-        )
-        credential_warning = _databricks_credential_warning(entry.profile)
-    else:
+        # The SDK probe can fail where Pi's apiKey command works (it skips any
+        # `databricks` under 1 MB, e.g. a wrapper shim); trust the command Pi runs.
+        list_token = _run_auth_command(auth_command)
+        if list_token:
+            list_host = host
+        else:
+            _LOGGER.info(
+                "pi-native: falling back to single-model display (could not resolve credentials)"
+            )
+            credential_warning = _databricks_credential_warning(entry.profile)
+    if list_host and list_token:
         try:
             claude_models, gpt_models, completions_models, gemini_models = _fetch_pi_model_lists(
-                creds.host, creds.token
+                list_host, list_token
             )
         except Exception:  # noqa: BLE001 — network failure must not break launch
             _LOGGER.info(
@@ -802,11 +811,9 @@ def _connect_broker_pi_provider(*, model: str | None) -> PiProviderConfig | None
     entry = ProviderEntry(name="databricks", kind=DATABRICKS_KIND, profile=HOST_DATABRICKS_PROFILE)
     resolved = _databricks_pi_provider(entry, model=served_model)
     if resolved is not None and resolved.credential_warning:
-        # The host-only [omnigent] profile deliberately carries no token — the
-        # bearer is minted from the broker by the !command apiKey at request time —
-        # so _databricks_pi_provider's live-credential probe is expected to fail
-        # here. Drop its "login expired" warning so it doesn't surface as a false
-        # error banner on a session that authenticates fine through the broker.
+        # The host-only [omnigent] profile carries no token; its !command apiKey mints
+        # through the broker. A warning here means the broker mint failed at launch,
+        # not that a login expired, so its "databricks auth login" advice would mislead.
         import dataclasses
 
         resolved = dataclasses.replace(resolved, credential_warning=None)
