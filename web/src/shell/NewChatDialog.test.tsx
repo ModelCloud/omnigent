@@ -4134,16 +4134,18 @@ describe("NewChatLandingScreen", () => {
     expect(attach).toHaveClass("size-8", "md:size-7");
     expect(hostChip).toHaveClass(
       "h-8",
-      "gap-0.5",
+      "gap-1",
       "rounded-lg",
       "bg-transparent",
-      "w-11",
-      "pl-1",
+      "w-auto",
+      "pl-1.5",
       "pr-2",
+      "text-xs",
       "md:h-7",
     );
     expect(hostChip).toHaveClass("justify-center");
     expect(hostChip).toHaveAccessibleName("Host: This machine, Online");
+    expect(hostChip.textContent).toContain("This machine");
     expect(hostChip).not.toHaveAttribute("title");
     expect(permission).toHaveClass(
       "h-8",
@@ -6878,10 +6880,11 @@ describe("NewChatLandingScreen", () => {
     );
     expect(screen.getByTestId("new-chat-landing-host-chip")).toHaveClass(
       "h-8",
-      "gap-0.5",
-      "w-11",
-      "pl-1",
+      "gap-1",
+      "w-auto",
+      "pl-1.5",
       "pr-2",
+      "text-xs",
       "bg-transparent",
       "md:h-7",
     );

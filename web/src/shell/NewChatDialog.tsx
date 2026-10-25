@@ -7003,6 +7003,9 @@ export function NewChatLandingScreen() {
                               sandboxSelected ? undefined : (selectedHost?.status ?? "offline")
                             }
                             cloud={isCloudHost}
+                            hostName={
+                              connectingThisMachine || connectingArca ? undefined : hostLabel
+                            }
                             className={cn(
                               connectingThisMachine &&
                                 "w-auto gap-1 pr-2 after:animate-pulse after:text-xs after:font-normal after:content-['Connecting…']",

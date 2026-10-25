@@ -13,15 +13,21 @@ Uses the shared ``client`` fixture from ``tests/server/conftest.py``
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
+from fastapi import FastAPI
 
+from omnigent.native.native_coding_agents import (
+    native_coding_agent_for_agent_name,
+)
+from omnigent.stores.artifact_store.local import LocalArtifactStore
 from omnigent.stores.conversation_store.sqlalchemy_store import (
     SqlAlchemyConversationStore,
 )
-from tests.server.helpers import create_test_agent
+from tests.server.helpers import build_agent_bundle, create_test_agent
 from tests.server.integration.test_sessions_endpoints import (
     _create_session,
     _wait_for_idle,
@@ -461,6 +467,55 @@ async def test_fork_a_fork(
     assert len(all_item_ids) == expected_unique, (
         f"Expected {expected_unique} unique item IDs across 3 sessions, "
         f"got {len(all_item_ids)}. Some IDs were reused across forks."
+    )
+
+
+async def test_fork_stale_localdex_session_switches_agents(
+    client: httpx.AsyncClient,
+    app: FastAPI,
+    db_uri: str,
+    tmp_path: Path,
+) -> None:
+    """A session bound to the retired ``localdex`` agent is rescued by
+    forking onto a supported agent.
+
+    The LocalDex→MultiDex rename ships no compatibility layer: sessions
+    created while ``localdex-native-ui`` was the built-in Codex wrapper keep
+    a bound agent whose name and harness resolve to nothing, so resuming
+    errors out. The manual recovery path is the fork's agent switch — the
+    route must accept ``agent_id`` and bind the clone to the supported
+    agent rather than refusing on the unresolvable source.
+    """
+    # Simulate a pre-rename row: the bundle and session harness record the
+    # retired ``localdex-native`` spelling the spec whitelist now rejects.
+    stale = await create_test_agent(
+        client,
+        name="localdex-native-ui",
+        executor={"type": "omnigent", "config": {"harness": "codex-native"}},
+    )
+    source = await _create_session(client, stale["id"], title="Stale localdex")
+
+    stale_bundle = build_agent_bundle(
+        name="localdex-native-ui",
+        executor={"type": "omnigent", "config": {"harness": "localdex-native"}},
+    )
+    bundle_key = f"{stale['id']}/stale-bundle"
+    LocalArtifactStore(str(tmp_path / "artifacts")).put(bundle_key, stale_bundle)
+    assert app.state.agent_store.update(stale["id"], bundle_key) is not None
+    SqlAlchemyConversationStore(db_uri).update_conversation(
+        source["id"], harness_override="localdex-native"
+    )
+    assert native_coding_agent_for_agent_name("localdex-native-ui") is None
+
+    target = await create_test_agent(client, name="supported-agent")
+    resp = await client.post(
+        f"/v1/sessions/{source['id']}/fork",
+        json={"agent_id": target["id"]},
+    )
+    assert resp.status_code == 201, f"{resp.status_code} {resp.text}"
+    fork = resp.json()
+    assert fork["agent_id"] == target["id"], (
+        f"Fork should be bound to the switch target {target['id']!r}, got {fork['agent_id']!r}."
     )
 
 

@@ -97,12 +97,15 @@ export function sortAgentsForDisplay<T extends AvailableAgent>(agents: readonly 
 // Hidden from session-creation pickers. `nessie` is superseded by polly.
 // `kimi` / `kimi-code` are the headless SDK harness (kept for sub-agent /
 // `run --harness kimi` use) — pickers offer only the native TUI
-// (`kimi-native-ui`).
+// (`kimi-native-ui`). `localdex-native-ui` is the retired LocalDex built-in:
+// its row persists in stores upgraded from before the MultiDex rename, but
+// its harness resolves to nothing, so a new session bound to it could never
+// launch (existing sessions recover by forking onto a supported agent).
 export const NEW_SESSION_HIDDEN_AGENTS = new Set([
   "nessie",
   "kimi",
   "kimi-code",
-  "multidex-native-ui",
+  "localdex-native-ui",
 ]);
 
 /**

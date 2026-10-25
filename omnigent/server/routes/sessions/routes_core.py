@@ -3071,8 +3071,7 @@ def register_core_routes(
         )
         settings_forward_timeout = (
             _CODEX_NATIVE_SETTINGS_FORWARD_TIMEOUT_S
-            if updated_native_agent is not None
-            and updated_native_agent.harness in ("codex-native", "multidex-native")
+            if updated_native_agent is not None and updated_native_agent.harness == "codex-native"
             else _TUI_INJECT_FORWARD_TIMEOUT_S
         )
         # The runner applies native settings live. Silent startup metadata

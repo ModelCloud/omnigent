@@ -3724,15 +3724,6 @@ def create_runner_app(
             server_client=server_client,
             session_id=conv_id,
         )
-        if _session_harness_name(conv_id) == "multidex-native":
-            from omnigent.harnesses.multidex_native.bridge import (
-                MULTIDEX_NATIVE_BRIDGE_ID_LABEL_KEY,
-                bridge_dir_for_bridge_id,
-            )
-
-            return bridge_dir_for_bridge_id(
-                labels.get(MULTIDEX_NATIVE_BRIDGE_ID_LABEL_KEY) or conv_id
-            )
         from omnigent.harnesses.codex_native.bridge import (
             CODEX_NATIVE_BRIDGE_ID_LABEL_KEY,
             bridge_dir_for_bridge_id,
