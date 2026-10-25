@@ -1388,7 +1388,7 @@ def test_configure_models_add_openrouter_key_uses_vendor_endpoint_and_chat_wire(
     assert result.exit_code == 0, result.output
 
     entry = _config_yaml(isolated_config)["providers"]["openrouter"]["openai"]
-    assert entry["base_url"] == "https://us.openrouter.ai/api/v1"
+    assert entry["base_url"] == "https://openrouter.ai/api/v1"  # NOT api.openai.com
     assert entry["wire_api"] == "chat"  # OpenRouter is Chat-Completions-only
 
 

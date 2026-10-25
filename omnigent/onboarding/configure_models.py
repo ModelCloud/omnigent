@@ -200,7 +200,7 @@ class _VendorEndpoint:
 # Responses API. ``openai`` / ``anthropic`` are intentionally absent: they use
 # :func:`default_base_url_for_family` (and openai keeps the Responses default).
 _KEY_PROVIDER_ENDPOINT: dict[str, _VendorEndpoint] = {
-    "openrouter": _VendorEndpoint("https://us.openrouter.ai/api/v1", CHAT_WIRE_API),
+    "openrouter": _VendorEndpoint("https://openrouter.ai/api/v1", CHAT_WIRE_API),
     "groq": _VendorEndpoint("https://api.groq.com/openai/v1", CHAT_WIRE_API),
     "deepseek": _VendorEndpoint("https://api.deepseek.com", CHAT_WIRE_API),
     "xai": _VendorEndpoint("https://api.x.ai/v1", CHAT_WIRE_API),

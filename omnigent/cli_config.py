@@ -2130,7 +2130,7 @@ def _print_qwen_auth_help() -> None:
         "    • Coding Plan: [bold]BAILIAN_CODING_PLAN_API_KEY[/bold] + the "
         "Coding Plan base URL\n"
         "    • OpenRouter: [bold]OPENROUTER_API_KEY[/bold] + "
-        "OPENAI_BASE_URL=https://us.openrouter.ai/api/v1\n"
+        "OPENAI_BASE_URL=https://openrouter.ai/api/v1\n"
     )
 
 
