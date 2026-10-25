@@ -33,7 +33,7 @@ def _deepseek_model_rows() -> list[dict]:
         }
         for index, (model, provider, variant) in enumerate(
             [
-                ("DS v4.1 Flash 1017", "localdex", "regular"),
+                ("DS v4.1 Flash 1017", "multidex", "regular"),
                 ("deepseek/deepseek-v4.1-flash-1017", "openrouter", "regular"),
                 ("deepseek-ai/DeepSeek-V4.1-Flash", "lithos", "regular"),
                 ("deepseek-ai/DeepSeek-V4.1-Flash-fast", "lithos", "fast"),

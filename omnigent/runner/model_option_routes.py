@@ -89,7 +89,7 @@ def register_model_option_routes(
     @app.get("/v1/sessions/{session_id}/codex-model-options")
     async def get_session_codex_model_options(session_id: str) -> JSONResponse:
         harness = _session_harness_name(session_id)
-        if harness not in ("codex-native", "localdex-native", "opencode-native"):
+        if harness not in ("codex-native", "multidex-native", "opencode-native"):
             return JSONResponse(status_code=200, content={"models": []})
         if harness == "opencode-native":
             try:

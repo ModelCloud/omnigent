@@ -934,33 +934,33 @@ def _build_runner_env(
         config_env_vars = provider_credential_env_vars(load_config())
     except (OSError, _OmnigentError):
         config_env_vars = frozenset()
-    # LocalDex is an additive provider under the native Codex harness. Its
-    # bearer keys are deliberately named by the LocalDex registrations rather
+    # MultiDex is an additive provider under the native Codex harness. Its
+    # bearer keys are deliberately named by the MultiDex registrations rather
     # than by a global credential convention, so they are not part of
     # ``HARNESS_CREDENTIAL_ENV_VARS``. Forward only those declared keys to a
-    # LocalDex runner; the runner strips ambient OpenAI/Databricks credentials.
-    localdex_env_vars: frozenset[str] = frozenset()
-    if harness in {"codex-native", "localdex-native"}:
-        # OpenRouter is built into LocalDex and needs no optional registry entry.
-        localdex_env_vars = frozenset({"OPENROUTER_API_KEY"})
+    # MultiDex runner; the runner strips ambient OpenAI/Databricks credentials.
+    multidex_env_vars: frozenset[str] = frozenset()
+    if harness in {"codex-native", "multidex-native"}:
+        # OpenRouter is built into MultiDex and needs no optional registry entry.
+        multidex_env_vars = frozenset({"OPENROUTER_API_KEY"})
         try:
-            from omnigent.harnesses.localdex_native.config import (
-                load_localdex_config,
-                localdex_models,
+            from omnigent.harnesses.multidex_native.config import (
+                load_multidex_config,
+                multidex_models,
             )
 
-            localdex_env_vars |= frozenset(
-                item.env_key for item in localdex_models(load_localdex_config(require_token=False))
+            multidex_env_vars |= frozenset(
+                item.env_key for item in multidex_models(load_multidex_config(require_token=False))
             )
         except (OSError, ValueError):
-            # A missing or stale optional LocalDex registration must not make
+            # A missing or stale optional MultiDex registration must not make
             # ordinary Codex runner creation fail.
             pass
     if inference_config is not None:
         config_env_vars |= provider_credential_env_vars(
             inference_config, include_dollar_key_refs=True
         )
-    forwarded = HARNESS_CREDENTIAL_ENV_VARS | extra_names | config_env_vars | localdex_env_vars
+    forwarded = HARNESS_CREDENTIAL_ENV_VARS | extra_names | config_env_vars | multidex_env_vars
     env = {
         key: value
         for key, value in base_env.items()
@@ -3582,43 +3582,43 @@ class HostProcess:
         """
         harness = canonicalize_harness(frame.harness) or frame.harness
         with_source = functools.partial(_with_model_configuration_source, harness=harness)
-        if harness in {"codex-native", "localdex-native"}:
+        if harness in {"codex-native", "multidex-native"}:
             # Harness-truth lane: every launch shape is answered from the
             # shared catalog, probed from the configured Codex binary itself.
             # No curated fallback and no serving-endpoints listing — a probe
             # that cannot run is a failed lookup, not a successful empty catalog.
             probed = await self._probed_codex_model_options()
             if probed is not None:
-                # LocalDex is a native sibling of Codex.  Its simple-bearer
+                # MultiDex is a native sibling of Codex.  Its simple-bearer
                 # provider contributes one additional row while the app-server
                 # account rows remain available for switching/resuming in the
                 # shared conversation UI.
-                from omnigent.harnesses.localdex_native.config import (
-                    load_localdex_config,
-                    localdex_models,
-                    with_localdex_model_picker_row,
+                from omnigent.harnesses.multidex_native.config import (
+                    load_multidex_config,
+                    multidex_models,
+                    with_multidex_model_picker_row,
                 )
 
                 try:
-                    localdex = await asyncio.to_thread(load_localdex_config, require_token=False)
+                    multidex = await asyncio.to_thread(load_multidex_config, require_token=False)
                 except FileNotFoundError:
-                    localdex = None
+                    multidex = None
                 except ValueError:
-                    _logger.warning("LocalDex provider registration is invalid", exc_info=True)
-                    localdex = None
+                    _logger.warning("MultiDex provider registration is invalid", exc_info=True)
+                    multidex = None
                 available_local_models = (
-                    [item for item in localdex_models(localdex) if os.environ.get(item.env_key)]
-                    if localdex is not None
+                    [item for item in multidex_models(multidex) if os.environ.get(item.env_key)]
+                    if multidex is not None
                     else []
                 )
-                if localdex is not None and available_local_models:
-                    rows = with_localdex_model_picker_row(probed.models, localdex)
+                if multidex is not None and available_local_models:
+                    rows = with_multidex_model_picker_row(probed.models, multidex)
                     routable = [
                         *(item.model for item in available_local_models),
                         *(
                             model
                             for model in probed.routable_models
-                            if model not in {item.model for item in localdex_models(localdex)}
+                            if model not in {item.model for item in multidex_models(multidex)}
                         ),
                     ]
                 else:

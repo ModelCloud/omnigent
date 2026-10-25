@@ -350,8 +350,8 @@ def test_write_codex_config_model_provider_replaces_top_level_key(bridge_dir: Pa
     _write_config(
         bridge_dir,
         'model = "gpt-5.6-sol"\n'
-        'model_provider = "localdex"\n'
-        "[model_providers.localdex]\n"
+        'model_provider = "multidex"\n'
+        "[model_providers.multidex]\n"
         'model_provider = "section-value-not-touched"\n',
     )
 

@@ -65,9 +65,9 @@ _DEFAULT_WORKSPACE_ROOT = os.path.join(
 
 CODEX_NATIVE_TERMINAL_ROLE = "codex-native"
 # Retained only to cleanly terminate pre-unification sessions that were
-# persisted with the retired LocalDex wrapper label. New sessions use
+# persisted with the retired MultiDex wrapper label. New sessions use
 # CODEX_NATIVE_TERMINAL_ROLE exclusively.
-LOCALDEX_NATIVE_TERMINAL_ROLE = "localdex-native"
+MULTIDEX_NATIVE_TERMINAL_ROLE = "multidex-native"
 CLAUDE_NATIVE_TERMINAL_ROLE = "claude-native"
 PI_NATIVE_TERMINAL_ROLE = "pi-native"
 OPENCODE_NATIVE_TERMINAL_ROLE = "opencode-native"

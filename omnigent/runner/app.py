@@ -1378,7 +1378,7 @@ def create_runner_app(
         return _session_cache_generations.get(session_id, 0) == generation
 
     _codex_terminal_ensure_locks: dict[str, asyncio.Lock] = {}
-    _localdex_terminal_ensure_locks: dict[str, asyncio.Lock] = {}
+    _multidex_terminal_ensure_locks: dict[str, asyncio.Lock] = {}
     _pi_terminal_ensure_locks: dict[str, asyncio.Lock] = {}
     _opencode_terminal_ensure_locks: dict[str, asyncio.Lock] = {}
     _cursor_terminal_ensure_locks: dict[str, asyncio.Lock] = {}
@@ -1397,7 +1397,7 @@ def create_runner_app(
         {
             "claude": _claude_terminal_ensure_locks,
             "codex": _codex_terminal_ensure_locks,
-            "localdex": _localdex_terminal_ensure_locks,
+            "multidex": _multidex_terminal_ensure_locks,
             "pi": _pi_terminal_ensure_locks,
             "cursor": _cursor_terminal_ensure_locks,
             "kiro": _kiro_terminal_ensure_locks,
@@ -2841,11 +2841,11 @@ def create_runner_app(
                 _launch_pre = _claude_pre_launch
                 _launch_build = _claude_build_context
 
-            elif harness_name in {"codex-native", "localdex-native"}:
+            elif harness_name in {"codex-native", "multidex-native"}:
 
                 async def _codex_pre_launch(has_terminal: bool) -> PreLaunchResult:
-                    if harness_name == "localdex-native":
-                        # LocalDex has its own raw rollout root.  Do not try to
+                    if harness_name == "multidex-native":
+                        # MultiDex has its own raw rollout root.  Do not try to
                         # adopt a Codex-native bridge during startup.
                         return PreLaunchResult(needs_terminal=True)
                     needs = (
@@ -3418,7 +3418,7 @@ def create_runner_app(
         _ingest_now_serving.pop(session_id, None)
         _ingest_cond.pop(session_id, None)
         _codex_terminal_ensure_locks.pop(session_id, None)
-        _localdex_terminal_ensure_locks.pop(session_id, None)
+        _multidex_terminal_ensure_locks.pop(session_id, None)
         _claude_terminal_ensure_locks.pop(session_id, None)
         _pi_terminal_ensure_locks.pop(session_id, None)
         _cursor_terminal_ensure_locks.pop(session_id, None)
@@ -3662,11 +3662,11 @@ def create_runner_app(
         serializes that RPC with turn start. It is therefore safe (and much
         more responsive) to forward an active web message to Codex.
 
-        ``localdex-native`` is retained only for old persisted sessions. New
-        LocalDex model selections run under ``codex-native``; both spellings
+        ``multidex-native`` is retained only for old persisted sessions. New
+        MultiDex model selections run under ``codex-native``; both spellings
         share the same app-server semantics for this compatibility window.
         """
-        return _session_harness_name(conv_id) in {"codex-native", "localdex-native"}
+        return _session_harness_name(conv_id) in {"codex-native", "multidex-native"}
 
     async def _codex_native_bridge_state_and_dir_for_session(
         conv_id: str,
@@ -3724,14 +3724,14 @@ def create_runner_app(
             server_client=server_client,
             session_id=conv_id,
         )
-        if _session_harness_name(conv_id) == "localdex-native":
-            from omnigent.harnesses.localdex_native.bridge import (
-                LOCALDEX_NATIVE_BRIDGE_ID_LABEL_KEY,
+        if _session_harness_name(conv_id) == "multidex-native":
+            from omnigent.harnesses.multidex_native.bridge import (
+                MULTIDEX_NATIVE_BRIDGE_ID_LABEL_KEY,
                 bridge_dir_for_bridge_id,
             )
 
             return bridge_dir_for_bridge_id(
-                labels.get(LOCALDEX_NATIVE_BRIDGE_ID_LABEL_KEY) or conv_id
+                labels.get(MULTIDEX_NATIVE_BRIDGE_ID_LABEL_KEY) or conv_id
             )
         from omnigent.harnesses.codex_native.bridge import (
             CODEX_NATIVE_BRIDGE_ID_LABEL_KEY,
@@ -5343,18 +5343,18 @@ def create_runner_app(
             await _ensure_comment_relay_started(
                 conv, explicit_bridge_dir=codex_bdir, await_notify=False
             )
-        elif harness_name == "localdex-native":
+        elif harness_name == "multidex-native":
             from omnigent.harnesses.codex_native.bridge import write_mcp_bridge_config
-            from omnigent.harnesses.localdex_native.bridge import bridge_dir_for_bridge_id
+            from omnigent.harnesses.multidex_native.bridge import bridge_dir_for_bridge_id
 
-            localdex_labels = await _session_labels_for_runner_spawn(
+            multidex_labels = await _session_labels_for_runner_spawn(
                 server_client=server_client, session_id=conv
             )
-            localdex_bid = localdex_labels.get("omnigent.localdex_native.bridge_id")
-            localdex_bdir = bridge_dir_for_bridge_id(localdex_bid or conv)
-            write_mcp_bridge_config(localdex_bdir)
+            multidex_bid = multidex_labels.get("omnigent.multidex_native.bridge_id")
+            multidex_bdir = bridge_dir_for_bridge_id(multidex_bid or conv)
+            write_mcp_bridge_config(multidex_bdir)
             await _ensure_comment_relay_started(
-                conv, explicit_bridge_dir=localdex_bdir, await_notify=False
+                conv, explicit_bridge_dir=multidex_bdir, await_notify=False
             )
         elif harness_name == "antigravity-native":
             from omnigent.harnesses.antigravity_native.bridge import (
@@ -6878,7 +6878,7 @@ def create_runner_app(
             effort = body.get("effort") if isinstance(body, dict) else None
             if (invalid := _invalid_effort_response(effort)) is not None:
                 return invalid
-            if harness in ("codex-native", "localdex-native"):
+            if harness in ("codex-native", "multidex-native"):
                 # The native handler remembers the applied effort only after
                 # Codex confirms it; a refused reset must retain the old value.
                 server_rolls_back = body.get("rollback_on_refusal") is True
@@ -6922,7 +6922,7 @@ def create_runner_app(
             if harness in (
                 "claude-native",
                 "codex-native",
-                "localdex-native",
+                "multidex-native",
                 "cursor-native",
                 "opencode-native",
                 "kiro-native",
@@ -6938,7 +6938,7 @@ def create_runner_app(
                             "detail": "Body 'model' must be a string or null",
                         },
                     )
-                if harness in ("codex-native", "localdex-native"):
+                if harness in ("codex-native", "multidex-native"):
                     if model is None or not model.strip():
                         return Response(status_code=204)
                     settings: _JsonObject = {"model": model.strip()}
@@ -6988,7 +6988,7 @@ def create_runner_app(
 
         if body_type == "plan_mode_change":
             harness = _session_harness_name(conversation_id)
-            if harness in ("codex-native", "localdex-native"):
+            if harness in ("codex-native", "multidex-native"):
                 enabled = body.get("enabled") if isinstance(body, dict) else None
                 if not isinstance(enabled, bool):
                     return JSONResponse(
@@ -7063,7 +7063,7 @@ def create_runner_app(
         if body_type == "compact":
             if _session_harness_name(conversation_id) == "claude-native":
                 return await _handle_claude_native_compact(conversation_id)
-            if _session_harness_name(conversation_id) in {"codex-native", "localdex-native"}:
+            if _session_harness_name(conversation_id) in {"codex-native", "multidex-native"}:
                 return await _handle_codex_native_compact(conversation_id)
             if _session_harness_name(conversation_id) == "opencode-native":
                 return await _handle_opencode_native_compact(conversation_id)
@@ -7319,7 +7319,7 @@ def create_runner_app(
         _antigravity_terminal_ensure_locks=_antigravity_terminal_ensure_locks,
         _claude_terminal_ensure_locks=_claude_terminal_ensure_locks,
         _codex_terminal_ensure_locks=_codex_terminal_ensure_locks,
-        _localdex_terminal_ensure_locks=_localdex_terminal_ensure_locks,
+        _multidex_terminal_ensure_locks=_multidex_terminal_ensure_locks,
         _cursor_terminal_ensure_locks=_cursor_terminal_ensure_locks,
         _devin_terminal_ensure_locks=_devin_terminal_ensure_locks,
         _discard_comment_relay=_discard_comment_relay,
@@ -7609,7 +7609,7 @@ def create_runner_app(
     ) -> JSONResponse:
         _required_terminal_exit_errors.pop(session_id, None)
         _codex_terminal_ensure_locks.pop(session_id, None)
-        _localdex_terminal_ensure_locks.pop(session_id, None)
+        _multidex_terminal_ensure_locks.pop(session_id, None)
         _claude_terminal_ensure_locks.pop(session_id, None)
         _pi_terminal_ensure_locks.pop(session_id, None)
         _cursor_terminal_ensure_locks.pop(session_id, None)
@@ -7640,7 +7640,7 @@ def create_runner_app(
     async def reset_session_state(session_id: str) -> JSONResponse:
         _required_terminal_exit_errors.pop(session_id, None)
         _codex_terminal_ensure_locks.pop(session_id, None)
-        _localdex_terminal_ensure_locks.pop(session_id, None)
+        _multidex_terminal_ensure_locks.pop(session_id, None)
         _claude_terminal_ensure_locks.pop(session_id, None)
         _pi_terminal_ensure_locks.pop(session_id, None)
         _cursor_terminal_ensure_locks.pop(session_id, None)

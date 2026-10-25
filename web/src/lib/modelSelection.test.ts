@@ -3,7 +3,7 @@ import { resolveModelSelection } from "./modelSelection";
 import type { NativeModelOption } from "./types";
 
 const rows: NativeModelOption[] = [
-  { id: "DS v4.1 Flash 1017", modelFamily: "ds", providerId: "localdex" },
+  { id: "DS v4.1 Flash 1017", modelFamily: "ds", providerId: "multidex" },
   { id: "deepseek/deepseek-v4.1-flash-1017", modelFamily: "ds", providerId: "openrouter" },
   {
     id: "deepseek-ai/DeepSeek-V4.1-Flash-fast",
@@ -37,7 +37,7 @@ describe("model/provider/variant selection", () => {
   });
   it("does not fabricate a provider or a speed unsupported by that provider", () => {
     expect(resolveModelSelection(rows, "gpt-6-sol", "lithos")).toBeUndefined();
-    expect(resolveModelSelection(rows, "ds", "localdex", "ultra")?.id).toBe("DS v4.1 Flash 1017");
+    expect(resolveModelSelection(rows, "ds", "multidex", "ultra")?.id).toBe("DS v4.1 Flash 1017");
   });
   it("switches back to an official model without a local endpoint id", () => {
     expect(resolveModelSelection(rows, "gpt-6-sol", "openai")?.id).toBe("gpt-6-sol");

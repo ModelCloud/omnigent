@@ -83,13 +83,13 @@ def test_claude_installs_via_anthropic_native_installer() -> None:
     ]
 
 
-def test_codex_installs_only_the_modelcloud_localdex_distribution() -> None:
+def test_codex_installs_only_the_modelcloud_multidex_distribution() -> None:
     spec = hi.harness_install_spec(OPENAI_FAMILY)
     assert spec is not None
     assert spec.binary == "codex"
     assert spec.package is None
-    assert "ModelCloud/LocalDex" in spec.install_hint
-    assert "install-localdex.sh" in spec.install_hint
+    assert "ModelCloud/MultiDex" in spec.install_hint
+    assert "install-multidex.sh" in spec.install_hint
     assert hi.harness_install_command(OPENAI_FAMILY) == ["bash", "-c", spec.install_hint]
 
 
@@ -99,8 +99,8 @@ def test_codex_installs_only_the_modelcloud_localdex_distribution() -> None:
         (ANTHROPIC_FAMILY, "curl -fsSL https://claude.ai/install.sh | bash"),
         (
             OPENAI_FAMILY,
-            "curl -fsSL https://github.com/ModelCloud/LocalDex/releases/latest/download/"
-            "install-localdex.sh | sh",
+            "curl -fsSL https://github.com/ModelCloud/MultiDex/releases/latest/download/"
+            "install-multidex.sh | sh",
         ),
     ],
 )
@@ -762,7 +762,7 @@ def test_try_install_harness_cli_success_when_binary_off_path(
     """A binary installed into a global dir but off bare ``PATH`` reads success.
 
     Regression: the install verdict and the readiness badge must use the SAME
-    resolver. On a host whose frozen ``PATH`` omits the LocalDex bin dir, the
+    resolver. On a host whose frozen ``PATH`` omits the MultiDex bin dir, the
     installer lands the binary there — off ``PATH`` but on ``resolve_cli_binary``'s
     fallback ladder. Judging install success with bare ``shutil.which`` reported
     a spurious "not found" failure (red toast) while readiness resolved it via
@@ -835,10 +835,10 @@ def test_try_install_prepends_resolved_dir_so_login_can_find_binary(
     assert str(fallback_dir) in os.environ["PATH"].split(os.pathsep)
 
 
-def test_install_harness_cli_runs_localdex_installer_then_rechecks(
+def test_install_harness_cli_runs_multidex_installer_then_rechecks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Runs the LocalDex installer and verifies the resulting codex command."""
+    """Runs the MultiDex installer and verifies the resulting codex command."""
     calls: list[list[str]] = []
     # bash present; the target binary appears only after the install runs.
     state = {"installed": False}

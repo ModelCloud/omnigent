@@ -62,17 +62,17 @@ _ROTATED_BRIDGE_ID = "5f1c0a9e7b2d4c36a8e4d1f0b9a72c15"
 
 
 @pytest.fixture(autouse=True)
-def _isolate_machine_localdex_installation(
+def _isolate_machine_multidex_installation(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Keep runner tests independent of a developer's installed LocalDex."""
-    from omnigent.harnesses.localdex_native import config as localdex_config
+    """Keep runner tests independent of a developer's installed MultiDex."""
+    from omnigent.harnesses.multidex_native import config as multidex_config
 
     def _missing_config(**_kwargs: object) -> None:
-        raise FileNotFoundError("LocalDex configuration is not part of this test")
+        raise FileNotFoundError("MultiDex configuration is not part of this test")
 
-    monkeypatch.setattr(localdex_config, "LOCALDEX_BINARY", tmp_path / "missing-localdex")
-    monkeypatch.setattr(localdex_config, "load_localdex_config", _missing_config)
+    monkeypatch.setattr(multidex_config, "MULTIDEX_BINARY", tmp_path / "missing-multidex")
+    monkeypatch.setattr(multidex_config, "load_multidex_config", _missing_config)
 
 
 @pytest.mark.asyncio

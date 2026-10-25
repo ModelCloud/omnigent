@@ -28,18 +28,14 @@ describe("nativeCodingAgentForHarness", () => {
     expect(nativeCodingAgentForHarness("opencode-native")?.key).toBe("opencode");
   });
 
-  it("maps legacy LocalDex names to the one LocalDex/Codex agent", () => {
-    const localdex = nativeCodingAgentForHarness("codex-native");
-    expect(localdex).toMatchObject({ key: "codex", displayName: "LocalDex" });
-    expect(nativeCodingAgentForHarness("localdex-native")).toBe(localdex);
-    expect(nativeCodingAgentForHarness("native-localdex")).toBe(localdex);
-    expect(nativeCodingAgentForAgentName("localdex-native-ui")).toBe(
-      nativeCodingAgentForAgentName("codex-native-ui"),
-    );
-    expect(nativeCodingAgentForWrapper("localdex-native-ui")).toBe(
-      nativeCodingAgentForWrapper("codex-native-ui"),
-    );
-    expect(NATIVE_CODING_AGENTS.filter((agent) => agent.displayName === "LocalDex")).toHaveLength(
+  it("maps legacy MultiDex names to the one MultiDex/Codex agent", () => {
+    const multidex = nativeCodingAgentForHarness("codex-native");
+    expect(multidex).toMatchObject({ key: "codex", displayName: "MultiDex" });
+    expect(nativeCodingAgentForHarness("multidex-native")).toBe(multidex);
+    expect(nativeCodingAgentForHarness("native-multidex")).toBe(multidex);
+    expect(nativeCodingAgentForAgentName("localdex-native-ui")).toBeUndefined();
+    expect(nativeCodingAgentForWrapper("localdex-native-ui")).toBeUndefined();
+    expect(NATIVE_CODING_AGENTS.filter((agent) => agent.displayName === "MultiDex")).toHaveLength(
       1,
     );
   });
@@ -151,7 +147,7 @@ describe("nativeCodingAgentForSubagentWrapper", () => {
       "Claude Code",
     );
     expect(nativeCodingAgentForSubagentWrapper("codex-native-ui-subagent")?.displayName).toBe(
-      "LocalDex",
+      "MultiDex",
     );
     expect(nativeCodingAgentForSubagentWrapper("opencode-native-ui-subagent")?.displayName).toBe(
       "OpenCode",
@@ -211,7 +207,7 @@ describe("isNativeTerminalSession", () => {
 });
 
 describe("isFullySupportedNativeCodingAgent", () => {
-  it("is true for exactly Claude Code and LocalDex", () => {
+  it("is true for exactly Claude Code and MultiDex", () => {
     const supported = (NATIVE_CODING_AGENTS as readonly NativeCodingAgentSpec[])
       .filter((a) => a.fullySupported === true)
       .map((a) => a.key);
@@ -273,8 +269,8 @@ describe("nativeCodingAgentForPolicyName", () => {
   // prefix on either side fails here rather than leaking the id to the UI.
   it.each([
     ["claude_native_permission", "Claude Code"],
-    ["codex_native_command_approval", "LocalDex"],
-    ["codex_native_apply_patch_approval", "LocalDex"],
+    ["codex_native_command_approval", "MultiDex"],
+    ["codex_native_apply_patch_approval", "MultiDex"],
     ["cursor_native_permission", "Cursor"],
     ["agy_native_permission", "Antigravity"],
     ["agy_native_ask_question", "Antigravity"],

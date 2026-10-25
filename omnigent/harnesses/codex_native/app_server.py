@@ -381,8 +381,8 @@ def _model_provider_override(config_overrides: Sequence[str]) -> str | None:
 def _pin_codex_config_model_provider(codex_home: Path, provider: str) -> None:
     """Write the explicit launch provider into the private session config.
 
-    A session copied from a LocalDex default may otherwise pair an official
-    model with the stale ``localdex`` provider after ``thread/resume``. The
+    A session copied from a MultiDex default may otherwise pair an official
+    model with the stale ``multidex`` provider after ``thread/resume``. The
     app-server's ``-c`` value alone is insufficient because the remote TUI
     restores this file as thread state.
     """
@@ -824,7 +824,7 @@ def clamp_codex_effort_for_model(
         for level in levels
         if isinstance(level, dict)
     ]
-    # LocalDex advertises disabled thinking as ``off`` rather than Omnigent's
+    # MultiDex advertises disabled thinking as ``off`` rather than Omnigent's
     # canonical ``none``. Preserve the choice instead of clamping it up to low.
     if effort == "none" and "off" in advertised and "none" not in advertised:
         return "off"
@@ -2091,7 +2091,7 @@ class CodexNativeAppServer:
     bridge_dir: Path
     retry_policy: RetryPolicy | None = None
     config_profile: str | None = None
-    # LocalDex owns its source config rather than falling back to ~/.codex.
+    # MultiDex owns its source config rather than falling back to ~/.codex.
     # This also keeps app-server profile-free: current Codex rejects --profile
     # on that subcommand.
     config_source: Path | None = None
@@ -2101,7 +2101,7 @@ class CodexNativeAppServer:
     # Provider-specific bearer keys are added without changing Codex's normal
     # OpenAI, Databricks, or ChatGPT auth environment.
     provider_env_keys: tuple[str, ...] = ()
-    # LocalDex is additive: its local bearer provider and Codex's built-in
+    # MultiDex is additive: its local bearer provider and Codex's built-in
     # OpenAI provider coexist in one runtime.  Preserve the user's shared
     # auth.json so a live thread can switch from the local model to an
     # official model without restarting or falling back to the local URL.
@@ -2287,7 +2287,7 @@ class CodexNativeAppServer:
             if auth_path.exists() or auth_path.is_symlink():
                 auth_path.unlink()
             if self.bridge_openai_auth:
-                # LocalDex's provider registration lives in a separate config
+                # MultiDex's provider registration lives in a separate config
                 # home, but official models still need the user's normal
                 # Codex login.  Symlink it so token refreshes remain shared.
                 source_auth = _codex_home_config_source_from_env() / "auth.json"
@@ -3694,7 +3694,7 @@ def build_codex_native_server(
     :param isolated_env_keys: Credential names for a selected authless profile;
         this enables strict OpenAI/Databricks environment isolation.
     :param bridge_openai_auth: Preserve the user's normal Codex ``auth.json``
-        alongside an additive bearer-authenticated provider. LocalDex enables
+        alongside an additive bearer-authenticated provider. MultiDex enables
         this so one live thread can switch between local and official models.
     :param reconcile_process_registry: Whether startup performs the global
         crash registry sweep. Runner-owned launches disable this because the
@@ -3733,7 +3733,7 @@ def build_codex_native_server(
         authless_profile_env = tuple(sorted(set(isolated_env_keys)))
     # The private session home receives the user's provider definitions, so its
     # process must also receive the env_key declared by those definitions.
-    # LocalDex registrations are passed by the runner; other user providers
+    # MultiDex registrations are passed by the runner; other user providers
     # (for example OpenRouter) come from the shared Codex config.
     explicit_provider_env = tuple(
         sorted(

@@ -86,7 +86,7 @@ from omnigent.runner.resource_registry import (
     HERMES_NATIVE_TERMINAL_ROLE,
     KIMI_NATIVE_TERMINAL_ROLE,
     KIRO_NATIVE_TERMINAL_ROLE,
-    LOCALDEX_NATIVE_TERMINAL_ROLE,
+    MULTIDEX_NATIVE_TERMINAL_ROLE,
     OMNIGENT_REPL_TERMINAL_ROLE,
     OPENCODE_NATIVE_TERMINAL_ROLE,
     PI_NATIVE_TERMINAL_ROLE,
@@ -4819,7 +4819,7 @@ async def _launch_codex_native_tui(
     bridge_dir: Path,
     thread_id: str | None,
     agent_spec: AgentSpec | ResolvedSpec | None,
-    localdex: bool = False,
+    multidex: bool = False,
     login_required: bool = False,
 ) -> _CodexNativeTuiLaunch:
     """Attach a terminal to an app-server without owning its lifecycle."""
@@ -4871,11 +4871,11 @@ async def _launch_codex_native_tui(
     # Honor configured wrappers while keeping the host-provisioned binary
     # immune to ambient OMNIGENT_CODEX_PATH overrides.
     _, _codex_overrides = resolve_harness_config(_codex_harness_cfg)
-    harness_id = "localdex-native" if localdex else "codex-native"
-    terminal_name = "localdex" if localdex else "codex"
-    terminal_role = LOCALDEX_NATIVE_TERMINAL_ROLE if localdex else CODEX_NATIVE_TERMINAL_ROLE
+    harness_id = "multidex-native" if multidex else "codex-native"
+    terminal_name = "multidex" if multidex else "codex"
+    terminal_role = MULTIDEX_NATIVE_TERMINAL_ROLE if multidex else CODEX_NATIVE_TERMINAL_ROLE
     _codex_cmd_override = (
-        None if localdex else (_codex_overrides.get("codex-native") or {}).get("command")
+        None if multidex else (_codex_overrides.get("codex-native") or {}).get("command")
     )
     configured_codex_command = (
         _codex_cmd_override.strip()
@@ -4951,8 +4951,8 @@ async def _launch_codex_native_tui(
             args=codex_launch_args,
             env={
                 **codex_terminal_env(app_server),
-                # LocalDex must not replace the runner's composer with a goal modal.
-                "LOCALDEX_SKIP_RESUME_GOAL_PROMPT": "1",
+                # MultiDex must not replace the runner's composer with a goal modal.
+                "MULTIDEX_SKIP_RESUME_GOAL_PROMPT": "1",
             },
             # Match the local ``omnigent codex`` terminal scrollback.
             scrollback=100_000,
@@ -5030,7 +5030,7 @@ async def _auto_create_codex_terminal(
     server_client: httpx.AsyncClient | None = None,
     session_init: RunnerSessionInitEnvelope | None = None,
     ensure_comment_relay: _EnsureCommentRelay | None = None,
-    localdex: bool = False,
+    multidex: bool = False,
 ) -> SessionResourceView:
     """
     Auto-create a Codex terminal for a codex-native session.
@@ -5116,10 +5116,10 @@ async def _auto_create_codex_terminal(
     )
     original_external_session_id = launch_config.external_session_id
     workspace = str(launch_config.workspace)
-    if localdex:
-        from omnigent.harnesses.localdex_native import bridge as localdex_bridge
+    if multidex:
+        from omnigent.harnesses.multidex_native import bridge as multidex_bridge
 
-        bridge_dir = localdex_bridge.prepare_bridge_dir(launch_config.bridge_id or session_id)
+        bridge_dir = multidex_bridge.prepare_bridge_dir(launch_config.bridge_id or session_id)
     else:
         bridge_dir = prepare_bridge_dir(launch_config.bridge_id or session_id)
     socket_path = socket_path_for_bridge_dir(bridge_dir)
@@ -5155,7 +5155,7 @@ async def _auto_create_codex_terminal(
             bridge_dir=bridge_dir,
             thread_id=bridge_state.thread_id,
             agent_spec=agent_spec,
-            localdex=localdex,
+            multidex=multidex,
         )
         return launched.view
     # Route across all offerings: a configured provider (omnigent setup),
@@ -5183,39 +5183,39 @@ async def _auto_create_codex_terminal(
     codex_binding = binding_for_harness(load_runtime_inference_config(), "codex-native")
     from omnigent.inner.codex_executor import _find_codex_cli
 
-    _localdex_config = None
-    _localdex_provider_overrides: tuple[str, ...] = ()
+    _multidex_config = None
+    _multidex_provider_overrides: tuple[str, ...] = ()
     selected_local_model = False
-    from omnigent.harnesses.localdex_native.config import (
-        LOCALDEX_BINARY,
-        LOCALDEX_MODEL,
-        load_localdex_config,
-        localdex_model_for_selection,
-        localdex_model_selected,
-        localdex_models,
-        localdex_provider_config_overrides,
-        localdex_runtime_provider_id,
+    from omnigent.harnesses.multidex_native.config import (
+        MULTIDEX_BINARY,
+        MULTIDEX_MODEL,
+        load_multidex_config,
+        multidex_model_for_selection,
+        multidex_model_selected,
+        multidex_models,
+        multidex_provider_config_overrides,
+        multidex_runtime_provider_id,
     )
 
-    # LocalDex is an upstream-compatible Codex binary with one additive local
+    # MultiDex is an upstream-compatible Codex binary with one additive local
     # provider.  When it is installed, codex-native is the *only* harness: the
     # selected model decides the provider, never a harness/agent swap.
-    # ``localdex`` remains solely as a compatibility path for pre-existing
+    # ``multidex`` remains solely as a compatibility path for pre-existing
     # sessions created by the now-retired separate wrapper.
     try:
-        _localdex_config = load_localdex_config(require_token=False)
-        _localdex_provider_overrides = localdex_provider_config_overrides(_localdex_config)
-        if not LOCALDEX_BINARY.is_file():
-            raise FileNotFoundError(f"LocalDex binary is missing: {LOCALDEX_BINARY}")
+        _multidex_config = load_multidex_config(require_token=False)
+        _multidex_provider_overrides = multidex_provider_config_overrides(_multidex_config)
+        if not MULTIDEX_BINARY.is_file():
+            raise FileNotFoundError(f"MultiDex binary is missing: {MULTIDEX_BINARY}")
         selected_model = default_model
-        _selected_local_registration = localdex_model_for_selection(
-            _localdex_config, selected_model
+        _selected_local_registration = multidex_model_for_selection(
+            _multidex_config, selected_model
         )
         selected_local_model = _selected_local_registration is not None
         if selected_local_model:
             if not os.environ.get(_selected_local_registration.env_key):
                 raise ValueError(
-                    "LocalDex bearer environment variable "
+                    "MultiDex bearer environment variable "
                     f"{_selected_local_registration.env_key!r} is not set"
                 )
         if selected_local_model:
@@ -5223,9 +5223,9 @@ async def _auto_create_codex_terminal(
                 _codex_launch,
                 config_overrides=[
                     "model_provider="
-                    f"{json.dumps(localdex_runtime_provider_id(_selected_local_registration.provider))}",
+                    f"{json.dumps(multidex_runtime_provider_id(_selected_local_registration.provider))}",
                     f"model={json.dumps(selected_model)}",
-                    # LocalDex consumes native raw reasoning deltas. Its
+                    # MultiDex consumes native raw reasoning deltas. Its
                     # OpenAI-compatible endpoint has no separate summary
                     # stream, so do not request one in parallel.
                     f"model_reasoning_summary={json.dumps('none')}",
@@ -5233,53 +5233,53 @@ async def _auto_create_codex_terminal(
                 model=selected_model,
                 profile=None,
                 config_profile=None,
-                summary="LocalDex local provider",
+                summary="MultiDex local provider",
                 login_required=False,
             )
     except FileNotFoundError:
         # A stock Codex installation remains useful on hosts that have not
-        # received LocalDex yet; it has no local row in the host picker.
+        # received MultiDex yet; it has no local row in the host picker.
         if (
             default_model
-            and _localdex_config is not None
-            and localdex_model_selected(_localdex_config, default_model)
+            and _multidex_config is not None
+            and multidex_model_selected(_multidex_config, default_model)
         ):
             raise
-        _localdex_config = None
-        _localdex_provider_overrides = ()
+        _multidex_config = None
+        _multidex_provider_overrides = ()
     except ValueError:
         # Registration is optional for ordinary Codex sessions.  A bad stale
         # registration must not turn it into a system-wide launch failure, but
         # an explicit local-model session must surface the repairable config
         # error instead of silently sending it to another provider.
-        if default_model == LOCALDEX_MODEL or (
+        if default_model == MULTIDEX_MODEL or (
             default_model
-            and _localdex_config is not None
-            and localdex_model_selected(_localdex_config, default_model)
+            and _multidex_config is not None
+            and multidex_model_selected(_multidex_config, default_model)
         ):
             raise
         _logger.warning(
-            "LocalDex registration is invalid; falling back to stock Codex", exc_info=True
+            "MultiDex registration is invalid; falling back to stock Codex", exc_info=True
         )
-        _localdex_config = None
+        _multidex_config = None
         selected_local_model = False
 
     # The app-server normally hides raw reasoning events, and the current
     # ChatGPT catalog defaults its trace request to ``none``. Omnigent owns a
     # visible thinking surface, so enable raw-event forwarding for every
     # Codex-family model and explicitly request the official API's available
-    # reasoning summary. LocalDex is different: it already supplies raw
+    # reasoning summary. MultiDex is different: it already supplies raw
     # reasoning and its local Responses endpoint must not be asked to produce
     # a parallel summary stream.
     _codex_reasoning_trace_overrides = ["show_raw_agent_reasoning=true"]
     if not selected_local_model:
         _codex_reasoning_trace_overrides.append('model_reasoning_summary="auto"')
 
-    # The single registered Omnigent Codex-compatible agent is LocalDex. Use
+    # The single registered Omnigent Codex-compatible agent is MultiDex. Use
     # its pinned binary even when no custom provider registry is configured;
     # provider registration controls model availability, not which runtime is
     # installed for official OpenAI/ChatGPT sessions.
-    _codex_cli_path = str(LOCALDEX_BINARY) if LOCALDEX_BINARY.is_file() else _find_codex_cli()
+    _codex_cli_path = str(MULTIDEX_BINARY) if MULTIDEX_BINARY.is_file() else _find_codex_cli()
     _catalog_launch = None
     _fresh_codex_catalog: list[_JsonObject] | None = None
     try:
@@ -5734,25 +5734,25 @@ async def _auto_create_codex_terminal(
         # and can incorrectly require a ChatGPT login even when the selected
         # local provider explicitly has requires_openai_auth = false.
         config_profile=_codex_launch.config_profile,
-        # Keep LocalDex providers available for in-session switching while
+        # Keep MultiDex providers available for in-session switching while
         # preserving Codex's normal credentials and cloud auth lifecycle.
         provider_env_keys=(
-            tuple(dict.fromkeys(item.env_key for item in localdex_models(_localdex_config)))
-            if _localdex_config is not None
+            tuple(dict.fromkeys(item.env_key for item in multidex_models(_multidex_config)))
+            if _multidex_config is not None
             else ()
         ),
         isolated_env_keys=(),
-        # LocalDex is one additive provider in a full Codex runtime. Keep the
+        # MultiDex is one additive provider in a full Codex runtime. Keep the
         # shared official login available so an in-session model switch to an
         # OpenAI model also switches credentials and endpoint correctly.
         bridge_openai_auth=selected_local_model,
-        process_registry_path=(bridge_dir.parent / "process-registry.json") if localdex else None,
-        process_tag_prefix="localdex-native" if localdex else "codex-native",
+        process_registry_path=(bridge_dir.parent / "process-registry.json") if multidex else None,
+        process_tag_prefix="multidex-native" if multidex else "codex-native",
         client_identity=(
-            "omnigent-localdex-native-auto" if localdex else "omnigent-codex-native-auto"
+            "omnigent-multidex-native-auto" if multidex else "omnigent-codex-native-auto"
         ),
         extra_config_overrides=[
-            *_localdex_provider_overrides,
+            *_multidex_provider_overrides,
             *_codex_launch.config_overrides,
             *_codex_reasoning_trace_overrides,
             *mcp_overrides,
@@ -5963,7 +5963,7 @@ async def _auto_create_codex_terminal(
             bridge_dir=bridge_dir,
             thread_id=launch_config.external_session_id,
             agent_spec=agent_spec,
-            localdex=localdex,
+            multidex=multidex,
             login_required=_codex_launch.login_required,
         )
         terminal_view = launched.view
@@ -6288,7 +6288,7 @@ async def _codex_discover_thread_and_forward(
         threaded into the startup-timeout error so hosted users can diagnose
         without runner-log access (see #2745).
     :param default_model_provider: Provider configured for this session before
-        any per-model LocalDex routing override, persisted so switching back to
+        any per-model MultiDex routing override, persisted so switching back to
         the session's original provider restores its routing.
     :param app_server: This launch's process, retained for failure diagnostics
         before cleanup. A later launch may replace the session registry entry.
@@ -10321,8 +10321,8 @@ async def _launch_codex(ctx: NativeLaunchContext) -> SessionResourceView:
     )
 
 
-async def _launch_localdex(ctx: NativeLaunchContext) -> SessionResourceView:
-    """Adapter: build the isolated LocalDex native terminal."""
+async def _launch_multidex(ctx: NativeLaunchContext) -> SessionResourceView:
+    """Adapter: build the isolated MultiDex native terminal."""
     return await _auto_create_codex_terminal(
         ctx.session_id,
         ctx.resource_registry,
@@ -10333,7 +10333,7 @@ async def _launch_localdex(ctx: NativeLaunchContext) -> SessionResourceView:
         server_client=ctx.server_client,
         session_init=ctx.session_init,
         ensure_comment_relay=ctx.ensure_comment_relay,
-        localdex=True,
+        multidex=True,
     )
 
 

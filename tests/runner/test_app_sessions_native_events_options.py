@@ -597,7 +597,7 @@ async def test_events_compact_on_native_session_returns_503_when_bridge_not_read
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("harness", ["codex-native", "localdex-native"])
+@pytest.mark.parametrize("harness", ["codex-native", "multidex-native"])
 async def test_events_compact_on_codex_native_calls_app_server(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

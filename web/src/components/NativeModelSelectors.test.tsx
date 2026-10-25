@@ -17,7 +17,7 @@ const options: NativeModelOption[] = [
     id: "local-1017",
     modelFamily: "ds",
     modelLabel: "DeepSeek v4.1 Flash",
-    providerId: "localdex",
+    providerId: "multidex",
     supportedReasoningEfforts: [{ reasoningEffort: "none" }, { reasoningEffort: "max" }],
     defaultReasoningEffort: "max",
   },

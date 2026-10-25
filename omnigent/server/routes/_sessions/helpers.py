@@ -2607,7 +2607,7 @@ def _validate_external_reasoning_effort(body: SessionEventInput) -> str | None:
         )
     effort = raw_effort.strip()
     if effort == "off":
-        # Native LocalDex's explicit Off is not the session PATCH reset alias.
+        # Native MultiDex's explicit Off is not the session PATCH reset alias.
         effort = "none"
     try:
         return validate_effort(effort, "session metadata", EFFORT_VALUES)

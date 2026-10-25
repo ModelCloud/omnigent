@@ -65,7 +65,7 @@ export function codexNativeSubagentLabel(
 export type NativeCodingAgentKey =
   | "claude"
   | "codex"
-  | "localdex"
+  | "multidex"
   | "opencode"
   | "pi"
   | "cursor"
@@ -144,7 +144,7 @@ export const NATIVE_CODING_AGENTS = [
     harness: "codex-native",
     wrapperLabel: "codex-native-ui",
     subagentWrapperLabel: "codex-native-ui-subagent",
-    displayName: "LocalDex",
+    displayName: "MultiDex",
     iconKind: "codex",
     sortRank: 20,
     capabilities: ["approvalMode"],
@@ -329,16 +329,9 @@ const HARNESS_ALIASES: Record<string, string> = {
   "native-kimi": "kimi-native",
   "native-hermes": "hermes-native",
   "native-opencode": "opencode-native",
-  localdex: "codex-native",
-  "localdex-native": "codex-native",
-  "native-localdex": "codex-native",
-};
-
-const LEGACY_AGENT_NAME_ALIASES: Record<string, string> = {
-  "localdex-native-ui": "codex-native-ui",
-};
-const LEGACY_WRAPPER_ALIASES: Record<string, string> = {
-  "localdex-native-ui": "codex-native-ui",
+  multidex: "codex-native",
+  "multidex-native": "codex-native",
+  "native-multidex": "codex-native",
 };
 
 // Vendors whose elicitation wire prefix differs from their registry `key`:
@@ -399,7 +392,7 @@ export function isNativePolicyName(policyName: string): boolean {
 export function nativeCodingAgentForAgentName(
   name: string | null | undefined,
 ): NativeCodingAgentSpec | undefined {
-  return name == null ? undefined : BY_AGENT_NAME.get(LEGACY_AGENT_NAME_ALIASES[name] ?? name);
+  return name == null ? undefined : BY_AGENT_NAME.get(name);
 }
 
 /**
@@ -430,7 +423,7 @@ export function nativeCodingAgentForHarness(
 export function nativeCodingAgentForWrapper(
   wrapper: string | null | undefined,
 ): NativeCodingAgentSpec | undefined {
-  return wrapper == null ? undefined : BY_WRAPPER.get(LEGACY_WRAPPER_ALIASES[wrapper] ?? wrapper);
+  return wrapper == null ? undefined : BY_WRAPPER.get(wrapper);
 }
 
 /**

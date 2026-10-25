@@ -7,11 +7,11 @@ import pytest
 from omnigent.onboarding import harness_readiness as hr
 
 
-@pytest.mark.parametrize("harness", ["localdex", "localdex-native", "native-localdex"])
-def test_legacy_localdex_harness_names_share_codex_readiness(
+@pytest.mark.parametrize("harness", ["multidex", "multidex-native", "native-multidex"])
+def test_legacy_multidex_harness_names_share_codex_readiness(
     harness: str,
 ) -> None:
-    """Persisted LocalDex sessions use the same install/login checks as Codex."""
+    """Persisted MultiDex sessions use the same install/login checks as Codex."""
     assert hr._canonical_harness(harness) == "codex-native"
     assert hr._is_codex_family_harness(hr._canonical_harness(harness))
 

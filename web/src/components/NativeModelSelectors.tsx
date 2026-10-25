@@ -45,7 +45,7 @@ export function NativeModelSelectors({
     if (row) onModelChange(row.id);
   };
   const labels: Record<string, string> = {
-    localdex: "Local",
+    multidex: "Local",
     openrouter: "OpenRouter",
     lithos: "Lithos",
     openai: "OpenAI",

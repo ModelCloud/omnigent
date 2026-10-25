@@ -109,7 +109,7 @@ vi.mock("@/shell/NewChatDialog", () => ({
         onClick={() =>
           onSelectAgent(
             testAgent("ag_codex_native", "codex-native-ui", {
-              display_name: "LocalDex",
+              display_name: "MultiDex",
               harness: "codex-native",
             }),
           )
@@ -160,7 +160,7 @@ const AGENTS: AvailableAgent[] = [
     harness: "claude-native",
   }),
   testAgent("ag_codex_native", "codex-native-ui", {
-    display_name: "LocalDex",
+    display_name: "MultiDex",
     harness: "codex-native",
   }),
 ];
@@ -256,7 +256,7 @@ describe("agent picker readiness (needs-setup badges)", () => {
   it("merges readiness across all online hosts so harnesses configured anywhere stay offered", () => {
     // With no host pinned the task resolves one at fire time, so a harness that
     // is configured on ANY online host must stay a first-class pick — gating on
-    // the first online host alone would hide it ("Localdex is the only option").
+    // the first online host alone would hide it ("MultiDex is the only option").
     vi.mocked(hostsHook.useHosts).mockReturnValue({
       data: [
         {
@@ -318,7 +318,7 @@ describe("agent picker readiness (needs-setup badges)", () => {
   it("shows model + effort for a codex-native agent — no permission control", () => {
     renderDialog();
     fireEvent.click(screen.getByTestId("pick-harness-codex"));
-    // LocalDex carries a model + effort surface (approvalMode capability, not
+    // MultiDex carries a model + effort surface (approvalMode capability, not
     // modelPicker): the pickers render, while the Claude-only permission
     // control stays hidden.
     expect(screen.getByTestId("task-model-effort-field")).toBeInTheDocument();

@@ -27,7 +27,6 @@ from fastapi.responses import Response
 from pydantic import ValidationError
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
-from omnigent._wrapper_labels import LOCALDEX_NATIVE_WRAPPER_VALUE
 from omnigent.codex_approval_modes import (
     CODEX_NATIVE_PERMISSION_VALUES,
 )
@@ -3073,7 +3072,7 @@ def register_core_routes(
         settings_forward_timeout = (
             _CODEX_NATIVE_SETTINGS_FORWARD_TIMEOUT_S
             if updated_native_agent is not None
-            and updated_native_agent.harness in ("codex-native", "localdex-native")
+            and updated_native_agent.harness in ("codex-native", "multidex-native")
             else _TUI_INJECT_FORWARD_TIMEOUT_S
         )
         # The runner applies native settings live. Silent startup metadata
@@ -3081,7 +3080,6 @@ def register_core_routes(
         live_forward = not body.silent
         codex_native = updated.labels.get(_CLAUDE_NATIVE_WRAPPER_LABEL_KEY) in (
             _CODEX_NATIVE_WRAPPER_LABEL_VALUE,
-            LOCALDEX_NATIVE_WRAPPER_VALUE,
         )
         # This server rolls back Codex refusals and keeps unconfirmed changes, so the
         # runner neither saves a refusal nor waits out this server's forward timeout.

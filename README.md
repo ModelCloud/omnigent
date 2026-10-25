@@ -62,9 +62,9 @@ Omnigent lets you:
 
 ## Quick start
 
-### LocalDex models
+### MultiDex models
 
-With a recent ModelCloud LocalDex binary installed as `codex`, the Codex-native
+With a recent ModelCloud MultiDex binary installed as `codex`, the Codex-native
 model picker discovers `deepseek/deepseek-v4.1-flash-1017` from OpenRouter and
 adds the configured local `DS v4.1 Flash 1017` endpoint. Both advertise Max
 reasoning by default. Set `OPENROUTER_API_KEY` in the host environment; the key

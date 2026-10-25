@@ -755,18 +755,18 @@ async def test_handle_model_options_codex_probe_failure_is_failed(
     _cleanup_host(host)
 
 
-async def test_handle_model_options_codex_localdex_row_keeps_reasoning_capabilities(
+async def test_handle_model_options_codex_multidex_row_keeps_reasoning_capabilities(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The pre-launch LocalDex row exposes DSV4.1's valid effort ladder."""
+    """The pre-launch MultiDex row exposes DSV4.1's valid effort ladder."""
     from omnigent.harnesses.codex_native import app_server as codex_native_app_server
-    from omnigent.harnesses.localdex_native import config as localdex_config
+    from omnigent.harnesses.multidex_native import config as multidex_config
 
-    registration = localdex_config.LocalDexConfig(
-        local_model=localdex_config.LOCALDEX_MODEL,
-        provider="localdex",
+    registration = multidex_config.MultiDexConfig(
+        local_model=multidex_config.MULTIDEX_MODEL,
+        provider="multidex",
         base_url="http://10.0.13.33:2120/v1",
-        env_key="LOCALDEX_TEST_BEARER",
+        env_key="MULTIDEX_TEST_BEARER",
     )
 
     async def _catalog(**_kwargs: object) -> list[dict[str, object]]:
@@ -778,16 +778,16 @@ async def test_handle_model_options_codex_localdex_row_keeps_reasoning_capabilit
         ]
 
     monkeypatch.setattr(codex_native_app_server, "codex_launch_catalog", _catalog)
-    monkeypatch.setattr(localdex_config, "load_localdex_config", lambda **_kwargs: registration)
+    monkeypatch.setattr(multidex_config, "load_multidex_config", lambda **_kwargs: registration)
     monkeypatch.setenv(registration.env_key, "test-token")
     host = _make_host_process()
 
     result = await host._handle_model_options(
-        HostModelOptionsFrame(request_id="req_localdex_models", harness="codex-native"),
+        HostModelOptionsFrame(request_id="req_multidex_models", harness="codex-native"),
     )
 
     assert result.status == "ok"
-    expected_local_row = localdex_config.localdex_model_picker_row(registration)
+    expected_local_row = multidex_config.multidex_model_picker_row(registration)
     assert {key: result.models[0][key] for key in expected_local_row} == expected_local_row
     assert [
         option["reasoningEffort"] for option in expected_local_row["supportedReasoningEfforts"]
@@ -4301,29 +4301,29 @@ def test_build_runner_env_forwards_harness_credentials_and_endpoints() -> None:
 
 
 @pytest.mark.parametrize("registration_present", [True, False])
-def test_build_runner_env_forwards_declared_localdex_key_to_codex_only(
+def test_build_runner_env_forwards_declared_multidex_key_to_codex_only(
     monkeypatch: pytest.MonkeyPatch,
     registration_present: bool,
 ) -> None:
     """The local provider's configured bearer reaches its Codex runner only."""
-    from omnigent.harnesses.localdex_native import config as localdex_config
+    from omnigent.harnesses.multidex_native import config as multidex_config
 
-    registration = localdex_config.LocalDexConfig(
+    registration = multidex_config.MultiDexConfig(
         local_model="DS v4.1 Flash 1017",
-        provider="localdex",
+        provider="multidex",
         base_url="http://10.0.13.33:2120/v1",
-        env_key="LOCALDEX_API_KEY",
+        env_key="MULTIDEX_API_KEY",
     )
 
-    def load_config(**_kwargs: object) -> localdex_config.LocalDexConfig:
+    def load_config(**_kwargs: object) -> multidex_config.MultiDexConfig:
         if not registration_present:
-            raise FileNotFoundError("no optional LocalDex registration")
+            raise FileNotFoundError("no optional MultiDex registration")
         return registration
 
-    monkeypatch.setattr(localdex_config, "load_localdex_config", load_config)
+    monkeypatch.setattr(multidex_config, "load_multidex_config", load_config)
     base = {
         "PATH": "/usr/bin",
-        "LOCALDEX_API_KEY": "test-localdex-key",
+        "MULTIDEX_API_KEY": "test-multidex-key",
         "OPENROUTER_API_KEY": "test-openrouter-key",
     }
 
@@ -4346,8 +4346,8 @@ def test_build_runner_env_forwards_declared_localdex_key_to_codex_only(
         harness="claude-native",
     )
 
-    assert ("LOCALDEX_API_KEY" in codex_env) is registration_present
-    assert "LOCALDEX_API_KEY" not in other_env
+    assert ("MULTIDEX_API_KEY" in codex_env) is registration_present
+    assert "MULTIDEX_API_KEY" not in other_env
     assert codex_env["OPENROUTER_API_KEY"] == "test-openrouter-key"
     assert "OPENROUTER_API_KEY" not in other_env
 
@@ -7089,8 +7089,8 @@ async def test_handle_model_options_serves_codex_probe_rows_and_caches(
 
     # This scenario uses only the upstream account catalog.
     monkeypatch.setattr(
-        "omnigent.harnesses.localdex_native.config.load_localdex_config",
-        Mock(side_effect=FileNotFoundError("No LocalDex registration in this scenario")),
+        "omnigent.harnesses.multidex_native.config.load_multidex_config",
+        Mock(side_effect=FileNotFoundError("No MultiDex registration in this scenario")),
     )
 
     monkeypatch.setattr(
@@ -7138,11 +7138,11 @@ async def test_handle_model_options_serves_codex_probe_rows_and_caches(
     _cleanup_host(host)
 
 
-async def test_handle_model_options_serves_localdex_from_the_native_codex_catalog(
+async def test_handle_model_options_serves_multidex_from_the_native_codex_catalog(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The legacy LocalDex harness spelling resolves to the shared picker."""
-    from omnigent.harnesses.localdex_native import config as localdex_config
+    """The legacy MultiDex harness spelling resolves to the shared picker."""
+    from omnigent.harnesses.multidex_native import config as multidex_config
 
     host = _make_host_process()
 
@@ -7156,20 +7156,20 @@ async def test_handle_model_options_serves_localdex_from_the_native_codex_catalo
 
     monkeypatch.setattr(host, "_probed_codex_model_options", _probed)
     monkeypatch.setattr(
-        localdex_config,
-        "load_localdex_config",
+        multidex_config,
+        "load_multidex_config",
         lambda *, require_token: SimpleNamespace(
-            local_model="DS v4.1 Flash 1017", env_key="LOCALDEX_TEST_BEARER"
+            local_model="DS v4.1 Flash 1017", env_key="MULTIDEX_TEST_BEARER"
         ),
     )
-    monkeypatch.setenv("LOCALDEX_TEST_BEARER", "test-token")
+    monkeypatch.setenv("MULTIDEX_TEST_BEARER", "test-token")
 
     result = await host._handle_model_options(
-        HostModelOptionsFrame(request_id="req_localdex", harness="localdex-native"),
+        HostModelOptionsFrame(request_id="req_multidex", harness="multidex-native"),
     )
 
     assert result.status == "ok"
-    assert result.request_id == "req_localdex"
+    assert result.request_id == "req_multidex"
     assert [row["id"] for row in result.models] == ["DS v4.1 Flash 1017", "gpt-5.6"]
     assert result.models[0]["model"] == "DS v4.1 Flash 1017"
     assert result.models[0]["displayName"] == "DeepSeek v4.1 Flash"
@@ -7276,8 +7276,8 @@ async def test_model_options_frame_replies_off_the_receive_loop(
 
     # This scenario uses only the upstream account catalog.
     monkeypatch.setattr(
-        "omnigent.harnesses.localdex_native.config.load_localdex_config",
-        Mock(side_effect=FileNotFoundError("No LocalDex registration in this scenario")),
+        "omnigent.harnesses.multidex_native.config.load_multidex_config",
+        Mock(side_effect=FileNotFoundError("No MultiDex registration in this scenario")),
     )
 
     monkeypatch.setattr(

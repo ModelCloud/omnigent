@@ -326,7 +326,7 @@ def _free_port_outside_the_ephemeral_range() -> int:
     raise RuntimeError("no free loopback port between 20000 and 29999")
 
 
-@pytest.mark.parametrize("process_tag_prefix", ["codex-native", "localdex-native"])
+@pytest.mark.parametrize("process_tag_prefix", ["codex-native", "multidex-native"])
 async def test_start_respawns_a_silent_app_server_on_the_same_transport(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, process_tag_prefix: str
 ) -> None:

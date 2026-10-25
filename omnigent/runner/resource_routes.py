@@ -106,7 +106,7 @@ def register_resource_routes(
     _antigravity_terminal_ensure_locks: dict[str, asyncio.Lock],
     _claude_terminal_ensure_locks: dict[str, asyncio.Lock],
     _codex_terminal_ensure_locks: dict[str, asyncio.Lock],
-    _localdex_terminal_ensure_locks: dict[str, asyncio.Lock],
+    _multidex_terminal_ensure_locks: dict[str, asyncio.Lock],
     _cursor_terminal_ensure_locks: dict[str, asyncio.Lock],
     _devin_terminal_ensure_locks: dict[str, asyncio.Lock],
     _discard_comment_relay: Callable[[str, ClaudeNativeToolRelay], None],
@@ -368,7 +368,7 @@ def register_resource_routes(
                 {
                     "claude": _claude_terminal_ensure_locks,
                     "codex": _codex_terminal_ensure_locks,
-                    "localdex": _localdex_terminal_ensure_locks,
+                    "multidex": _multidex_terminal_ensure_locks,
                     "pi": _pi_terminal_ensure_locks,
                     "cursor": _cursor_terminal_ensure_locks,
                     "kiro": _kiro_terminal_ensure_locks,

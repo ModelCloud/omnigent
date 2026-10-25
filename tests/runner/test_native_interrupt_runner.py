@@ -578,14 +578,14 @@ async def test_pi_stop_routes_to_interrupt(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("harness", ["codex-native", "localdex-native"])
+@pytest.mark.parametrize("harness", ["codex-native", "multidex-native"])
 async def test_codex_stop_interrupts_tears_down_and_goes_idle(
     monkeypatch: pytest.MonkeyPatch,
     harness: str,
 ) -> None:
     """A codex stop interrupts, tears down the terminal + forwarder, goes idle.
 
-    Interrupting alone leaves the ``localdex --remote`` pane attached; when its
+    Interrupting alone leaves the ``multidex --remote`` pane attached; when its
     app-server connection later drops, the TUI's auto-reconnect re-resumes the
     session the user just stopped.
     """
@@ -774,7 +774,7 @@ async def test_codex_stop_does_not_cancel_new_dispatch(
 async def test_codex_stop_without_resources_is_idempotent() -> None:
     runner, captured = _make_runner()
     for _ in range(2):
-        response = await runner.stop("localdex-native", "conv_empty")
+        response = await runner.stop("multidex-native", "conv_empty")
         assert response is not None and response.status_code == 204
         assert runner.take_pending_interrupt("conv_empty")[0] is False
     assert captured["wakes"] == []

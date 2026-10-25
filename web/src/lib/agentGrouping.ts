@@ -13,7 +13,7 @@ import { nativeAgentSortRank } from "@/lib/nativeCodingAgents";
 // two, so this is a frontend allowlist for now.
 export const BUILTIN_AGENTS = new Set([
   "claude-native-ui", // Claude Code
-  "codex-native-ui", // LocalDex (Codex-compatible)
+  "codex-native-ui", // MultiDex (Codex-compatible)
   "opencode-native-ui", // OpenCode
   "pi-native-ui", // Pi
   "cursor-native-ui", // Cursor
@@ -62,7 +62,7 @@ export function isAcpHarnessAgent(
 // after, in server order.
 export const AGENT_DISPLAY_ORDER = [
   "Claude Code",
-  "LocalDex",
+  "MultiDex",
   "OpenCode",
   "Cursor",
   "Pi",
@@ -102,7 +102,7 @@ export const NEW_SESSION_HIDDEN_AGENTS = new Set([
   "nessie",
   "kimi",
   "kimi-code",
-  "localdex-native-ui",
+  "multidex-native-ui",
 ]);
 
 /**
