@@ -3433,7 +3433,7 @@ async def test_hello_advertises_installed_version() -> None:
     stale build in the server's version popover. The hello must carry the
     shared resolved version this host is actually running.
     """
-    from omnigent.version import VERSION
+    from omnigent.version import display_version
 
     host = _make_host_process()
     tunnel = _FakeTunnel()
@@ -3443,7 +3443,7 @@ async def test_hello_advertises_installed_version() -> None:
 
     hello = decode_host_frame(tunnel.sent[0])
     assert isinstance(hello, HostHelloFrame)
-    assert hello.version == VERSION
+    assert hello.version == display_version()
     # Guard against the old hard-coded literal creeping back.
     assert hello.version != "0.1.0"
 
@@ -4350,6 +4350,53 @@ def test_build_runner_env_forwards_declared_multidex_key_to_codex_only(
     assert "MULTIDEX_API_KEY" not in other_env
     assert codex_env["OPENROUTER_API_KEY"] == "test-openrouter-key"
     assert "OPENROUTER_API_KEY" not in other_env
+
+
+def test_build_runner_env_forwards_codex_config_declared_env_keys(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Provider ``env_key``s declared in the shared Codex config reach the runner.
+
+    The app-server allowlists every ``env_key`` scanned from
+    ``~/.codex/config.toml``; if the host forward omits them the declared
+    credential (e.g. a Lithos bearer) never reaches that allowlist.
+    """
+    (tmp_path / "config.toml").write_text(
+        "[model_providers.lithos]\n"
+        'name = "Lithos"\n'
+        'base_url = "https://api.lithosai.cloud/v1"\n'
+        'wire_api = "responses"\n'
+        "requires_openai_auth = false\n"
+        'env_key = "LITHOS_API_KEY"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    base = {
+        "PATH": "/usr/bin",
+        "LITHOS_API_KEY": "test-lithos-key",
+    }
+
+    codex_env = _build_runner_env(
+        base,
+        server_url="http://server",
+        runner_id="runner_abc",
+        binding_token="tok",
+        workspace="/ws",
+        parent_pid=42,
+        harness="codex-native",
+    )
+    other_env = _build_runner_env(
+        base,
+        server_url="http://server",
+        runner_id="runner_abc",
+        binding_token="tok",
+        workspace="/ws",
+        parent_pid=42,
+        harness="claude-native",
+    )
+
+    assert codex_env["LITHOS_API_KEY"] == "test-lithos-key"
+    assert "LITHOS_API_KEY" not in other_env
 
 
 def test_build_runner_env_forwards_omnigent_prefixed_harness_credentials() -> None:

@@ -57,6 +57,16 @@ describe("Reasoning — auto-expand", () => {
     expect(screen.getByText("Thought for a few seconds").className).not.toContain("text-shimmer");
   });
 
+  it("renders the measured duration as raw seconds", () => {
+    render(
+      <Reasoning isStreaming={false} duration={5.123}>
+        <ReasoningTrigger />
+        <ReasoningContent>Some reasoning text</ReasoningContent>
+      </Reasoning>,
+    );
+    expect(screen.getByText("Thought for 5.12s")).toBeTruthy();
+  });
+
   it("renders the trigger in the closed state when isStreaming=false on mount", () => {
     renderReasoning(false);
     const trigger = screen.getByRole("button");

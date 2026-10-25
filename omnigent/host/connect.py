@@ -956,6 +956,21 @@ def _build_runner_env(
             # A missing or stale optional MultiDex registration must not make
             # ordinary Codex runner creation fail.
             pass
+        # The app-server also honors ``env_key`` names declared in the shared
+        # Codex provider config (~/.codex/config.toml). Forward them or a
+        # declared credential reaches the runner's allowlist with no value
+        # behind it.
+        try:
+            from omnigent.harnesses.codex_native.app_server import (
+                _configured_provider_env_keys,
+            )
+            from omnigent.inner.codex_executor import _codex_home_config_source_from_env
+
+            multidex_env_vars |= frozenset(
+                _configured_provider_env_keys(_codex_home_config_source_from_env())
+            )
+        except ImportError:
+            pass
     if inference_config is not None:
         config_env_vars |= provider_credential_env_vars(
             inference_config, include_dollar_key_refs=True

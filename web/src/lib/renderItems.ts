@@ -1111,6 +1111,7 @@ function walkBubbles(
         lifecycle,
         crossBubbleResults,
         liveTurnId !== null && groupResponseId === liveTurnId,
+        groupStart > 0 ? blocks[groupStart - 1] : undefined,
       ),
       ...(workedForS !== undefined ? { workedForS } : {}),
       ...(lastActivityAtS !== undefined ? { lastActivityAtS } : {}),
@@ -1503,6 +1504,10 @@ function buildAssistantItems(
   lifecycle: ActiveResponse["state"],
   crossBubbleResults: Map<string, ToolResultBlock>,
   sessionLive = false,
+  // The block just before this group (usually the user turn's message):
+  // feeds the "wait until the thought finished" duration for a reasoning
+  // section that opens the bubble and has no span of its own.
+  precedingBlock?: AnyBlock,
 ): RenderItem[] {
   // Results render only by folding into a call's card — strip them so
   // an absorbed out-of-band result can't split a text/reasoning run.
@@ -1556,7 +1561,9 @@ function buildAssistantItems(
     if (REASONING_BLOCK_TYPES.has(b.type)) {
       const start = i;
       while (i < blocks.length && REASONING_BLOCK_TYPES.has(blocks[i]!.type)) i += 1;
-      items.push(reasoningItem(blocks.slice(start, i)));
+      items.push(
+        reasoningItem(blocks.slice(start, i), start > 0 ? blocks[start - 1] : precedingBlock),
+      );
       continue;
     }
 
@@ -1749,18 +1756,33 @@ function textItem(run: AnyBlock[]): RenderItem {
   return { kind: "text", itemId: null, text, final: false };
 }
 
-function reasoningItem(run: AnyBlock[]): RenderItem {
+function reasoningItem(run: AnyBlock[], preceding?: AnyBlock): RenderItem {
   // Duration: span between the first and last block in the reasoning
-  // run. Blocks carry monotonic timestamps from `performance.now()`.
-  // Historical blocks (from `itemsToBlocks`) have `timestamp = 0`, so
-  // the diff is 0 there — surface as undefined so the renderer hides
-  // the number.
+  // run. Live blocks carry monotonic timestamps from `performance.now()`;
+  // historical blocks (from `itemsToBlocks`) have `timestamp = 0` but a
+  // server `createdAtS`, so reloaded multi-item sections still get a real
+  // span. A single settled block has no span of its own — then measure
+  // the wait from the preceding item's completion to the thought's
+  // (epoch clocks only; `performance.now` never mixes with unix time).
   const first = run[0];
   const last = run[run.length - 1];
-  const duration =
+  let duration =
     first && last && first.ctx.timestamp > 0 && last.ctx.timestamp > first.ctx.timestamp
       ? last.ctx.timestamp - first.ctx.timestamp
-      : undefined;
+      : first &&
+          last &&
+          first.ctx.createdAtS !== undefined &&
+          last.ctx.createdAtS !== undefined &&
+          last.ctx.createdAtS > first.ctx.createdAtS
+        ? last.ctx.createdAtS - first.ctx.createdAtS
+        : undefined;
+  if (duration === undefined && first !== undefined && preceding !== undefined) {
+    const prevAt = preceding.ctx.createdAtS ?? preceding.ctx.clientCreatedAtS;
+    const at = first.ctx.createdAtS ?? first.ctx.clientCreatedAtS;
+    if (prevAt !== undefined && at !== undefined && at > prevAt) {
+      duration = at - prevAt;
+    }
+  }
 
   // If chunks are present, concatenate them. Otherwise fall back to a
   // closed reasoning_block's reasoningText / summaryText.

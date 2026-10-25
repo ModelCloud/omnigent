@@ -2293,6 +2293,49 @@ describe("buildBubbles — reasoning", () => {
     const r = items[0] as Extract<RenderItem, { kind: "reasoning" }>;
     expect(r.duration).toBeUndefined();
   });
+
+  it("duration spans createdAtS on reloaded multi-item sections", () => {
+    const blocks: AnyBlock[] = [
+      {
+        type: "reasoning_block",
+        ctx: ctx({ timestamp: 0, createdAtS: 1000 }),
+        reasoningText: "first",
+        summaryText: "",
+      },
+      {
+        type: "reasoning_block",
+        ctx: ctx({ timestamp: 0, createdAtS: 1005 }),
+        reasoningText: "second",
+        summaryText: "",
+      },
+    ];
+    const bubbles = buildBubbles(blocks, null);
+    const items = (bubbles[0] as Extract<Bubble, { kind: "assistant" }>).items;
+    const r = items[0] as Extract<RenderItem, { kind: "reasoning" }>;
+    expect(r.duration).toBe(5);
+  });
+
+  it("duration measures the wait from the previous item for a single settled block", () => {
+    // A mirrored/historical thought lands as one instant — the real
+    // elapsed signal is the gap since the previous item completed.
+    const blocks: AnyBlock[] = [
+      {
+        type: "user_message",
+        ctx: ctx({ timestamp: 0, createdAtS: 1000 }),
+        content: [{ type: "input_text", text: "hi" }],
+      },
+      {
+        type: "reasoning_block",
+        ctx: ctx({ timestamp: 0, createdAtS: 1012 }),
+        reasoningText: "deep thought",
+        summaryText: "",
+      },
+    ];
+    const bubbles = buildBubbles(blocks, null);
+    const items = (bubbles[1] as Extract<Bubble, { kind: "assistant" }>).items;
+    const r = items[0] as Extract<RenderItem, { kind: "reasoning" }>;
+    expect(r.duration).toBe(12);
+  });
 });
 
 describe("buildBubbles — slash_command items", () => {
