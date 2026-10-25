@@ -14,6 +14,37 @@ from omnigent.harnesses.localdex_native.config import (
 )
 
 
+@pytest.mark.parametrize("explicit_fast", [False, True])
+def test_lithos_provider_registers_three_variants_with_one_model_label(
+    tmp_path: Path, explicit_fast: bool
+) -> None:
+    providers = tmp_path / "config.toml"
+    providers.write_text(
+        '[model_providers.lithos]\nenv_key = "LITHOS_API_KEY"\n', encoding="utf-8"
+    )
+    models_path = tmp_path / "models.toml"
+    if explicit_fast:
+        models_path.write_text(
+            '[models."deepseek-ai/DeepSeek-V4.1-Flash-fast"]\nprovider = "lithos"\n',
+            encoding="utf-8",
+        )
+    registration = load_localdex_config(providers, models_path=models_path, require_token=False)
+    rows = with_localdex_model_picker_row([], registration)
+    assert {row["modelFamily"] for row in rows} == {"ds-v4.1-flash-1017"}
+    assert {row["displayName"] for row in rows} == {"DeepSeek v4.1 Flash"}
+    assert {row["providerId"] for row in rows} == {"lithos"}
+    assert {row["variant"] for row in rows} == {"regular", "fast", "ultra"}
+    assert all(row["defaultReasoningEffort"] == "max" for row in rows)
+    assert next(row for row in rows if row["variant"] == "regular")["id"] == (
+        "deepseek-ai/DeepSeek-V4.1-Flash"
+    )
+    native = tomllib.loads(localdex_provider_config_overrides(registration)[0])["model_providers"]
+    assert "lithos" in native
+    assert "name" not in native["lithos"]
+    assert native["lithos"]["base_url"] == "https://api.lithosai.cloud/v1"
+    assert native["lithos"]["env_key"] == "LITHOS_API_KEY"
+
+
 @pytest.mark.parametrize(
     "provider_fields",
     [
@@ -60,7 +91,16 @@ def test_openrouter_registration_keeps_native_routing_and_picker_metadata(
         "supportsPersonality": False,
         "inputModalities": ["text"],
     }
-    assert with_localdex_model_picker_row([source], registration) == [source]
+    assert with_localdex_model_picker_row([source], registration) == [
+        {
+            **source,
+            "displayName": "DeepSeek v4.1 Flash",
+            "modelFamily": "ds-v4.1-flash-1017",
+            "modelLabel": "DeepSeek v4.1 Flash",
+            "providerId": "openrouter",
+            "variant": "regular",
+        }
+    ]
 
 
 def test_named_localdex_models_map_to_their_explicit_provider(tmp_path: Path) -> None:
@@ -121,7 +161,7 @@ display_name = "Lab Coder"
 
     rows = with_localdex_model_picker_row([], registration)
     assert [(row["id"], row["displayName"]) for row in rows] == [
-        ("DS v4.1 Flash 1017", "DS v4.1 Flash 1017"),
+        ("DS v4.1 Flash 1017", "DeepSeek v4.1 Flash"),
         ("lab/coder-32b", "Lab Coder"),
     ]
     assert rows[0]["isDefault"] is True
