@@ -43,32 +43,69 @@ def display_version() -> str:
 def _build_commit_sha() -> str:
     """Resolve the commit this build was cut from, or ``""``.
 
-    Prefers the ``_build_info.py`` stamp written by ``setup.py`` at wheel
-    build time; falls back to ``git rev-parse HEAD`` against the worktree
-    that contains this package.
+    A git worktree wins over ``_build_info.py``: the stamp can go stale
+    when a checkout is rebuilt rarely, while HEAD always names the code on
+    disk. The stamp is still the answer for installed wheels, which ship
+    no ``.git``.
     """
+    sha = _worktree_head_sha(allow_dirty=True)
+    if sha:
+        return sha
     try:
         from omnigent import _build_info
 
-        sha = str(_build_info.COMMIT_SHA)
-        if _is_hex_sha(sha):
-            return sha
+        stamped = str(_build_info.COMMIT_SHA)
+        if _is_hex_sha(stamped):
+            return stamped
     except (ImportError, AttributeError, TypeError):
         pass
-    return _worktree_head_sha()
+    return ""
 
 
-def _worktree_head_sha() -> str:
-    """Return the HEAD commit of the git worktree holding this package."""
+def _worktree_head_sha(*, allow_dirty: bool = False) -> str:
+    """Return the HEAD commit of the git worktree holding this package.
+
+    :param allow_dirty: Skip the clean-worktree check. A dirty worktree's
+        HEAD can still mislabel uncommitted edits, but the alternative —
+        showing a stale ``_build_info.py`` commit — is strictly worse: a
+        leftover stamp is guaranteed wrong, HEAD is usually right.
+    """
     import pathlib
     import subprocess
 
     root = pathlib.Path(__file__).resolve().parent.parent
     if not (root / ".git").exists():
         return ""
+
+    def _git(*args: str) -> str:
+        try:
+            out = subprocess.run(
+                ["git", *args],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return ""
+        return out.stdout.strip() if out.returncode == 0 else ""
+
+    sha = _git("rev-parse", "HEAD")
+    if not _is_hex_sha(sha):
+        return ""
+    if not allow_dirty and _worktree_has_changes(root):
+        return ""
+    return sha
+
+
+def _worktree_has_changes(root: object) -> bool:
+    """``True`` iff the worktree has staged or unstaged tracked changes."""
+    import subprocess
+
     try:
         out = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
+            ["git", "status", "--porcelain", "--untracked-files=no"],
             cwd=root,
             capture_output=True,
             text=True,
@@ -76,9 +113,8 @@ def _worktree_head_sha() -> str:
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return ""
-    sha = out.stdout.strip()
-    return sha if out.returncode == 0 and _is_hex_sha(sha) else ""
+        return False
+    return bool(out.stdout.strip())
 
 
 def _is_hex_sha(value: str) -> bool:
