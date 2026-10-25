@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from omnigent.harnesses.multidex_native.config import (
+    MULTIDEX_BUILTIN_PROVIDER_OVERRIDE_FIELDS,
     load_multidex_config,
     multidex_model_for_selection,
     multidex_provider_config_overrides,
@@ -20,7 +21,9 @@ def test_lithos_provider_registers_three_variants_with_one_model_label(
 ) -> None:
     providers = tmp_path / "config.toml"
     providers.write_text(
-        '[model_providers.lithos]\nenv_key = "LITHOS_API_KEY"\n', encoding="utf-8"
+        '[model_providers.lithos]\nenv_key = "LITHOS_API_KEY"\n'
+        "request_max_retries = 0\nstream_max_retries = 0\nstream_idle_timeout_ms = 900000\n",
+        encoding="utf-8",
     )
     models_path = tmp_path / "models.toml"
     if explicit_fast:
@@ -48,6 +51,7 @@ def test_lithos_provider_registers_three_variants_with_one_model_label(
     assert "name" not in native["lithos"]
     assert native["lithos"]["base_url"] == "https://api.lithosai.cloud/v1"
     assert native["lithos"]["env_key"] == "LITHOS_API_KEY"
+    assert set(native["lithos"]) <= MULTIDEX_BUILTIN_PROVIDER_OVERRIDE_FIELDS
 
 
 @pytest.mark.parametrize(
@@ -56,6 +60,7 @@ def test_lithos_provider_registers_three_variants_with_one_model_label(
         "",
         'base_url = "https://openrouter.ai/api/v1"\nenv_key = "OPENROUTER_API_KEY"\n'
         'wire_api = "responses"\nrequires_openai_auth = false\nname = "OpenRouter"\n',
+        "request_max_retries = 0\nstream_max_retries = 0\nstream_idle_timeout_ms = 900000\n",
     ],
 )
 @pytest.mark.parametrize("default_effort", ["max", "off"])
@@ -78,7 +83,7 @@ def test_openrouter_registration_keeps_native_routing_and_picker_metadata(
     provider_config = tomllib.loads(multidex_provider_config_overrides(registration)[0])[
         "model_providers"
     ]["openrouter"]
-    assert "name" not in provider_config
+    assert set(provider_config) <= MULTIDEX_BUILTIN_PROVIDER_OVERRIDE_FIELDS
     assert provider_config["env_key"] == "OPENROUTER_API_KEY"
     assert provider_config["base_url"] == "https://openrouter.ai/api/v1"
     assert provider_config["provider"] == {

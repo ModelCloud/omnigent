@@ -43,6 +43,11 @@ DEEPSEEK_SELECTOR_MODELS = {
     },
 }
 MULTIDEX_RUNTIME_CAPABILITIES_FILE = "multidex-runtime-capabilities.json"
+# MultiDex rejects any other non-default field on its built-in gateway providers.
+# ``wire_api`` and ``requires_openai_auth`` are emitted only with their default values.
+MULTIDEX_BUILTIN_PROVIDER_OVERRIDE_FIELDS = frozenset(
+    {"provider", "base_url", "auth", "http_headers", "env_key", "wire_api", "requires_openai_auth"}
+)
 
 
 def multidex_model_picker_row(
@@ -279,8 +284,12 @@ def multidex_provider_config_overrides(config: MultiDexConfig) -> tuple[str, ...
             }
         )
         if model.provider in {"openrouter", "lithos"}:
-            # The native built-in accepts routing/auth overrides, not a renamed provider.
-            provider_config.pop("name", None)
+            # Native built-ins accept routing/auth overrides, not renamed or retuned providers.
+            provider_config = {
+                key: value
+                for key, value in provider_config.items()
+                if key in MULTIDEX_BUILTIN_PROVIDER_OVERRIDE_FIELDS
+            }
         if model.provider == "multidex":
             provider_config.setdefault("supports_responses_continuation", True)
         existing = providers.get(runtime_id)
