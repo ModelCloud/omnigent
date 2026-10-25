@@ -18,7 +18,7 @@ from omnigent.harnesses.localdex_native.config import (
     "provider_fields",
     [
         "",
-        'base_url = "https://openrouter.ai/api/v1"\nenv_key = "OPENROUTER_API_KEY"\n'
+        'base_url = "https://us.openrouter.ai/api/v1"\nenv_key = "OPENROUTER_API_KEY"\n'
         'wire_api = "responses"\nrequires_openai_auth = false\nname = "OpenRouter"\n',
     ],
 )
@@ -43,7 +43,7 @@ def test_openrouter_registration_keeps_native_routing_and_picker_metadata(
     ]["openrouter"]
     assert "name" not in provider_config
     assert provider_config["env_key"] == "OPENROUTER_API_KEY"
-    assert provider_config["base_url"] == "https://openrouter.ai/api/v1"
+    assert provider_config["base_url"] == "https://us.openrouter.ai/api/v1"
     assert provider_config["provider"] == {
         "only": ["wafer/mxfp4"],
         "allow_fallbacks": False,

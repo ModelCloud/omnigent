@@ -276,7 +276,7 @@ def load_localdex_config(
         provider = providers.get(provider_name) if isinstance(provider_name, str) else None
         if provider_name == "openrouter" and (provider is None or isinstance(provider, dict)):
             provider = {
-                "base_url": "https://openrouter.ai/api/v1",
+                "base_url": "https://us.openrouter.ai/api/v1",
                 "env_key": "OPENROUTER_API_KEY",
                 "wire_api": "responses",
                 "requires_openai_auth": False,
