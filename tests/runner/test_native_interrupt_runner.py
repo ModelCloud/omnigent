@@ -55,6 +55,9 @@ class _FakeResourceRegistry:
         self.closed_terminals.append(terminal_id)
         return True
 
+    def note_external_session_status(self, conv_id: str, status: str) -> None:
+        pass
+
 
 def _make_runner(**overrides: Any) -> tuple[NativeInterruptRunner, dict[str, Any]]:
     """Build a runner with recording fakes; return it plus a capture dict."""
@@ -120,7 +123,7 @@ def _make_runner(**overrides: Any) -> tuple[NativeInterruptRunner, dict[str, Any
 
 
 def test_native_cancel_capability_follows_stop_registry() -> None:
-    """Parent cancel capability must track ``_UNIFORM_STOP`` plus Claude."""
+    """Parent cancel capability must track the uniform and dedicated stops."""
     from omnigent.native.native_coding_agents import NATIVE_CODING_AGENTS
     from omnigent.runner.native.interrupt import (
         _UNIFORM_STOP,
@@ -129,7 +132,7 @@ def test_native_cancel_capability_follows_stop_registry() -> None:
 
     for agent in NATIVE_CODING_AGENTS:
         capability = native_cancel_capability(agent.wrapper_label)
-        if agent.key == "claude" or agent.key in _UNIFORM_STOP:
+        if agent.key in ("claude", "codex") or agent.key in _UNIFORM_STOP:
             assert capability == "stop", agent.key
         else:
             assert capability == "best_effort", agent.key
@@ -575,8 +578,10 @@ async def test_pi_stop_routes_to_interrupt(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("harness", ["codex-native", "localdex-native"])
 async def test_codex_stop_interrupts_tears_down_and_goes_idle(
     monkeypatch: pytest.MonkeyPatch,
+    harness: str,
 ) -> None:
     """A codex stop interrupts, tears down the terminal + forwarder, goes idle.
 
@@ -584,24 +589,25 @@ async def test_codex_stop_interrupts_tears_down_and_goes_idle(
     app-server connection later drops, the TUI's auto-reconnect re-resumes the
     session the user just stopped.
     """
-    from omnigent.runner.native import interrupt as interrupt_mod
+    from omnigent.runner.native import orchestration
 
     cancelled_forwarders: list[str] = []
 
     async def _cancel_forwarder(session_id: str) -> None:
         cancelled_forwarders.append(session_id)
 
-    monkeypatch.setattr(interrupt_mod, "_cancel_auto_forwarder_task", _cancel_forwarder)
+    monkeypatch.setattr(orchestration, "_cancel_auto_forwarder_task", _cancel_forwarder)
 
     resource_registry = _FakeResourceRegistry()
     resource_registry.terminal_registry.entries = [
         SimpleNamespace(terminal_name="codex", session_key="s1")
     ]
     runner, captured = _make_runner(resource_registry=resource_registry)
+    captured["current_work_id"] = "work-1"
     # A stop that follows an unresolved interrupt settles it: the teardown is
     # confirmed, so no grace-timer cancel may fire later.
     runner._pending_interrupts["conv_cx"] = "work-1"
-    resp = await runner.stop("codex-native", "conv_cx")
+    resp = await runner.stop(harness, "conv_cx")
 
     assert isinstance(resp, Response) and resp.status_code == 204
     assert runner.take_pending_interrupt("conv_cx")[0] is False
@@ -613,15 +619,26 @@ async def test_codex_stop_interrupts_tears_down_and_goes_idle(
 
 
 @pytest.mark.asyncio
-async def test_codex_stop_propagates_interrupt_failure(
+@pytest.mark.parametrize(
+    "action,failure",
+    [("stop", None), ("stop", "error"), ("interrupt", "error"), ("stop", "timeout")],
+)
+async def test_codex_stop_handles_interrupt_outcomes(
     monkeypatch: pytest.MonkeyPatch,
+    action: str,
+    failure: str | None,
 ) -> None:
-    """A failed codex interrupt is surfaced; no teardown or idle is published."""
+    """A failed RPC must not prevent explicit stop from killing the processes."""
+    import asyncio
+
     from omnigent.runner.native import interrupt as interrupt_mod
+    from omnigent.runner.native import orchestration
 
     cancelled_forwarders: list[str] = []
+    closed: list[bool] = []
 
     async def _cancel_forwarder(session_id: str) -> None:
+        assert not runner._pending_interrupts, "stop must not schedule a deferred cancel"
         cancelled_forwarders.append(session_id)
 
     async def _codex_state(conv_id: str, *, action: str, **_kw: Any) -> tuple[Any | None, Path]:
@@ -637,13 +654,25 @@ async def test_codex_stop_propagates_interrupt_failure(
             return None
 
         async def request(self, method: str, params: dict[str, Any]) -> Any:
-            raise RuntimeError("app-server unreachable")
+            if failure == "timeout":
+                await asyncio.Event().wait()
+            if failure == "error":
+                raise RuntimeError("app-server unreachable")
+            return {}
 
         async def close(self) -> None:
-            return None
+            closed.append(True)
 
-    monkeypatch.setattr(interrupt_mod, "_cancel_auto_forwarder_task", _cancel_forwarder)
-    runner, captured = _make_runner(codex_bridge_state_for_session=_codex_state)
+    monkeypatch.setattr(interrupt_mod, "_CODEX_STOP_INTERRUPT_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(orchestration, "_cancel_auto_forwarder_task", _cancel_forwarder)
+    resources = _FakeResourceRegistry()
+    resources.terminal_registry.entries = [
+        SimpleNamespace(terminal_name="codex", session_key="s1")
+    ]
+    runner, captured = _make_runner(
+        codex_bridge_state_for_session=_codex_state, resource_registry=resources
+    )
+    captured["current_work_id"] = "work-1"
 
     import omnigent.harnesses.codex_native.app_server as codex_app_server
 
@@ -653,11 +682,101 @@ async def test_codex_stop_propagates_interrupt_failure(
         lambda *a, **kw: _FailingCodexClient(),
     )
 
-    resp = await runner.stop("codex-native", "conv_cf")
+    resp = await getattr(runner, action)("codex-native", "conv_cf")
 
-    assert resp is not None and resp.status_code == 503
-    assert cancelled_forwarders == []
-    assert [e for _, e in captured["published"] if e.get("status") == "idle"] == []
+    assert closed == [True]
+    assert resp is not None and resp.status_code == (204 if action == "stop" else 503)
+    assert cancelled_forwarders == (["conv_cf"] if action == "stop" else [])
+    assert bool(resources.closed_terminals) == (action == "stop")
+    assert [e for _, e in captured["published"] if e.get("status") == "idle"] == (
+        [{"type": "session.status", "status": "idle"}] if action == "stop" else []
+    )
+    assert captured["wakes"] == ([("conv_cf", "cancelled", None)] if action == "stop" else [])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [None, "terminal", "app_server"])
+async def test_codex_stop_closes_server_without_forwarder(
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str | None,
+) -> None:
+    """Stop closes an unadopted backend and never claims failed cleanup succeeded."""
+    from omnigent.runner.native import orchestration
+
+    session_id = "conv_orphan"
+    order: list[str] = []
+
+    class _Resources(_FakeResourceRegistry):
+        async def close_terminal(self, conv_id: str, terminal_id: str) -> bool:
+            order.append("terminal")
+            if failure == "terminal":
+                raise OSError("tmux unavailable")
+            return await super().close_terminal(conv_id, terminal_id)
+
+    class _AppServer:
+        async def close(self) -> None:
+            order.append("app_server")
+            if failure == "app_server":
+                raise OSError("kill failed")
+
+    server = _AppServer()
+    monkeypatch.setitem(orchestration._AUTO_CODEX_APP_SERVERS, session_id, server)
+    resources = _Resources()
+    resources.terminal_registry.entries = [
+        SimpleNamespace(terminal_name="codex", session_key="s1")
+    ]
+    runner, captured = _make_runner(resource_registry=resources)
+    captured["current_work_id"] = "work-1"
+    response = await runner.stop("codex-native", session_id)
+
+    assert response is not None and response.status_code == (503 if failure else 204)
+    assert order == ["terminal", "app_server"]
+    assert session_id not in runner._pending_interrupts
+    assert bool(captured["wakes"]) == (failure is None)
+    assert bool([e for _, e in captured["published"] if e.get("status") == "idle"]) == (
+        failure is None
+    )
+    if failure == "app_server":
+        assert orchestration._AUTO_CODEX_APP_SERVERS[session_id] is server
+    else:
+        assert session_id not in orchestration._AUTO_CODEX_APP_SERVERS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("work_id", [None, "old-work"])
+async def test_codex_stop_does_not_cancel_new_dispatch(
+    work_id: str | None,
+) -> None:
+    """A send arriving during teardown must not inherit the old stop's cancellation."""
+
+    class _Resources(_FakeResourceRegistry):
+        async def close_terminal(self, conv_id: str, terminal_id: str) -> bool:
+            captured["current_work_id"] = "new-work"
+            return await super().close_terminal(conv_id, terminal_id)
+
+    resources = _Resources()
+    resources.terminal_registry.entries = [
+        SimpleNamespace(terminal_name="codex", session_key="s1")
+    ]
+    runner, captured = _make_runner(resource_registry=resources)
+    captured["current_work_id"] = work_id
+
+    response = await runner.stop("codex-native", "conv_dispatch")
+
+    assert response is not None and response.status_code == 204
+    assert captured["wakes"] == []
+    assert captured["superseded"] == (
+        [("conv_dispatch", "cancelled", "old-work")] if work_id else []
+    )
+
+
+@pytest.mark.asyncio
+async def test_codex_stop_without_resources_is_idempotent() -> None:
+    runner, captured = _make_runner()
+    for _ in range(2):
+        response = await runner.stop("localdex-native", "conv_empty")
+        assert response is not None and response.status_code == 204
+        assert runner.take_pending_interrupt("conv_empty")[0] is False
     assert captured["wakes"] == []
 
 
