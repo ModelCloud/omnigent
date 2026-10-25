@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Literal
 
 CODEX_BUILTIN_PROVIDERS = frozenset(
-    {"openai", "amazon-bedrock", "amazon-bedrock-runtime", "ollama", "lmstudio"}
+    {"openai", "amazon-bedrock", "amazon-bedrock-runtime", "ollama", "lmstudio", "openrouter"}
 )
 _CODEX_AUTH_HEADER_NAMES = frozenset({"authorization", "api-key", "x-api-key"})
 
@@ -77,7 +77,7 @@ def effective_custom_provider_table(
 def effective_self_sufficient_builtin_provider(config: dict[str, object]) -> str | None:
     """Return the selected built-in provider id when Codex needs no login for it.
 
-    Every built-in provider except ``openai`` (Bedrock, Ollama, LM Studio)
+    Every built-in provider except ``openai`` (Bedrock, Ollama, LM Studio, OpenRouter)
     authenticates itself, mirroring :func:`codex_config_effective_auth`.
     """
     provider_id = effective_codex_model_provider(config)
@@ -133,8 +133,8 @@ def codex_config_effective_auth(
       considers provider-specific auth sufficient or unnecessary.
 
     Built-in provider definitions in ``[model_providers]`` are ignored here,
-    matching Codex's catalog merge (except Bedrock's supported endpoint/auth
-    overrides, which do not change this verdict). For example, Ollama needs no
+    matching Codex's catalog merge, except OpenRouter's overridable ``env_key``
+    and Bedrock's endpoint/auth overrides. For example, Ollama needs no
     credential; Bedrock may still fail later if its AWS credential chain is
     unavailable, which is intentionally outside this local status check.
 
@@ -157,12 +157,16 @@ def codex_config_effective_auth(
     # Configured entries cannot replace the built-in OpenAI, Ollama, or LM
     # Studio providers. Bedrock accepts only limited endpoint/auth overrides;
     # none changes whether it requires Codex login.
-    if provider_id in CODEX_BUILTIN_PROVIDERS:
+    if provider_id in CODEX_BUILTIN_PROVIDERS and provider_id != "openrouter":
         return "codex-login" if provider_id == "openai" else "provider-ready"
 
     providers = config.get("model_providers")
     configured_table = providers.get(provider_id) if isinstance(providers, dict) else None
     table = configured_table if isinstance(configured_table, dict) else None
+    if provider_id == "openrouter":
+        table = {"env_key": "OPENROUTER_API_KEY", **(table or {})}
+        if provider_table_has_self_contained_auth(table):
+            return "provider-ready"
     if table is None:
         # A selected custom provider without a table is invalid. Do not let an
         # unrelated auth.json credential mask the broken selection.

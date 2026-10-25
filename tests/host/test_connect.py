@@ -4300,8 +4300,10 @@ def test_build_runner_env_forwards_harness_credentials_and_endpoints() -> None:
     assert "MY_UNRELATED_SECRET" not in env
 
 
+@pytest.mark.parametrize("registration_present", [True, False])
 def test_build_runner_env_forwards_declared_localdex_key_to_codex_only(
     monkeypatch: pytest.MonkeyPatch,
+    registration_present: bool,
 ) -> None:
     """The local provider's configured bearer reaches its Codex runner only."""
     from omnigent.harnesses.localdex_native import config as localdex_config
@@ -4312,12 +4314,18 @@ def test_build_runner_env_forwards_declared_localdex_key_to_codex_only(
         base_url="http://10.0.13.33:2120/v1",
         env_key="LOCALDEX_API_KEY",
     )
-    monkeypatch.setattr(
-        localdex_config,
-        "load_localdex_config",
-        lambda **_kwargs: registration,
-    )
-    base = {"PATH": "/usr/bin", "LOCALDEX_API_KEY": "test-localdex-key"}
+
+    def load_config(**_kwargs: object) -> localdex_config.LocalDexConfig:
+        if not registration_present:
+            raise FileNotFoundError("no optional LocalDex registration")
+        return registration
+
+    monkeypatch.setattr(localdex_config, "load_localdex_config", load_config)
+    base = {
+        "PATH": "/usr/bin",
+        "LOCALDEX_API_KEY": "test-localdex-key",
+        "OPENROUTER_API_KEY": "test-openrouter-key",
+    }
 
     codex_env = _build_runner_env(
         base,
@@ -4338,8 +4346,10 @@ def test_build_runner_env_forwards_declared_localdex_key_to_codex_only(
         harness="claude-native",
     )
 
-    assert codex_env["LOCALDEX_API_KEY"] == "test-localdex-key"
+    assert ("LOCALDEX_API_KEY" in codex_env) is registration_present
     assert "LOCALDEX_API_KEY" not in other_env
+    assert codex_env["OPENROUTER_API_KEY"] == "test-openrouter-key"
+    assert "OPENROUTER_API_KEY" not in other_env
 
 
 def test_build_runner_env_forwards_omnigent_prefixed_harness_credentials() -> None:

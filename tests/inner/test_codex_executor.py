@@ -4576,6 +4576,8 @@ def test_materialize_codex_provider_config_leaves_builtin_provider_tables_untouc
     (codex_home / "config.toml").write_text(
         'model_provider = "amazon-bedrock"\n\n'
         '[model_providers.amazon-bedrock.aws]\nregion = "us-east-1"\n\n'
+        '[model_providers.openrouter.provider]\nonly = ["wafer/mxfp4"]\n'
+        "allow_fallbacks = false\n\n"
         '[model_providers.gateway]\nname = "Gateway"\nbase_url = "https://example.test"\n'
     )
 
@@ -4583,6 +4585,9 @@ def test_materialize_codex_provider_config_leaves_builtin_provider_tables_untouc
 
     config = tomllib.loads((codex_home / "config.toml").read_text())
     assert config["model_providers"]["amazon-bedrock"] == {"aws": {"region": "us-east-1"}}
+    assert config["model_providers"]["openrouter"] == {
+        "provider": {"only": ["wafer/mxfp4"], "allow_fallbacks": False}
+    }
     gateway = config["model_providers"]["gateway"]
     assert gateway["request_max_retries"] == RetryPolicy().max_retries
 

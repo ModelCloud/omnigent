@@ -941,13 +941,15 @@ def _build_runner_env(
     # LocalDex runner; the runner strips ambient OpenAI/Databricks credentials.
     localdex_env_vars: frozenset[str] = frozenset()
     if harness in {"codex-native", "localdex-native"}:
+        # OpenRouter is built into LocalDex and needs no optional registry entry.
+        localdex_env_vars = frozenset({"OPENROUTER_API_KEY"})
         try:
             from omnigent.harnesses.localdex_native.config import (
                 load_localdex_config,
                 localdex_models,
             )
 
-            localdex_env_vars = frozenset(
+            localdex_env_vars |= frozenset(
                 item.env_key for item in localdex_models(load_localdex_config(require_token=False))
             )
         except (OSError, ValueError):

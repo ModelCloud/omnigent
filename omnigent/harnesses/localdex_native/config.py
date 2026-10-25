@@ -106,13 +106,16 @@ def with_localdex_model_picker_row(
     models = localdex_models(config)
     registered_ids = {item.model for item in models}
     for item in models:
-        row: dict[str, object] = {
-            "id": item.model,
-            "model": item.model,
-            "displayName": item.display_name,
-        }
+        source = next(
+            (row for row in rows if row.get("id") == item.model or row.get("model") == item.model),
+            {},
+        )
+        row = dict(source)
+        row.update({"id": item.model, "model": item.model})
+        if item.display_name != item.model or not row.get("displayName"):
+            row["displayName"] = item.display_name
         if item.model == LOCALDEX_MODEL:
-            row = localdex_model_picker_row(config, item)
+            row.update(localdex_model_picker_row(config, item))
             row["isDefault"] = True
         if any(
             source.get("isDefault") is True
@@ -177,12 +180,9 @@ def localdex_models(config: LocalDexConfig) -> tuple[LocalDexModelRegistration, 
 
 def localdex_runtime_provider_id(provider: str) -> str:
     """Map a LocalDex config name into a private Codex provider namespace."""
-    # LocalDex's Codex fork routes its canonical model through the `localdex`
-    # provider id, including during `thread/settings/update`. Keep that one
-    # provider id stable so the catalog, startup config, and live model switch
-    # all resolve the same table. Other provider names remain namespaced to
-    # avoid shadowing Codex's built-in OpenAI or user-defined gateway entries.
-    if provider == "localdex":
+    # These endpoint ids are also inferred by LocalDex during live switches.
+    # Other registrations must not shadow official or gateway providers.
+    if provider in {"localdex", "openrouter"}:
         return provider
     slug = re.sub(r"[^A-Za-z0-9_-]+", "-", provider).strip("-_")[:24] or "provider"
     digest = hashlib.sha256(provider.encode("utf-8")).hexdigest()[:10]
@@ -212,6 +212,9 @@ def localdex_provider_config_overrides(config: LocalDexConfig) -> tuple[str, ...
                 "requires_openai_auth": False,
             }
         )
+        if model.provider == "openrouter":
+            # The native built-in accepts routing/auth overrides, not a renamed provider.
+            provider_config.pop("name", None)
         if model.provider == "localdex":
             provider_config.setdefault("supports_responses_continuation", True)
         existing = providers.get(runtime_id)
@@ -251,7 +254,7 @@ def load_localdex_config(
     except tomllib.TOMLDecodeError as exc:
         raise ValueError(f"LocalDex config is invalid TOML: {exc}") from exc
 
-    providers = document.get("model_providers")
+    providers = document.get("model_providers", {})
     if not isinstance(providers, dict):
         raise ValueError("LocalDex config requires [model_providers.<provider>]")
     try:
@@ -271,6 +274,14 @@ def load_localdex_config(
             raise ValueError("LocalDex model entries must be named tables")
         provider_name = model.get("provider")
         provider = providers.get(provider_name) if isinstance(provider_name, str) else None
+        if provider_name == "openrouter" and (provider is None or isinstance(provider, dict)):
+            provider = {
+                "base_url": "https://openrouter.ai/api/v1",
+                "env_key": "OPENROUTER_API_KEY",
+                "wire_api": "responses",
+                "requires_openai_auth": False,
+                **(provider or {}),
+            }
         if not isinstance(provider, dict):
             raise ValueError(f"LocalDex model {model_id!r} references an unknown provider")
         forbidden_provider_fields = {
