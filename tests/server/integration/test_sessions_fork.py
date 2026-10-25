@@ -543,6 +543,50 @@ async def test_fork_stale_localdex_session_switches_agents(
     assert unchanged_source.harness_override == stale_harness
 
 
+@pytest.mark.parametrize(
+    "stale_harness",
+    ["localdex", "localdex-native", "localdex-native-ui"],
+)
+async def test_fork_session_with_stale_harness_override_clears_it(
+    client: httpx.AsyncClient,
+    db_uri: str,
+    stale_harness: str,
+) -> None:
+    """A stale per-session harness override must not poison a manual recovery fork.
+
+    Old rows can keep a ``localdex*`` override even after their bound agent has
+    been replaced by the renamed MultiDex bundle. Forking that same supported
+    agent is the manual recovery path; the clone must bind the agent's current
+    harness instead of copying the retired override.
+    """
+    agent = await create_test_agent(
+        client,
+        name="multidex-agent",
+        executor={"type": "omnigent", "config": {"harness": "codex-native"}},
+    )
+    source = await _create_session(client, agent["id"], title="Stale override")
+    store = SqlAlchemyConversationStore(db_uri)
+    store.update_conversation(
+        source["id"],
+        harness_override=stale_harness,
+        model_override="DS v4.1 Flash 1017",
+        reasoning_effort="none",
+    )
+
+    resp = await client.post(
+        f"/v1/sessions/{source['id']}/fork",
+        json={"agent_id": agent["id"]},
+    )
+    assert resp.status_code == 201, f"{resp.status_code} {resp.text}"
+    fork = resp.json()
+    assert fork["harness"] == "codex-native"
+    assert fork["model_override"] is None
+    assert fork["reasoning_effort"] is None
+    fork_row = store.get_conversation(fork["id"])
+    assert fork_row is not None
+    assert fork_row.harness_override is None
+
+
 # ── Fork copies-vs-not-copied semantics ─────────
 
 
