@@ -3727,7 +3727,16 @@ def build_codex_native_server(
     authless_profile_env = _authless_codex_profile_env_passthrough(effective_config_profile)
     if isolated_env_keys:
         authless_profile_env = tuple(sorted(set(isolated_env_keys)))
-    explicit_provider_env = tuple(sorted(set(provider_env_keys)))
+    # The private session home receives the user's provider definitions, so its
+    # process must also receive the env_key declared by those definitions.
+    # LocalDex registrations are passed by the runner; other user providers
+    # (for example OpenRouter) come from the shared Codex config.
+    explicit_provider_env = tuple(
+        sorted(
+            set(provider_env_keys)
+            | set(_configured_provider_env_keys(config_source or _codex_home_config_source_from_env()))
+        )
+    )
     env = _clean_codex_env((*authless_profile_env, *explicit_provider_env))
     if authless_profile_env:
         # ``codex-modelcloud`` is deliberately an authless, OpenAI-compatible
@@ -3887,6 +3896,27 @@ def _native_codex_config_profile(spec: AgentSpec | None) -> str | None:
             "Codex profile names may contain only letters, numbers, underscores, and hyphens"
         )
     return profile
+
+
+def _configured_provider_env_keys(source_home: Path) -> tuple[str, ...]:
+    """Read bearer env variable names from the user's Codex provider config."""
+    import tomllib
+
+    try:
+        document = tomllib.loads((source_home / "config.toml").read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return ()
+    providers = document.get("model_providers")
+    if not isinstance(providers, dict):
+        return ()
+    names: set[str] = set()
+    for provider in providers.values():
+        if not isinstance(provider, dict):
+            continue
+        env_key = provider.get("env_key")
+        if isinstance(env_key, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", env_key):
+            names.add(env_key)
+    return tuple(sorted(names))
 
 
 def _authless_codex_profile_env_passthrough(config_profile: str | None) -> tuple[str, ...]:
