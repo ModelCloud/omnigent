@@ -24,20 +24,20 @@ class StaticModelFallback:
     discovery_gap: str
 
 
-LOCALDEX_DEEPSEEK_OPENROUTER = StaticModelFallback(
+MULTIDEX_DEEPSEEK_OPENROUTER = StaticModelFallback(
     model_ids=("deepseek/deepseek-v4.1-flash-1017",),
-    owner="LocalDex native provider selector",
+    owner="MultiDex native provider selector",
     provenance="OpenRouter model ID for the DeepSeek 1017 revision",
     discovery_gap="provider catalogs do not expose cross-provider model-family equivalence",
 )
 
-LOCALDEX_DEEPSEEK_LITHOS = StaticModelFallback(
+MULTIDEX_DEEPSEEK_LITHOS = StaticModelFallback(
     model_ids=(
         "deepseek-ai/DeepSeek-V4.1-Flash",
         "deepseek-ai/DeepSeek-V4.1-Flash-fast",
         "deepseek-ai/DeepSeek-V4.1-Flash-ultra",
     ),
-    owner="LocalDex native provider selector",
+    owner="MultiDex native provider selector",
     provenance="Lithos /models and live Chat Completions probes; deployment confirms 1017",
     discovery_gap="Lithos lists IDs without family, revision, speed or reasoning metadata",
 )

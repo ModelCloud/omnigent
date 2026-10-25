@@ -4010,7 +4010,7 @@ def test_populate_codex_home_config_config_toml_copy_is_isolated(tmp_path: Path)
 
 
 def test_populate_codex_home_config_adds_provider_to_resumed_session(tmp_path: Path) -> None:
-    """A stale private home can resume after its source gains LocalDex."""
+    """A stale private home can resume after its source gains MultiDex."""
     import tomllib
 
     from omnigent.inner.codex_executor import _populate_codex_home_config
@@ -4019,7 +4019,7 @@ def test_populate_codex_home_config_adds_provider_to_resumed_session(tmp_path: P
     source.mkdir()
     (source / "config.toml").write_text(
         'model = "gpt-5.6-sol"\n'
-        "[model_providers.localdex]\n"
+        "[model_providers.multidex]\n"
         'base_url = "http://10.0.13.33:2120/v1"\n'
         'env_key = "CODEX_LOCAL_OPENAI_API_KEY"\n'
         'wire_api = "responses"\n'
@@ -4027,7 +4027,7 @@ def test_populate_codex_home_config_adds_provider_to_resumed_session(tmp_path: P
     target = tmp_path / "private_codex_home"
     target.mkdir()
     (target / "config.toml").write_text(
-        'model_provider = "localdex"\nmodel = "DS v4.1 Flash 1017"\n'
+        'model_provider = "multidex"\nmodel = "DS v4.1 Flash 1017"\n'
     )
 
     _populate_codex_home_config(target, source)
@@ -4035,8 +4035,8 @@ def test_populate_codex_home_config_adds_provider_to_resumed_session(tmp_path: P
 
     config = tomllib.loads((target / "config.toml").read_text())
     assert config["model"] == "DS v4.1 Flash 1017"
-    assert config["model_provider"] == "localdex"
-    assert config["model_providers"]["localdex"]["base_url"] == "http://10.0.13.33:2120/v1"
+    assert config["model_provider"] == "multidex"
+    assert config["model_providers"]["multidex"]["base_url"] == "http://10.0.13.33:2120/v1"
     assert "model_providers" in tomllib.loads((source / "config.toml").read_text())
 
 
@@ -5763,8 +5763,8 @@ def test_run_turn_clears_stale_gateway_error_at_turn_start():
     _run(_t())
 
 
-def test_materialize_localdex_provider_enables_responses_continuation(tmp_path: Path) -> None:
-    """Stale private LocalDex homes retain server-side Responses continuation."""
+def test_materialize_multidex_provider_enables_responses_continuation(tmp_path: Path) -> None:
+    """Stale private MultiDex homes retain server-side Responses continuation."""
     import tomllib
 
     from omnigent.inner.codex_executor import materialize_codex_provider_config
@@ -5772,10 +5772,10 @@ def test_materialize_localdex_provider_enables_responses_continuation(tmp_path: 
     codex_home = tmp_path / "codex-home"
     codex_home.mkdir()
     (codex_home / "config.toml").write_text(
-        """[model_providers.localdex]
-name = "LocalDex"
+        """[model_providers.multidex]
+name = "MultiDex"
 base_url = "http://10.0.13.33:2120/v1"
-env_key = "LOCALDEX_API_KEY"
+env_key = "MULTIDEX_API_KEY"
 wire_api = "responses"
 requires_openai_auth = false
 """
@@ -5784,7 +5784,7 @@ requires_openai_auth = false
     materialize_codex_provider_config(codex_home, [])
 
     config = tomllib.loads((codex_home / "config.toml").read_text())
-    assert config["model_providers"]["localdex"]["supports_responses_continuation"] is True
+    assert config["model_providers"]["multidex"]["supports_responses_continuation"] is True
 
 
 # A launcher certificate error plus a connection retry must fail the turn promptly.

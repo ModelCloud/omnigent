@@ -41,9 +41,6 @@ _BY_TERMINAL_NAME = {agent.terminal_name: agent for agent in NATIVE_CODING_AGENT
 # callers that need one specific built-in a stable name.)
 CLAUDE_NATIVE_AGENT_NAME = CLAUDE_NATIVE_CODING_AGENT.agent_name
 CODEX_NATIVE_AGENT_NAME = CODEX_NATIVE_CODING_AGENT.agent_name
-# Kept as a migration identifier for older persisted sessions. New sessions
-# use CODEX_NATIVE_AGENT_NAME and the same Codex-compatible harness identity.
-LOCALDEX_NATIVE_AGENT_NAME = "localdex-native-ui"
 PI_NATIVE_AGENT_NAME = PI_NATIVE_CODING_AGENT.agent_name
 OPENCODE_NATIVE_AGENT_NAME = OPENCODE_NATIVE_CODING_AGENT.agent_name
 CURSOR_NATIVE_AGENT_NAME = CURSOR_NATIVE_CODING_AGENT.agent_name
@@ -54,19 +51,10 @@ ANTIGRAVITY_NATIVE_AGENT_NAME = ANTIGRAVITY_NATIVE_CODING_AGENT.agent_name
 QWEN_NATIVE_AGENT_NAME = QWEN_NATIVE_CODING_AGENT.agent_name
 KIMI_NATIVE_AGENT_NAME = KIMI_NATIVE_CODING_AGENT.agent_name
 
-# Persisted sessions from the retired LocalDex wrapper resolve to the one
-# LocalDex-branded Codex-compatible metadata row.
-_LEGACY_CODEX_AGENT_NAMES = {LOCALDEX_NATIVE_AGENT_NAME}
-_LEGACY_CODEX_WRAPPER_LABELS = {"localdex-native-ui"}
-_LEGACY_CODEX_TERMINAL_NAMES = {"localdex"}
-
 
 def native_coding_agent_for_agent_name(name: str | None) -> NativeCodingAgent | None:
     """Return the native coding-agent metadata for *name*, if any."""
-    normalized = name or ""
-    if normalized in _LEGACY_CODEX_AGENT_NAMES:
-        return CODEX_NATIVE_CODING_AGENT
-    return _BY_AGENT_NAME.get(normalized)
+    return _BY_AGENT_NAME.get(name or "")
 
 
 def public_agent_name(name: str | None) -> str | None:
@@ -100,18 +88,12 @@ def native_coding_agent_for_harness(harness: str | None) -> NativeCodingAgent | 
 
 def native_coding_agent_for_wrapper_label(wrapper: str | None) -> NativeCodingAgent | None:
     """Return the native coding-agent metadata for *wrapper*, if any."""
-    normalized = wrapper or ""
-    if normalized in _LEGACY_CODEX_WRAPPER_LABELS:
-        return CODEX_NATIVE_CODING_AGENT
-    return _BY_WRAPPER_LABEL.get(normalized)
+    return _BY_WRAPPER_LABEL.get(wrapper or "")
 
 
 def native_coding_agent_for_terminal_name(name: str | None) -> NativeCodingAgent | None:
     """Return the native coding-agent metadata for *name*, if any."""
-    normalized = name or ""
-    if normalized in _LEGACY_CODEX_TERMINAL_NAMES:
-        return CODEX_NATIVE_CODING_AGENT
-    return _BY_TERMINAL_NAME.get(normalized)
+    return _BY_TERMINAL_NAME.get(name or "")
 
 
 def native_shell_terminal_spec() -> dict[str, dict[str, object]]:

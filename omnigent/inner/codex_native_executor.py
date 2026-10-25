@@ -593,26 +593,26 @@ async def _inject_codex_turn_once(
     )
 
 
-async def _localdex_runtime_settings_overrides(
+async def _multidex_runtime_settings_overrides(
     state: CodexNativeBridgeState,
     settings_overrides: Mapping[str, object],
 ) -> dict[str, object]:
-    """Attach a freshly-discovered LocalDex context budget to a new turn.
+    """Attach a freshly-discovered MultiDex context budget to a new turn.
 
-    LocalDex deployments can change their serving context window without a
+    MultiDex deployments can change their serving context window without a
     client upgrade.  Query only when the target is the configured local model;
     the app-server uses this runtime value for pre-turn compaction instead of
     trusting bundled metadata. Official Codex models never read this
-    LocalDex-specific session file, so their routing and limits stay intact.
+    MultiDex-specific session file, so their routing and limits stay intact.
     """
-    from omnigent.harnesses.localdex_native.config import (
-        LOCALDEX_MODEL,
-        clear_localdex_runtime_capabilities,
-        fetch_localdex_runtime_capabilities,
-        load_localdex_config,
-        localdex_model_for_selection,
-        localdex_runtime_provider_id,
-        write_localdex_runtime_capabilities,
+    from omnigent.harnesses.multidex_native.config import (
+        MULTIDEX_MODEL,
+        clear_multidex_runtime_capabilities,
+        fetch_multidex_runtime_capabilities,
+        load_multidex_config,
+        multidex_model_for_selection,
+        multidex_runtime_provider_id,
+        write_multidex_runtime_capabilities,
     )
 
     overrides = dict(settings_overrides)
@@ -625,47 +625,47 @@ async def _localdex_runtime_settings_overrides(
     try:
         # Official models do not need the local endpoint's bearer token. Read
         # the additive registration first, then require that token only when
-        # the target is the LocalDex model.
-        localdex = load_localdex_config(require_token=False)
+        # the target is the MultiDex model.
+        multidex = load_multidex_config(require_token=False)
     except (FileNotFoundError, ValueError) as exc:
-        # A normal Codex session never needs LocalDex registration.  An
-        # explicitly selected LocalDex model must fail closed instead of
+        # A normal Codex session never needs MultiDex registration.  An
+        # explicitly selected MultiDex model must fail closed instead of
         # silently using fallback metadata or another provider.
-        if target_model == LOCALDEX_MODEL:
-            raise RuntimeError("LocalDex local-provider configuration is unavailable") from exc
-        localdex = None
+        if target_model == MULTIDEX_MODEL:
+            raise RuntimeError("MultiDex local-provider configuration is unavailable") from exc
+        multidex = None
 
-    if localdex is not None:
-        registration = localdex_model_for_selection(localdex, target_model)
+    if multidex is not None:
+        registration = multidex_model_for_selection(multidex, target_model)
         if registration is not None:
             if not os.environ.get(registration.env_key):
                 raise RuntimeError(
-                    f"LocalDex bearer environment variable {registration.env_key!r} is not set"
+                    f"MultiDex bearer environment variable {registration.env_key!r} is not set"
                 )
             if has_model_selection:
-                overrides["modelProvider"] = localdex_runtime_provider_id(registration.provider)
-            if registration.discover_capabilities or registration.model == LOCALDEX_MODEL:
+                overrides["modelProvider"] = multidex_runtime_provider_id(registration.provider)
+            if registration.discover_capabilities or registration.model == MULTIDEX_MODEL:
                 selected_config = dataclasses.replace(
-                    localdex,
+                    multidex,
                     local_model=registration.model,
                     provider=registration.provider,
                     base_url=registration.base_url,
                     env_key=registration.env_key,
                 )
                 try:
-                    capabilities = await fetch_localdex_runtime_capabilities(selected_config)
+                    capabilities = await fetch_multidex_runtime_capabilities(selected_config)
                 except RuntimeError:
-                    clear_localdex_runtime_capabilities(Path(state.codex_home))
+                    clear_multidex_runtime_capabilities(Path(state.codex_home))
                     _logger.warning(
-                        "LocalDex capability discovery failed; using conservative fallback"
+                        "MultiDex capability discovery failed; using conservative fallback"
                     )
                 else:
-                    write_localdex_runtime_capabilities(
+                    write_multidex_runtime_capabilities(
                         Path(state.codex_home), selected_config, capabilities
                     )
         else:
             # A model picker change must move both pieces of routing state.
-            # Restore the provider resolved for the non-LocalDex model.
+            # Restore the provider resolved for the non-MultiDex model.
             if has_model_selection and "modelProvider" not in overrides:
                 current_provider = pending.get(
                     "modelProvider"
@@ -673,12 +673,12 @@ async def _localdex_runtime_settings_overrides(
                 provider = state.default_model_provider or current_provider
                 local_provider_names = {
                     name
-                    for item in localdex.models
-                    for name in (item.provider, localdex_runtime_provider_id(item.provider))
+                    for item in multidex.models
+                    for name in (item.provider, multidex_runtime_provider_id(item.provider))
                 } | {
-                    "localdex",
-                    localdex.provider,
-                    localdex_runtime_provider_id(localdex.provider),
+                    "multidex",
+                    multidex.provider,
+                    multidex_runtime_provider_id(multidex.provider),
                 }
                 if provider in local_provider_names:
                     provider = None
@@ -686,7 +686,7 @@ async def _localdex_runtime_settings_overrides(
                     overrides["modelProvider"] = provider
                 elif (
                     current_provider in local_provider_names
-                    or localdex_model_for_selection(localdex, current_model) is not None
+                    or multidex_model_for_selection(multidex, current_model) is not None
                 ):
                     overrides["modelProvider"] = "openai"
     return overrides
@@ -750,10 +750,10 @@ class CodexNativeExecutor(Executor):
             if client is None:
                 return False
             try:
-                # A steer can become a fresh sampling step after LocalDex
+                # A steer can become a fresh sampling step after MultiDex
                 # preempts the in-flight request, so refresh its live capacity
                 # before handing the input to app-server as well.
-                runtime_settings_overrides = await _localdex_runtime_settings_overrides(state, {})
+                runtime_settings_overrides = await _multidex_runtime_settings_overrides(state, {})
                 await _inject_codex_turn(
                     client,
                     bridge_dir=self._bridge_dir,
@@ -1034,7 +1034,7 @@ class CodexNativeExecutor(Executor):
                                     },
                                 )
                             runtime_settings_overrides = (
-                                await _localdex_runtime_settings_overrides(
+                                await _multidex_runtime_settings_overrides(
                                     state, settings_overrides
                                 )
                             )

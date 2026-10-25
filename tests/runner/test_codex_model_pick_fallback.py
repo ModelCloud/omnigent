@@ -36,17 +36,17 @@ _RETIRED_PICK = "gpt-5.4-retired"
 
 
 @pytest.fixture(autouse=True)
-def _isolate_machine_localdex_installation(
+def _isolate_machine_multidex_installation(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Tests must not inherit the developer's installed LocalDex config or CLI."""
-    from omnigent.harnesses.localdex_native import config as localdex_config
+    """Tests must not inherit the developer's installed MultiDex config or CLI."""
+    from omnigent.harnesses.multidex_native import config as multidex_config
 
     def _missing_config(**_kwargs: object) -> None:
-        raise FileNotFoundError("LocalDex configuration is not part of this test")
+        raise FileNotFoundError("MultiDex configuration is not part of this test")
 
-    monkeypatch.setattr(localdex_config, "LOCALDEX_BINARY", tmp_path / "missing-localdex")
-    monkeypatch.setattr(localdex_config, "load_localdex_config", _missing_config)
+    monkeypatch.setattr(multidex_config, "MULTIDEX_BINARY", tmp_path / "missing-multidex")
+    monkeypatch.setattr(multidex_config, "load_multidex_config", _missing_config)
 
 
 @dataclass
@@ -525,23 +525,23 @@ async def test_generic_provider_fallback_rebuilds_model_config_overrides(
 
 
 @pytest.mark.asyncio
-async def test_localdex_install_preserves_nonlocal_codex_launch(
+async def test_multidex_install_preserves_nonlocal_codex_launch(
     codex_launch_harness: _LaunchHarness, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """An installed LocalDex binary must not rewrite a normal Codex provider."""
-    from omnigent.harnesses.localdex_native import config as localdex_config
+    """An installed MultiDex binary must not rewrite a normal Codex provider."""
+    from omnigent.harnesses.multidex_native import config as multidex_config
 
     harness = codex_launch_harness
-    binary = tmp_path / "localdex"
+    binary = tmp_path / "multidex"
     binary.touch()
-    local = localdex_config.LocalDexConfig(
-        local_model=localdex_config.LOCALDEX_MODEL,
-        provider="localdex",
+    local = multidex_config.MultiDexConfig(
+        local_model=multidex_config.MULTIDEX_MODEL,
+        provider="multidex",
         base_url="http://127.0.0.1:2120",
         env_key="BEARER_TOKEN",
     )
-    monkeypatch.setattr(localdex_config, "LOCALDEX_BINARY", binary)
-    monkeypatch.setattr(localdex_config, "load_localdex_config", lambda **_kwargs: local)
+    monkeypatch.setattr(multidex_config, "MULTIDEX_BINARY", binary)
+    monkeypatch.setattr(multidex_config, "load_multidex_config", lambda **_kwargs: local)
     harness.app_server.client_identity = "test-codex"
     harness.snapshot["model_override"] = "gateway-model"
 
@@ -568,35 +568,35 @@ async def test_localdex_install_preserves_nonlocal_codex_launch(
     build = harness.builds[0]
     assert build["codex_path"] == str(binary)
     assert 'model_provider="gateway"' in build["extra_config_overrides"]
-    assert 'model_provider="localdex"' not in build["extra_config_overrides"]
+    assert 'model_provider="multidex"' not in build["extra_config_overrides"]
     assert "show_raw_agent_reasoning=true" in build["extra_config_overrides"]
     assert 'model_reasoning_summary="auto"' in build["extra_config_overrides"]
-    # The registered LocalDex key is available for an in-session model switch;
+    # The registered MultiDex key is available for an in-session model switch;
     # ordinary Codex routing remains on the resolved gateway provider.
     assert build["isolated_env_keys"] == ()
     assert build["provider_env_keys"] == ("BEARER_TOKEN",)
 
 
 @pytest.mark.asyncio
-async def test_localdex_model_passes_only_declared_bearer_key(
+async def test_multidex_model_passes_only_declared_bearer_key(
     codex_launch_harness: _LaunchHarness, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """The local provider receives its declared key without disabling Codex auth."""
-    from omnigent.harnesses.localdex_native import config as localdex_config
+    from omnigent.harnesses.multidex_native import config as multidex_config
 
     harness = codex_launch_harness
-    binary = tmp_path / "localdex"
+    binary = tmp_path / "multidex"
     binary.touch()
-    local = localdex_config.LocalDexConfig(
-        local_model=localdex_config.LOCALDEX_MODEL,
-        provider="localdex",
+    local = multidex_config.MultiDexConfig(
+        local_model=multidex_config.MULTIDEX_MODEL,
+        provider="multidex",
         base_url="http://127.0.0.1:2120",
         env_key="BEARER_TOKEN",
     )
-    monkeypatch.setattr(localdex_config, "LOCALDEX_BINARY", binary)
-    monkeypatch.setattr(localdex_config, "LOCALDEX_CONFIG_ROOT", tmp_path / "localdex-home")
-    monkeypatch.setattr(localdex_config, "load_localdex_config", lambda **_kwargs: local)
-    monkeypatch.setenv("BEARER_TOKEN", "test-localdex-token")
+    monkeypatch.setattr(multidex_config, "MULTIDEX_BINARY", binary)
+    monkeypatch.setattr(multidex_config, "MULTIDEX_CONFIG_ROOT", tmp_path / "multidex-home")
+    monkeypatch.setattr(multidex_config, "load_multidex_config", lambda **_kwargs: local)
+    monkeypatch.setenv("BEARER_TOKEN", "test-multidex-token")
     harness.app_server.client_identity = "test-codex"
     harness.snapshot["model_override"] = local.local_model
 
@@ -606,28 +606,28 @@ async def test_localdex_model_passes_only_declared_bearer_key(
     assert build["isolated_env_keys"] == ()
     assert build["provider_env_keys"] == ("BEARER_TOKEN",)
     assert build["bridge_openai_auth"] is True
-    assert any("[model_providers.localdex]" in value for value in build["extra_config_overrides"])
-    assert 'model_provider="localdex"' in build["extra_config_overrides"]
+    assert any("[model_providers.multidex]" in value for value in build["extra_config_overrides"])
+    assert 'model_provider="multidex"' in build["extra_config_overrides"]
     assert "show_raw_agent_reasoning=true" in build["extra_config_overrides"]
     assert 'model_reasoning_summary="none"' in build["extra_config_overrides"]
     assert 'model_reasoning_summary="auto"' not in build["extra_config_overrides"]
 
 
 @pytest.mark.asyncio
-async def test_invalid_localdex_registration_falls_back_for_stock_model(
+async def test_invalid_multidex_registration_falls_back_for_stock_model(
     codex_launch_harness: _LaunchHarness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A stale optional registration cannot block a normal Codex launch."""
-    from omnigent.harnesses.localdex_native import config as localdex_config
+    from omnigent.harnesses.multidex_native import config as multidex_config
 
     harness = codex_launch_harness
     harness.app_server.client_identity = "test-codex"
     harness.snapshot["model_override"] = "gateway-model"
 
-    def invalid_config(**_kwargs: object) -> localdex_config.LocalDexConfig:
-        raise ValueError("obsolete LocalDex registration")
+    def invalid_config(**_kwargs: object) -> multidex_config.MultiDexConfig:
+        raise ValueError("obsolete MultiDex registration")
 
-    monkeypatch.setattr(localdex_config, "load_localdex_config", invalid_config)
+    monkeypatch.setattr(multidex_config, "load_multidex_config", invalid_config)
     harness.seed_catalog([{"id": "gateway-model", "isDefault": True}])
 
     await harness.launch()

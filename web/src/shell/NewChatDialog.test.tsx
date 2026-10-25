@@ -4134,16 +4134,18 @@ describe("NewChatLandingScreen", () => {
     expect(attach).toHaveClass("size-8", "md:size-7");
     expect(hostChip).toHaveClass(
       "h-8",
-      "gap-0.5",
+      "gap-1",
       "rounded-lg",
       "bg-transparent",
-      "w-11",
-      "pl-1",
+      "w-auto",
+      "pl-1.5",
       "pr-2",
+      "text-xs",
       "md:h-7",
     );
     expect(hostChip).toHaveClass("justify-center");
     expect(hostChip).toHaveAccessibleName("Host: This machine, Online");
+    expect(hostChip.textContent).toContain("This machine");
     expect(hostChip).not.toHaveAttribute("title");
     expect(permission).toHaveClass(
       "h-8",
@@ -4769,7 +4771,7 @@ describe("NewChatLandingScreen", () => {
         fireEvent.click(screen.getByTestId("new-chat-landing-harness-more"));
       }
 
-      if (["claude", "codex", "localdex", "pi", "devin"].includes(native.key)) {
+      if (["claude", "codex", "multidex", "pi", "devin"].includes(native.key)) {
         fireEvent.click(screen.getByTestId(`new-chat-landing-agent-config-${agentId}`));
         expect(screen.getByTestId("new-chat-landing-agent-models")).toBeVisible();
         expect(screen.getByTestId("new-chat-landing-agent-efforts")).toBeVisible();
@@ -6878,10 +6880,11 @@ describe("NewChatLandingScreen", () => {
     );
     expect(screen.getByTestId("new-chat-landing-host-chip")).toHaveClass(
       "h-8",
-      "gap-0.5",
-      "w-11",
-      "pl-1",
+      "gap-1",
+      "w-auto",
+      "pl-1.5",
       "pr-2",
+      "text-xs",
       "bg-transparent",
       "md:h-7",
     );
@@ -10734,7 +10737,7 @@ describe("NewChatLandingScreen Smart Routing harness row", () => {
 
     const notice = await screen.findByTestId("new-chat-landing-smart-routing-dropped");
     expect(notice.textContent).toContain(
-      "needs LocalDex running on the workspace Unity Gateway on machine-2",
+      "needs MultiDex running on the workspace Unity Gateway on machine-2",
     );
   });
 
@@ -10976,7 +10979,7 @@ describe("NewChatLandingScreen Smart Routing harness row", () => {
     expect(notice.textContent).toContain("Claude Code");
     // Names the arm that's actually missing on the new host, not a generic
     // "both arms" line that would send the user looking at the wrong CLI.
-    expect(notice.textContent).toContain("needs LocalDex ready on machine-2");
+    expect(notice.textContent).toContain("needs MultiDex ready on machine-2");
     expect(notice.textContent).not.toContain("Claude Code and Codex");
 
     // The selected fallback row now opens its integrated config submenu; the

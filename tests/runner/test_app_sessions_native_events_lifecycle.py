@@ -1435,18 +1435,18 @@ async def test_codex_native_model_options_query_model_list(
     The Web UI must not carry its own Codex model / effort catalog. The
     runner is the process that can reach the session's Codex app-server, so
     this endpoint should ask Codex for models and return those model objects
-    for the AP snapshot, changing only which one is marked default. Codex's
+    for the AP snapshot, canonicalizing Off and marking the default. Codex's
     own ``isDefault`` is its built-in preference and says nothing about this
     session, so the model named by the session's ``config.toml`` — the one
     the pane launched on — wins when the list offers it.
     """
     from omnigent.harnesses.codex_native import app_server as codex_native_app_server
-    from omnigent.harnesses.localdex_native import config as localdex_config
+    from omnigent.harnesses.multidex_native import config as multidex_config
 
-    def _no_localdex_config(**_kwargs: object) -> Any:
-        raise FileNotFoundError("test deliberately has no LocalDex registration")
+    def _no_multidex_config(**_kwargs: object) -> Any:
+        raise FileNotFoundError("test deliberately has no MultiDex registration")
 
-    monkeypatch.setattr(localdex_config, "load_localdex_config", _no_localdex_config)
+    monkeypatch.setattr(multidex_config, "load_multidex_config", _no_multidex_config)
 
     monkeypatch.setenv("OMNIGENT_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setattr(
@@ -1511,8 +1511,9 @@ async def test_codex_native_model_options_query_model_list(
                         "id": "gpt-5.5",
                         "model": "databricks-gpt-5-5",
                         "displayName": "GPT-5.5",
-                        "defaultReasoningEffort": "high",
+                        "defaultReasoningEffort": "off",
                         "supportedReasoningEfforts": [
+                            {"reasoningEffort": "off", "description": "Off"},
                             {"reasoningEffort": "low", "description": "Low"},
                             {"reasoningEffort": "medium", "description": "Medium"},
                         ],
@@ -1584,8 +1585,9 @@ async def test_codex_native_model_options_query_model_list(
             "id": "gpt-5.5",
             "model": "databricks-gpt-5-5",
             "displayName": "GPT-5.5",
-            "defaultReasoningEffort": "high",
+            "defaultReasoningEffort": "none",
             "supportedReasoningEfforts": [
+                {"reasoningEffort": "none", "description": "Off"},
                 {"reasoningEffort": "low", "description": "Low"},
                 {"reasoningEffort": "medium", "description": "Medium"},
             ],
@@ -1619,13 +1621,13 @@ async def test_codex_native_model_options_query_model_list(
 
 
 @pytest.mark.asyncio
-async def test_codex_native_model_options_enriches_stale_localdex_row(
+async def test_codex_native_model_options_enriches_stale_multidex_row(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """The live picker repairs an older id-only LocalDex catalog row."""
+    """The live picker repairs an older id-only MultiDex catalog row."""
     from omnigent.harnesses.codex_native import app_server as codex_native_app_server
-    from omnigent.harnesses.localdex_native import config as localdex_config
+    from omnigent.harnesses.multidex_native import config as multidex_config
     from omnigent.spec.types import ExecutorSpec
 
     conv_id = "d2b9d8bdad5c4f52a64f7cc149c2be1b"
@@ -1643,13 +1645,13 @@ async def test_codex_native_model_options_enriches_stale_localdex_row(
             active_turn_id=None,
         ),
     )
-    registration = localdex_config.LocalDexConfig(
-        local_model=localdex_config.LOCALDEX_MODEL,
-        provider="localdex",
+    registration = multidex_config.MultiDexConfig(
+        local_model=multidex_config.MULTIDEX_MODEL,
+        provider="multidex",
         base_url="http://10.0.13.33:2120/v1",
-        env_key="LOCALDEX_TEST_BEARER",
+        env_key="MULTIDEX_TEST_BEARER",
     )
-    monkeypatch.setattr(localdex_config, "load_localdex_config", lambda **_kwargs: registration)
+    monkeypatch.setattr(multidex_config, "load_multidex_config", lambda **_kwargs: registration)
 
     async def _fake_auto_create_codex(
         session_id: str, resource_registry: Any, publish_event: Any, **kwargs: Any
@@ -1718,7 +1720,7 @@ async def test_codex_native_model_options_enriches_stale_localdex_row(
         response = await client.get(f"/v1/sessions/{conv_id}/codex-model-options")
 
     assert response.status_code == 200, response.text
-    expected_local_row = localdex_config.localdex_model_picker_row(registration)
+    expected_local_row = multidex_config.multidex_model_picker_row(registration)
     assert {
         key: response.json()["models"][0][key] for key in expected_local_row
     } == expected_local_row
@@ -1744,8 +1746,8 @@ async def test_codex_model_catalog_writeback_uses_session_provider(
 
     # This scenario uses only the upstream account catalog.
     monkeypatch.setattr(
-        "omnigent.harnesses.localdex_native.config.load_localdex_config",
-        Mock(side_effect=FileNotFoundError("No LocalDex registration in this scenario")),
+        "omnigent.harnesses.multidex_native.config.load_multidex_config",
+        Mock(side_effect=FileNotFoundError("No MultiDex registration in this scenario")),
     )
 
     cfg = tmp_path / "databrickscfg"

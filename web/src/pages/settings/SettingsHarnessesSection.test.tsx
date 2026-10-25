@@ -361,9 +361,9 @@ describe("Harnesses grid", () => {
     hosts = [ONLINE];
     renderHarnesses();
 
-    fireEvent.change(screen.getByTestId("harness-search"), { target: { value: "localdex" } });
+    fireEvent.change(screen.getByTestId("harness-search"), { target: { value: "multidex" } });
 
-    expect(screen.getByText("LocalDex")).toBeTruthy();
+    expect(screen.getByText("MultiDex")).toBeTruthy();
     expect(screen.queryByText("Claude Code")).toBeNull();
   });
 
@@ -414,7 +414,7 @@ describe("Harness card navigation", () => {
 
     fireEvent.click(screen.getByTestId("harness-settings-codex-native"));
     expect(selected("Settings")).toBe("true");
-    expect(screen.getByText(/LocalDex can’t sign in on my-laptop/)).toBeTruthy();
+    expect(screen.getByText(/MultiDex can’t sign in on my-laptop/)).toBeTruthy();
   });
 });
 
@@ -507,7 +507,7 @@ describe("Harness details", () => {
     hosts = [ONLINE];
     renderHarnesses("codex-native");
 
-    expect(screen.getByText(/LocalDex can’t sign in on my-laptop/)).toBeTruthy();
+    expect(screen.getByText(/MultiDex can’t sign in on my-laptop/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Reconfigure" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Reconfigure credential" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: /MCP servers/ })).toBeTruthy();
@@ -572,7 +572,7 @@ describe("Harness details", () => {
     renderHarnesses("codex-native");
 
     expect(
-      screen.getByText("LocalDex isn’t working on my-laptop. Run setup again to fix it."),
+      screen.getByText("MultiDex isn’t working on my-laptop. Run setup again to fix it."),
     ).toBeTruthy();
     expect(screen.queryByText(/credential is missing/)).toBeNull();
   });
@@ -586,7 +586,7 @@ describe("Harness details", () => {
     fireEvent.click(screen.getByRole("button", { name: "Reconfigure" }));
     fireEvent.click(screen.getByRole("button", { name: "Complete fix" }));
 
-    expect(screen.getByText("LocalDex is ready on my-laptop. Checked just now.")).toBeTruthy();
+    expect(screen.getByText("MultiDex is ready on my-laptop. Checked just now.")).toBeTruthy();
     expect(screen.getByText("· Isaac")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Reconfigure" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Reconfigure credential" })).toBeNull();
@@ -603,7 +603,7 @@ describe("Harness details", () => {
     hosts = [ONLINE];
     renderHarnesses("codex-native");
 
-    expect(screen.getByText(/Set up LocalDex on my-laptop/)).toBeTruthy();
+    expect(screen.getByText(/Set up MultiDex on my-laptop/)).toBeTruthy();
     expect(screen.queryByText("Machine")).toBeNull();
     expect(screen.queryByRole("tab", { name: /MCP servers/ })).toBeNull();
     expect(screen.queryByRole("button", { name: "Reconfigure" })).toBeNull();

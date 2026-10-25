@@ -26,9 +26,9 @@ const AGENTS: AvailableAgent[] = [
     harness: "claude-native",
   }),
   agent({
-    id: "agent-localdex",
+    id: "agent-multidex",
     name: "codex-native-ui",
-    display_name: "LocalDex",
+    display_name: "MultiDex",
     harness: "codex-native",
   }),
   agent({
@@ -99,15 +99,15 @@ export const Create: Story = {
   render: () => <DialogStory />,
 };
 
-/** LocalDex picked: model + effort show without the Claude-only permission row. */
+/** MultiDex picked: model + effort show without the Claude-only permission row. */
 export const CodexHarness: Story = {
   render: () => <DialogStory />,
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement.ownerDocument.body);
     const trigger = canvas.getByTestId("task-agent-picker").querySelector("button");
     await userEvent.click(trigger!);
-    const localdex = await canvas.findByText("LocalDex");
-    await userEvent.click(localdex);
+    const multidex = await canvas.findByText("MultiDex");
+    await userEvent.click(multidex);
     await expect(canvas.getByTestId("task-model-effort-field")).toBeInTheDocument();
     await expect(canvas.queryByTestId("task-permission-control")).not.toBeInTheDocument();
   },

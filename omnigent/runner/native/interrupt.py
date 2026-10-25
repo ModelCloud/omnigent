@@ -864,9 +864,9 @@ class NativeInterruptRunner:
         return Response(status_code=204)
 
     async def _codex_stop(self, conv_id: str) -> Response:
-        """Stop a Codex/LocalDex native session without leaving a live TUI.
+        """Stop a Codex/MultiDex native session without leaving a live TUI.
 
-        Interrupting alone leaves the ``localdex --remote`` pane attached: when
+        Interrupting alone leaves the ``multidex --remote`` pane attached: when
         its app-server connection drops it treats that as a transport error and
         its auto-reconnect resumes the thread the user just stopped.
         """

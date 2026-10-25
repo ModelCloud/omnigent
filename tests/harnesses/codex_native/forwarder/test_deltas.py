@@ -547,7 +547,7 @@ async def test_raw_reasoning_suppresses_its_summary_mirror() -> None:
     """A raw+summary mirror must reach the append-only web stream once.
 
     Inference-Ultra publishes every public thought chunk first as raw
-    ``reasoning_text`` and then as an identical summary fallback. LocalDex
+    ``reasoning_text`` and then as an identical summary fallback. MultiDex
     faithfully maps both to app-server notifications, so the forwarder—not
     the model—must select the raw representation.
     """
@@ -579,7 +579,7 @@ async def test_raw_reasoning_suppresses_its_summary_mirror() -> None:
 
 @pytest.mark.asyncio
 async def test_completed_reasoning_item_persists_public_trace_once() -> None:
-    """A LocalDex reasoning item anchors its live trace in session history.
+    """A MultiDex reasoning item anchors its live trace in session history.
 
     The raw delta is intentionally transient for first-token display, but the
     completed Codex item carries the canonical public content.  Persist it so

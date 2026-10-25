@@ -5405,7 +5405,7 @@ async def test_codex_tui_launch_keeps_user_config_when_process_cwd_is_gone(
     assert spec.command == "user-codex"
     assert spec.args[0] == "--user-arg"
     assert spec.os_env.cwd == str(workspace)
-    assert spec.env["LOCALDEX_SKIP_RESUME_GOAL_PROMPT"] == "1"
+    assert spec.env["MULTIDEX_SKIP_RESUME_GOAL_PROMPT"] == "1"
 
 
 @pytest.mark.asyncio

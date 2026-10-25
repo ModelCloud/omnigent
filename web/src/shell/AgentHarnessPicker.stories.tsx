@@ -25,10 +25,10 @@ const claude = agent({
   display_name: "Claude Code",
   harness: "claude-native",
 });
-const localdex = agent({
-  id: "agent-localdex",
+const multidex = agent({
+  id: "agent-multidex",
   name: "codex-native-ui",
-  display_name: "LocalDex",
+  display_name: "MultiDex",
   harness: "codex-native",
 });
 const cursor = agent({
@@ -78,7 +78,7 @@ const extraHarnesses = [
   }),
   agent({ id: "agent-kimi", name: "kimi-native-ui", display_name: "Kimi", harness: "kimi-native" }),
 ];
-const otherHarnesses = [claude, localdex, cursor, openCode, pi];
+const otherHarnesses = [claude, multidex, cursor, openCode, pi];
 const allHarnesses = [...otherHarnesses, ...extraHarnesses];
 const manyCustomAgents = Array.from({ length: 24 }, (_, index) =>
   agent({
@@ -123,7 +123,7 @@ const meta = {
   tags: ["visual-snapshot"],
   args: {
     agentEntries: [polly, debby],
-    harnessEntries: [claude, localdex, cursor],
+    harnessEntries: [claude, multidex, cursor],
     effectiveAgentId: claude.id,
     agentLabel: "Claude Code",
     hasAgents: true,
@@ -173,7 +173,7 @@ export const NeedsSetupBadges: Story = {
       ...readyHost,
       configured_harnesses: {
         // SDK agents (polly/debby) stay available; the intended badges here are
-        // the native LocalDex/Cursor rows below.
+        // the native MultiDex/Cursor rows below.
         "claude-sdk": true,
         "claude-native": true,
         "codex-native": "needs-auth",
@@ -265,7 +265,7 @@ export const OtherHarnessSelected: Story = {
   args: {
     harnessEntries: [
       claude,
-      localdex,
+      multidex,
       cursor,
       { ...openCode, display_name: "OpenCode Experimental Extended Harness" },
       pi,
@@ -351,7 +351,7 @@ export const LongNames: Story = {
   args: {
     harnessEntries: [
       claude,
-      localdex,
+      multidex,
       { ...cursor, display_name: "Cursor Experimental Harness With a Very Long Name" },
     ],
     effectiveAgentId: cursor.id,

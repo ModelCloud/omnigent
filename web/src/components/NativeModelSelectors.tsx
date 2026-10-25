@@ -9,7 +9,7 @@ import { findNativeModelOption } from "@/lib/codexNativeModels";
 import { familyId, providerId, resolveModelSelection, variantId } from "@/lib/modelSelection";
 import type { NativeModelOption } from "@/lib/types";
 
-/** Four dependent controls; every selection maps to one runner-advertised row. */
+/** Dependent choices; every selection maps to one runner-advertised row. */
 export function NativeModelSelectors({
   options,
   selectedModel,
@@ -45,7 +45,7 @@ export function NativeModelSelectors({
     if (row) onModelChange(row.id);
   };
   const labels: Record<string, string> = {
-    localdex: "Local",
+    multidex: "Local",
     openrouter: "OpenRouter",
     lithos: "Lithos",
     openai: "OpenAI",
@@ -66,14 +66,11 @@ export function NativeModelSelectors({
     entries: readonly (readonly [string, string])[],
     change: (v: string) => void,
   ) {
+    if (entries.length <= 1) return null;
     return (
       <div className="grid grid-cols-[5rem_1fr] items-center gap-2">
         <span className="text-xs text-muted-foreground">{label}</span>
-        <Select
-          value={value ?? ""}
-          onValueChange={change}
-          disabled={disabled || entries.length === 0}
-        >
+        <Select value={value ?? ""} onValueChange={change} disabled={disabled}>
           <SelectTrigger aria-label={label} className="w-full">
             <SelectValue placeholder="—" />
           </SelectTrigger>
@@ -111,7 +108,7 @@ export function NativeModelSelectors({
       {field(
         "Reasoning",
         effort ?? "__default__",
-        efforts.length > 0
+        efforts.length > 1
           ? [
               [
                 "__default__",

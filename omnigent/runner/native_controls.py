@@ -630,10 +630,10 @@ def build_native_controls(
                     settings["effort"] = resolved
             if isinstance(settings.get("model"), str) and settings["model"].strip():
                 from omnigent.inner.codex_native_executor import (
-                    _localdex_runtime_settings_overrides,
+                    _multidex_runtime_settings_overrides,
                 )
 
-                settings = await _localdex_runtime_settings_overrides(state, settings)
+                settings = await _multidex_runtime_settings_overrides(state, settings)
             update_pending = False
             try:
                 async with asyncio.timeout(
@@ -973,21 +973,20 @@ def build_native_controls(
         asyncio.get_running_loop().create_task(
             _write_back_codex_catalog(conv_id, [dict(row) for row in rows])
         )
-        # LocalDex's custom OpenAI-compatible provider is not reported by
+        # MultiDex's custom OpenAI-compatible provider is not reported by
         # Codex's account ``model/list`` response, so add the registered local
-        # model to the live picker for both current and legacy LocalDex sessions.
-        if _session_harness_name(conv_id) in {"codex-native", "localdex-native"}:
-            from omnigent.harnesses.localdex_native.config import (
-                load_localdex_config,
-                with_localdex_model_picker_row,
+        # model to the live picker for both current and legacy MultiDex sessions.
+        if _session_harness_name(conv_id) in {"codex-native", "multidex-native"}:
+            from omnigent.harnesses.multidex_native.config import (
+                load_multidex_config,
+                with_multidex_model_picker_row,
             )
 
             try:
-                localdex = await asyncio.to_thread(load_localdex_config)
+                multidex = await asyncio.to_thread(load_multidex_config)
             except (FileNotFoundError, ValueError):
-                localdex = None
-            if localdex is not None:
-                rows = with_localdex_model_picker_row(rows, localdex)
+                multidex = None
+            rows = with_multidex_model_picker_row(rows, multidex)
         return mark_launch_default(rows, active_model)
 
     async def _write_back_codex_catalog(session_id: str, rows: list[_JsonObject]) -> None:
@@ -1832,7 +1831,7 @@ def build_native_controls(
 
         registry = resource_registry.terminal_registry
         terminal_name = (
-            "localdex" if _session_harness_name(conv_id) == "localdex-native" else "codex"
+            "multidex" if _session_harness_name(conv_id) == "multidex-native" else "codex"
         )
         instance = registry.get(conv_id, terminal_name, "main") if registry is not None else None
         if instance is None or not instance.running:
@@ -1898,7 +1897,7 @@ def build_native_controls(
     async def _inject_codex_native_slash(conv_id: str, *, command: str, action: str) -> Response:
         registry = resource_registry.terminal_registry
         terminal_name = (
-            "localdex" if _session_harness_name(conv_id) == "localdex-native" else "codex"
+            "multidex" if _session_harness_name(conv_id) == "multidex-native" else "codex"
         )
         instance = registry.get(conv_id, terminal_name, "main") if registry is not None else None
         if instance is None or not instance.running:

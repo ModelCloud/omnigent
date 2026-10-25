@@ -1,6 +1,6 @@
-"""Configuration for LocalDex's local provider inside a full Codex runtime.
+"""Configuration for MultiDex's local provider inside a full Codex runtime.
 
-LocalDex is not an authless replacement for Codex. Its one installed binary
+MultiDex is not an authless replacement for Codex. Its one installed binary
 keeps the normal OpenAI/ChatGPT provider available and adds explicitly
 configured OpenAI-compatible providers. Each custom model is routed only to
 its declared provider; every other model keeps its normal Codex provider and
@@ -23,53 +23,53 @@ from urllib.parse import quote, urlparse
 
 import httpx
 
-from omnigent.models.model_fallbacks import LOCALDEX_DEEPSEEK_LITHOS, LOCALDEX_DEEPSEEK_OPENROUTER
+from omnigent.models.model_fallbacks import MULTIDEX_DEEPSEEK_LITHOS, MULTIDEX_DEEPSEEK_OPENROUTER
 
-LOCALDEX_CONFIG_ROOT = Path.home() / ".local" / "share" / "localdex"
-LOCALDEX_CONFIG_PATH = LOCALDEX_CONFIG_ROOT / "config.toml"
-LOCALDEX_MODELS_PATH = LOCALDEX_CONFIG_ROOT / "models.toml"
-LOCALDEX_BINARY = Path.home() / ".local" / "bin" / "codex"
+MULTIDEX_CONFIG_ROOT = Path.home() / ".local" / "share" / "multidex"
+MULTIDEX_CONFIG_PATH = MULTIDEX_CONFIG_ROOT / "config.toml"
+MULTIDEX_MODELS_PATH = MULTIDEX_CONFIG_ROOT / "models.toml"
+MULTIDEX_BINARY = Path.home() / ".local" / "bin" / "codex"
 
-LOCALDEX_MODEL = "DS v4.1 Flash 1017"
+MULTIDEX_MODEL = "DS v4.1 Flash 1017"
 DEEPSEEK_MODEL_LABEL = "DeepSeek v4.1 Flash"
 DEEPSEEK_SELECTOR_MODELS = {
-    LOCALDEX_MODEL: ("localdex", "regular"),
-    **dict.fromkeys(LOCALDEX_DEEPSEEK_OPENROUTER.model_ids, ("openrouter", "regular")),
+    MULTIDEX_MODEL: ("multidex", "regular"),
+    **dict.fromkeys(MULTIDEX_DEEPSEEK_OPENROUTER.model_ids, ("openrouter", "regular")),
     **{
         model: ("lithos", variant)
         for model, variant in zip(
-            LOCALDEX_DEEPSEEK_LITHOS.model_ids, ("regular", "fast", "ultra"), strict=True
+            MULTIDEX_DEEPSEEK_LITHOS.model_ids, ("regular", "fast", "ultra"), strict=True
         )
     },
 }
-LOCALDEX_RUNTIME_CAPABILITIES_FILE = "localdex-runtime-capabilities.json"
-# LocalDex rejects any other non-default field on its built-in gateway providers.
+MULTIDEX_RUNTIME_CAPABILITIES_FILE = "multidex-runtime-capabilities.json"
+# MultiDex rejects any other non-default field on its built-in gateway providers.
 # ``wire_api`` and ``requires_openai_auth`` are emitted only with their default values.
-LOCALDEX_BUILTIN_PROVIDER_OVERRIDE_FIELDS = frozenset(
+MULTIDEX_BUILTIN_PROVIDER_OVERRIDE_FIELDS = frozenset(
     {"provider", "base_url", "auth", "http_headers", "env_key", "wire_api", "requires_openai_auth"}
 )
 
 
-def localdex_model_picker_row(
-    config: LocalDexConfig, model_registration: LocalDexModelRegistration | None = None
+def multidex_model_picker_row(
+    config: MultiDexConfig, model_registration: MultiDexModelRegistration | None = None
 ) -> dict[str, object]:
-    """Return the capability-complete picker row for LocalDex's local model.
+    """Return the capability-complete picker row for MultiDex's local model.
 
     The upstream Codex account catalog does not include a bearer-authenticated
     custom provider. Omnigent therefore adds this row beside the account rows.
-    Keep the LocalDex model's supported effort ladder here rather than
+    Keep the MultiDex model's supported effort ladder here rather than
     fabricating an id-only row: the web client intentionally hides its effort
     control when a model has no ``supportedReasoningEfforts`` metadata.
 
-    This mirrors LocalDex's bundled ``ModelInfo`` for DeepSeek
+    This mirrors MultiDex's bundled ``ModelInfo`` for DeepSeek
     v4.1-Flash-1017. The model accepts ``off``, ``low``, ``high``, and
     ``max``; in particular, do not offer Codex's generic ``medium`` value
-    because the endpoint rejects it. ``off`` is intentionally explicit and
-    unambiguous; the inference endpoint also accepts Responses' legacy
-    ``none`` alias for compatibility.
+    because the endpoint rejects it. Expose disabled thinking as ``none`` in
+    Omnigent; the native settings boundary translates it to the advertised
+    provider spelling.
     """
     model = model_registration or next(
-        (item for item in localdex_models(config) if item.model == config.local_model), None
+        (item for item in multidex_models(config) if item.model == config.local_model), None
     )
     if model is None:
         return {
@@ -91,7 +91,7 @@ def localdex_model_picker_row(
             "defaultReasoningEffort": "max",
             "supportedReasoningEfforts": [
                 {
-                    "reasoningEffort": "off",
+                    "reasoningEffort": "none",
                     "description": "Disable thinking for the fastest responses",
                 },
                 {
@@ -112,19 +112,21 @@ def localdex_model_picker_row(
     return row
 
 
-def with_localdex_model_picker_row(
-    rows: Sequence[Mapping[str, object]], config: LocalDexConfig
+def with_multidex_model_picker_row(
+    rows: Sequence[Mapping[str, object]], config: MultiDexConfig | None
 ) -> list[dict[str, object]]:
-    """Insert the canonical LocalDex row once and make it the harness default.
+    """Normalize native picker rows and add optional provider registrations.
 
     A live app-server row or a previously written host catalog can already
     contain the local model. Replace it with the capability-complete row so
     stale id-only rows cannot suppress the effort UI. The local model leads the
-    LocalDex picker, and any upstream row marked default is demoted so the
+    MultiDex picker, and any upstream row marked default is demoted so the
     session starts on the configured local endpoint.
+    Built-in provider rows need grouping and canonical effort values even
+    without a local registration.
     """
     registered_rows: list[dict[str, object]] = []
-    models = localdex_models(config)
+    models = multidex_models(config) if config is not None else ()
     registered_ids = {item.model for item in models}
     for item in models:
         source = next(
@@ -147,14 +149,14 @@ def with_localdex_model_picker_row(
         )
         if item.display_name != item.model or not row.get("displayName"):
             row["displayName"] = item.display_name
-        if family == "ds-v4.1-flash-1017":
-            fallback = localdex_model_picker_row(config, item)
-            if item.model == LOCALDEX_MODEL:
+        if family == "ds-v4.1-flash-1017" and config is not None:
+            fallback = multidex_model_picker_row(config, item)
+            if item.model == MULTIDEX_MODEL:
                 row.update(fallback)
             else:
                 for key, value in fallback.items():
                     row.setdefault(key, value)
-        if item.model == LOCALDEX_MODEL:
+        if item.model == MULTIDEX_MODEL:
             row["isDefault"] = True
         if family == "ds-v4.1-flash-1017":
             row["displayName"] = DEEPSEEK_MODEL_LABEL
@@ -186,11 +188,25 @@ def with_localdex_model_picker_row(
     if any(row.get("isDefault") is True for row in registered_rows):
         for row in remaining_rows:
             row.pop("isDefault", None)
-    return [*registered_rows, *remaining_rows]
+    picker_rows = [*registered_rows, *remaining_rows]
+    for row in picker_rows:
+        # Omnigent stores disabled reasoning as ``none``; ``off`` is a reset
+        # alias in its session API, but an explicit native MultiDex effort.
+        if row.get("defaultReasoningEffort") == "off":
+            row["defaultReasoningEffort"] = "none"
+        levels = row.get("supportedReasoningEfforts")
+        if isinstance(levels, list):
+            row["supportedReasoningEfforts"] = [
+                {**level, "reasoningEffort": "none"}
+                if isinstance(level, dict) and level.get("reasoningEffort") == "off"
+                else level
+                for level in levels
+            ]
+    return picker_rows
 
 
 @dataclass(frozen=True)
-class LocalDexModelRegistration:
+class MultiDexModelRegistration:
     """One explicitly mapped custom model and its provider credential."""
 
     model: str
@@ -206,59 +222,59 @@ class LocalDexModelRegistration:
 
 
 @dataclass(frozen=True)
-class LocalDexConfig:
+class MultiDexConfig:
     """Named OpenAI-compatible providers and models added to Codex."""
 
     local_model: str
     provider: str
     base_url: str
     env_key: str
-    models: tuple[LocalDexModelRegistration, ...] = ()
+    models: tuple[MultiDexModelRegistration, ...] = ()
 
 
-def localdex_models(config: LocalDexConfig) -> tuple[LocalDexModelRegistration, ...]:
+def multidex_models(config: MultiDexConfig) -> tuple[MultiDexModelRegistration, ...]:
     """Return configured models, adapting old one-model registrations."""
     configured = getattr(config, "models", ())
     if configured:
         return configured
     return (
-        LocalDexModelRegistration(
+        MultiDexModelRegistration(
             model=config.local_model,
-            provider=getattr(config, "provider", "localdex"),
+            provider=getattr(config, "provider", "multidex"),
             display_name=(
-                LOCALDEX_MODEL if config.local_model == LOCALDEX_MODEL else config.local_model
+                MULTIDEX_MODEL if config.local_model == MULTIDEX_MODEL else config.local_model
             ),
             base_url=getattr(config, "base_url", ""),
             env_key=config.env_key,
-            discover_capabilities=config.local_model == LOCALDEX_MODEL,
+            discover_capabilities=config.local_model == MULTIDEX_MODEL,
         ),
     )
 
 
-def localdex_runtime_provider_id(provider: str) -> str:
-    """Map a LocalDex config name into a private Codex provider namespace."""
-    # These endpoint ids are also inferred by LocalDex during live switches.
+def multidex_runtime_provider_id(provider: str) -> str:
+    """Map a MultiDex config name into a private Codex provider namespace."""
+    # These endpoint ids are also inferred by MultiDex during live switches.
     # Other registrations must not shadow official or gateway providers.
-    if provider in {"localdex", "openrouter", "lithos"}:
+    if provider in {"multidex", "openrouter", "lithos"}:
         return provider
     slug = re.sub(r"[^A-Za-z0-9_-]+", "-", provider).strip("-_")[:24] or "provider"
     digest = hashlib.sha256(provider.encode("utf-8")).hexdigest()[:10]
-    return f"omnigent-localdex-{slug}-{digest}"
+    return f"omnigent-multidex-{slug}-{digest}"
 
 
-def localdex_provider_config_overrides(config: LocalDexConfig) -> tuple[str, ...]:
+def multidex_provider_config_overrides(config: MultiDexConfig) -> tuple[str, ...]:
     """Serialize declared providers for the session-private Codex config.
 
     The provider tables are merged into the user's normal Codex config so a
     running thread can switch in either direction. Runtime IDs are namespaced
-    to prevent a LocalDex provider named ``openai`` or ``gateway`` from
+    to prevent a MultiDex provider named ``openai`` or ``gateway`` from
     replacing the user's official or gateway provider.
     """
     import tomlkit
 
     providers: dict[str, dict[str, object]] = {}
-    for model in localdex_models(config):
-        runtime_id = localdex_runtime_provider_id(model.provider)
+    for model in multidex_models(config):
+        runtime_id = multidex_runtime_provider_id(model.provider)
         provider_config = dict(model.provider_config)
         provider_config.setdefault("name", model.provider)
         provider_config.update(
@@ -274,13 +290,13 @@ def localdex_provider_config_overrides(config: LocalDexConfig) -> tuple[str, ...
             provider_config = {
                 key: value
                 for key, value in provider_config.items()
-                if key in LOCALDEX_BUILTIN_PROVIDER_OVERRIDE_FIELDS
+                if key in MULTIDEX_BUILTIN_PROVIDER_OVERRIDE_FIELDS
             }
-        if model.provider == "localdex":
+        if model.provider == "multidex":
             provider_config.setdefault("supports_responses_continuation", True)
         existing = providers.get(runtime_id)
         if existing is not None and existing != provider_config:
-            raise ValueError(f"LocalDex provider {model.provider!r} has inconsistent settings")
+            raise ValueError(f"MultiDex provider {model.provider!r} has inconsistent settings")
         providers[runtime_id] = provider_config
 
     document = tomlkit.document()
@@ -289,47 +305,47 @@ def localdex_provider_config_overrides(config: LocalDexConfig) -> tuple[str, ...
 
 
 @dataclass(frozen=True)
-class LocalDexRuntimeCapabilities:
-    """Live context limits advertised by the selected LocalDex model."""
+class MultiDexRuntimeCapabilities:
+    """Live context limits advertised by the selected MultiDex model."""
 
     context_window: int
     max_prompt_tokens: int | None
 
 
-def load_localdex_config(
-    path: Path = LOCALDEX_CONFIG_PATH,
+def load_multidex_config(
+    path: Path = MULTIDEX_CONFIG_PATH,
     *,
-    models_path: Path = LOCALDEX_MODELS_PATH,
+    models_path: Path = MULTIDEX_MODELS_PATH,
     require_token: bool = True,
-) -> LocalDexConfig:
-    """Read and validate LocalDex's additive local-provider registration.
+) -> MultiDexConfig:
+    """Read and validate MultiDex's additive local-provider registration.
 
     ``config.toml`` may select either ``openai`` or the local provider as its
     default.  Both provider definitions remain in the same file so a resumed
-    conversation can switch models without losing the LocalDex login state.
+    conversation can switch models without losing the MultiDex login state.
     """
     try:
         document = tomllib.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
-        raise FileNotFoundError(f"LocalDex config is missing: {path}") from exc
+        raise FileNotFoundError(f"MultiDex config is missing: {path}") from exc
     except tomllib.TOMLDecodeError as exc:
-        raise ValueError(f"LocalDex config is invalid TOML: {exc}") from exc
+        raise ValueError(f"MultiDex config is invalid TOML: {exc}") from exc
 
     providers = document.get("model_providers", {})
     if not isinstance(providers, dict):
-        raise ValueError("LocalDex config requires [model_providers.<provider>]")
+        raise ValueError("MultiDex config requires [model_providers.<provider>]")
     try:
         model_document = tomllib.loads(models_path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         # Read pre-migration installations without changing their user data.
         model_document = {
-            "models": {LOCALDEX_MODEL: {"provider": "localdex"}} if "localdex" in providers else {}
+            "models": {MULTIDEX_MODEL: {"provider": "multidex"}} if "multidex" in providers else {}
         }
     except tomllib.TOMLDecodeError as exc:
-        raise ValueError(f"LocalDex model registry is invalid TOML: {exc}") from exc
+        raise ValueError(f"MultiDex model registry is invalid TOML: {exc}") from exc
     declared_models = model_document.get("models")
     if not isinstance(declared_models, dict):
-        raise ValueError("LocalDex models.toml requires [models.<model-id>] entries")
+        raise ValueError("MultiDex models.toml requires [models.<model-id>] entries")
     declared_models = dict(declared_models)
     # Adding the configured Lithos provider opts into its three native variants.
     # Keep the provider/model mapping explicit even before the first model/list.
@@ -346,12 +362,12 @@ def load_localdex_config(
                     },
                 )
     if not declared_models:
-        raise ValueError("LocalDex models.toml requires [models.<model-id>] entries")
+        raise ValueError("MultiDex models.toml requires [models.<model-id>] entries")
 
-    registered: list[LocalDexModelRegistration] = []
+    registered: list[MultiDexModelRegistration] = []
     for model_id, model in declared_models.items():
         if not isinstance(model_id, str) or not model_id.strip() or not isinstance(model, dict):
-            raise ValueError("LocalDex model entries must be named tables")
+            raise ValueError("MultiDex model entries must be named tables")
         provider_name = model.get("provider")
         provider = providers.get(provider_name) if isinstance(provider_name, str) else None
         if provider_name == "openrouter" and (provider is None or isinstance(provider, dict)):
@@ -371,7 +387,7 @@ def load_localdex_config(
                 **(provider or {}),
             }
         if not isinstance(provider, dict):
-            raise ValueError(f"LocalDex model {model_id!r} references an unknown provider")
+            raise ValueError(f"MultiDex model {model_id!r} references an unknown provider")
         forbidden_provider_fields = {
             "api_key",
             "api_key_command",
@@ -387,11 +403,11 @@ def load_localdex_config(
         }
         if forbidden_provider_fields.intersection(key.lower() for key in provider):
             raise ValueError(
-                f"LocalDex provider {provider_name!r} must use env_key, not inline credentials"
+                f"MultiDex provider {provider_name!r} must use env_key, not inline credentials"
             )
         base_url, env_key = provider.get("base_url"), provider.get("env_key")
         if not isinstance(base_url, str):
-            raise ValueError(f"LocalDex provider {provider_name!r} base_url must be HTTP(S)")
+            raise ValueError(f"MultiDex provider {provider_name!r} base_url must be HTTP(S)")
         parsed = urlparse(base_url)
         if (
             parsed.scheme not in {"http", "https"}
@@ -401,29 +417,29 @@ def load_localdex_config(
             or parsed.query
             or parsed.fragment
         ):
-            raise ValueError(f"LocalDex provider {provider_name!r} base_url must be HTTP(S)")
+            raise ValueError(f"MultiDex provider {provider_name!r} base_url must be HTTP(S)")
         if not isinstance(provider_name, str) or not re.fullmatch(
             r"[A-Za-z0-9_-]+", provider_name
         ):
-            raise ValueError(f"LocalDex model {model_id!r} has an invalid provider name")
+            raise ValueError(f"MultiDex model {model_id!r} has an invalid provider name")
         if not isinstance(env_key, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", env_key):
-            raise ValueError(f"LocalDex provider {provider_name!r} env_key is invalid")
+            raise ValueError(f"MultiDex provider {provider_name!r} env_key is invalid")
         if env_key.startswith(("OPENAI_", "DATABRICKS_")):
             raise ValueError(
-                f"LocalDex provider {provider_name!r} must use a provider-specific env_key"
+                f"MultiDex provider {provider_name!r} must use a provider-specific env_key"
             )
         if provider.get("wire_api") != "responses":
             raise ValueError(
-                f'LocalDex provider {provider_name!r} must use wire_api = "responses"'
+                f'MultiDex provider {provider_name!r} must use wire_api = "responses"'
             )
         if provider.get("requires_openai_auth") is not False:
             raise ValueError(
-                f"LocalDex provider {provider_name!r} must set requires_openai_auth = false"
+                f"MultiDex provider {provider_name!r} must set requires_openai_auth = false"
             )
         if require_token and os.environ.get(env_key) is None:
-            raise ValueError(f"LocalDex bearer environment variable {env_key!r} is not set")
+            raise ValueError(f"MultiDex bearer environment variable {env_key!r} is not set")
         registered.append(
-            LocalDexModelRegistration(
+            MultiDexModelRegistration(
                 model=model_id,
                 provider=provider_name,
                 display_name=str(model.get("display_name") or model_id),
@@ -439,8 +455,8 @@ def load_localdex_config(
                 ),
             )
         )
-    local = next((item for item in registered if item.model == LOCALDEX_MODEL), registered[0])
-    return LocalDexConfig(
+    local = next((item for item in registered if item.model == MULTIDEX_MODEL), registered[0])
+    return MultiDexConfig(
         local_model=local.model,
         provider=local.provider,
         base_url=local.base_url,
@@ -449,14 +465,14 @@ def load_localdex_config(
     )
 
 
-def localdex_model_selected(config: LocalDexConfig, model: str | None) -> bool:
+def multidex_model_selected(config: MultiDexConfig, model: str | None) -> bool:
     """Whether ``model`` must route through the configured local provider."""
-    return localdex_model_for_selection(config, model) is not None
+    return multidex_model_for_selection(config, model) is not None
 
 
-def localdex_model_for_selection(
-    config: LocalDexConfig, model: str | None
-) -> LocalDexModelRegistration | None:
+def multidex_model_for_selection(
+    config: MultiDexConfig, model: str | None
+) -> MultiDexModelRegistration | None:
     """Return the explicit provider mapping for one selected model."""
     if model is None:
         return None
@@ -465,33 +481,33 @@ def localdex_model_for_selection(
     if registered is not None:
         return registered
     if not config.models and selected == config.local_model:
-        return LocalDexModelRegistration(
+        return MultiDexModelRegistration(
             model=config.local_model,
             provider=config.provider,
             display_name=DEEPSEEK_MODEL_LABEL
-            if config.local_model == LOCALDEX_MODEL
+            if config.local_model == MULTIDEX_MODEL
             else config.local_model,
             base_url=config.base_url,
             env_key=config.env_key,
-            discover_capabilities=config.local_model == LOCALDEX_MODEL,
+            discover_capabilities=config.local_model == MULTIDEX_MODEL,
         )
     return None
 
 
-async def fetch_localdex_runtime_capabilities(
-    config: LocalDexConfig,
-) -> LocalDexRuntimeCapabilities:
+async def fetch_multidex_runtime_capabilities(
+    config: MultiDexConfig,
+) -> MultiDexRuntimeCapabilities:
     """Read the local model's live context budget from its provider.
 
     The endpoint is authoritative: a deployment can reduce its capacity while
     a Codex thread is still alive.  Do not reuse picker or bundled metadata
     for turn admission.  The process is already credential-isolated by the
-    LocalDex launcher; this request deliberately sends only its configured
+    MultiDex launcher; this request deliberately sends only its configured
     bearer token and ignores ambient proxy/credential environment settings.
     """
     token = os.environ.get(config.env_key)
     if not token:
-        raise ValueError(f"LocalDex bearer environment variable {config.env_key!r} is not set")
+        raise ValueError(f"MultiDex bearer environment variable {config.env_key!r} is not set")
     model_url = f"{config.base_url}/models/{quote(config.local_model, safe='')}"
     try:
         async with httpx.AsyncClient(timeout=5.0, trust_env=False) as client:
@@ -502,36 +518,36 @@ async def fetch_localdex_runtime_capabilities(
             response.raise_for_status()
             document = response.json()
     except (httpx.HTTPError, ValueError) as exc:
-        raise RuntimeError("LocalDex model capability discovery failed") from exc
+        raise RuntimeError("MultiDex model capability discovery failed") from exc
 
     capabilities = document.get("capabilities") if isinstance(document, dict) else None
     if not isinstance(capabilities, dict):
-        raise RuntimeError("LocalDex model capability response has no capabilities object")
+        raise RuntimeError("MultiDex model capability response has no capabilities object")
     context_window = capabilities.get("context_window")
     max_prompt_tokens = capabilities.get("max_prompt_tokens")
     if not isinstance(context_window, int) or context_window <= 0:
-        raise RuntimeError("LocalDex model capability response has an invalid context_window")
+        raise RuntimeError("MultiDex model capability response has an invalid context_window")
     if not isinstance(max_prompt_tokens, int) or max_prompt_tokens <= 0:
         max_prompt_tokens = None
-    return LocalDexRuntimeCapabilities(
+    return MultiDexRuntimeCapabilities(
         context_window=context_window,
         max_prompt_tokens=max_prompt_tokens,
     )
 
 
-def write_localdex_runtime_capabilities(
+def write_multidex_runtime_capabilities(
     codex_home: Path,
-    config: LocalDexConfig,
-    capabilities: LocalDexRuntimeCapabilities,
+    config: MultiDexConfig,
+    capabilities: MultiDexRuntimeCapabilities,
 ) -> None:
-    """Atomically publish one freshly-read local context budget to LocalDex.
+    """Atomically publish one freshly-read local context budget to MultiDex.
 
     The file lives in the session-private ``CODEX_HOME`` shared by Omnigent's
-    executor and app-server. LocalDex reads it for each new turn, rather than
+    executor and app-server. MultiDex reads it for each new turn, rather than
     caching a deployment's capacity in the binary or global configuration.
     """
     codex_home.mkdir(mode=0o700, parents=True, exist_ok=True)
-    destination = codex_home / LOCALDEX_RUNTIME_CAPABILITIES_FILE
+    destination = codex_home / MULTIDEX_RUNTIME_CAPABILITIES_FILE
     payload = {
         "model": config.local_model,
         "context_window": capabilities.context_window,
@@ -542,7 +558,7 @@ def write_localdex_runtime_capabilities(
         mode="w",
         encoding="utf-8",
         dir=codex_home,
-        prefix=f".{LOCALDEX_RUNTIME_CAPABILITIES_FILE}.",
+        prefix=f".{MULTIDEX_RUNTIME_CAPABILITIES_FILE}.",
         delete=False,
     ) as temporary:
         os.chmod(temporary.name, 0o600)
@@ -553,7 +569,7 @@ def write_localdex_runtime_capabilities(
     os.replace(temporary_path, destination)
 
 
-def clear_localdex_runtime_capabilities(codex_home: Path) -> None:
+def clear_multidex_runtime_capabilities(codex_home: Path) -> None:
     """Discard a stale discovery snapshot after an endpoint lookup failure."""
     with suppress(FileNotFoundError):
-        (codex_home / LOCALDEX_RUNTIME_CAPABILITIES_FILE).unlink()
+        (codex_home / MULTIDEX_RUNTIME_CAPABILITIES_FILE).unlink()

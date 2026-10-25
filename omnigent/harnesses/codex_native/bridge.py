@@ -898,14 +898,14 @@ def write_codex_config_model_provider(bridge_dir: Path, provider: str) -> bool:
     """Mirror a live thread's provider into its private ``config.toml``.
 
     Model and provider are one routing decision.  In particular, an official
-    model paired with the ``localdex`` provider is sent to the local
+    model paired with the ``multidex`` provider is sent to the local
     OpenAI-compatible endpoint on the next resume.  ``thread/settings/update``
     changes only the live thread, so mirror an Omnigent-initiated update into
     this session-private config just as :func:`write_codex_config_model` does.
 
     :param bridge_dir: The session's native-Codex bridge directory.
     :param provider: Provider id to record, such as ``"openai"`` or
-        ``"localdex"``.
+        ``"multidex"``.
     :returns: ``True`` when the file was updated.
     """
     return _upsert_top_level_config_key(

@@ -32,6 +32,8 @@ from omnigent.models.model_override import (
         "databricks/databricks-gpt-5-4",
         "vendor:tag",
         "o3",
+        "DS v4.1 Flash 1017",
+        "model with spaces",
     ],
 )
 def test_validate_model_override_accepts_real_id_shapes(value: str) -> None:
@@ -59,7 +61,10 @@ def test_validate_model_override_strips_whitespace() -> None:
         "claude && evil",
         "model`id`",
         'model"quoted"',
-        "model with spaces",
+        "model\ttab",
+        "model\rcarriage",
+        "model\x00null",
+        "model\u00a0nonbreaking-space",
         "model\nnewline",
         # Flag-shaped values could be parsed as a CLI option.
         "--dangerously-skip-permissions",

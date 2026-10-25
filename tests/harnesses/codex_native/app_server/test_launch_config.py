@@ -1033,10 +1033,10 @@ def test_user_provider_key_reaches_app_server_and_terminal(
     source_home = tmp_path / "source-home"
     source_home.mkdir()
     (source_home / "config.toml").write_text(
-        '[model_providers.openrouter]\n'
+        "[model_providers.openrouter]\n"
         'base_url = "https://openrouter.ai/api/v1"\n'
         'env_key = "OPENROUTER_API_KEY"\n'
-        '[model_providers.ignored]\n'
+        "[model_providers.ignored]\n"
         'env_key = "INVALID-KEY"\n',
         encoding="utf-8",
     )

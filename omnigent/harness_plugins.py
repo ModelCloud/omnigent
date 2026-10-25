@@ -158,7 +158,7 @@ CLAUDE_NATIVE_CODING_AGENT = NativeCodingAgent(
 
 CODEX_NATIVE_CODING_AGENT = NativeCodingAgent(
     key="codex",
-    display_name="LocalDex",
+    display_name="MultiDex",
     agent_name="codex-native-ui",
     harness="codex-native",
     wrapper_label=CODEX_NATIVE_WRAPPER_VALUE,
@@ -274,7 +274,7 @@ HERMES_NATIVE_CODING_AGENT = NativeCodingAgent(
 # but resolves it through a runner helper with a server-side fallback, so it is
 # handled as a spawn-env special case rather than a plain label read.
 _BRIDGE_ID_LABEL_HARNESSES: frozenset[str] = frozenset(
-    {"codex", "localdex", "opencode", "antigravity"}
+    {"codex", "multidex", "opencode", "antigravity"}
 )
 
 
@@ -808,9 +808,9 @@ _BUILTIN_CONTRIBUTION = HarnessContribution(
         "agy": "antigravity",
         "agy-native": "antigravity-native",
         "claude": "claude-sdk",
-        # The LocalDex distribution now owns the Codex-compatible runtime;
+        # The MultiDex distribution now owns the Codex-compatible runtime;
         # accept existing `codex` specs but route them through the one native
-        # LocalDex harness rather than registering a second Codex harness.
+        # MultiDex harness rather than registering a second Codex harness.
         "codex": "codex-native",
         "native-codex": "codex-native",
         # Both vendor spellings resolve to the native wrap, mirroring
@@ -823,10 +823,10 @@ _BUILTIN_CONTRIBUTION = HarnessContribution(
         # ``acp`` and reads the user's own config.
         "devin": "devin-native",
         "devin-acp": "devin-native",
-        # Older bundles used a separate LocalDex harness id. Canonicalize it
+        # Older bundles used a separate MultiDex harness id. Canonicalize it
         # onto the shared Codex session identity so model switching is seamless.
-        "localdex": "codex-native",
-        "localdex-native": "codex-native",
+        "multidex": "codex-native",
+        "multidex-native": "codex-native",
         "github-copilot": "copilot",
         "google-antigravity": "antigravity",
         "kimi-code": "kimi",
@@ -836,7 +836,7 @@ _BUILTIN_CONTRIBUTION = HarnessContribution(
         "native-goose": "goose-native",
         "native-hermes": "hermes-native",
         "native-kimi": "kimi-native",
-        "native-localdex": "codex-native",
+        "native-multidex": "codex-native",
         "native-kiro": "kiro-native",
         "native-opencode": "opencode-native",
         "native-pi": "pi-native",
@@ -926,7 +926,7 @@ _BUILTIN_CONTRIBUTION = HarnessContribution(
     harness_labels={
         "antigravity": "Antigravity",
         "claude-sdk": "Claude SDK",
-        "codex-native": "LocalDex",
+        "codex-native": "MultiDex",
         "copilot": "Copilot",
         "cursor": "Cursor",
         "devin-native": "Devin",

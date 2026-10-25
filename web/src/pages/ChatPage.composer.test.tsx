@@ -862,7 +862,7 @@ describe("Composer Codex goal control", () => {
     fireEvent.click(screen.getByTestId("composer-goal-action"));
     await screen.findByTestId("goal-condition");
     expect(
-      screen.getByText(/LocalDex keeps working until this condition is met/),
+      screen.getByText(/MultiDex keeps working until this condition is met/),
     ).toBeInTheDocument();
     fireEvent.change(screen.getByTestId("goal-condition"), {
       target: { value: "  Finish the implementation and pass tests  " },

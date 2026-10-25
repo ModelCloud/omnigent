@@ -47,48 +47,48 @@ _PNG_DATA_URI = f"data:image/png;base64,{_PNG_B64}"
 
 
 @pytest.fixture(autouse=True)
-def _hide_machine_localdex_registration(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep native executor tests independent of the developer's LocalDex config."""
-    from omnigent.harnesses.localdex_native import config as localdex_config
+def _hide_machine_multidex_registration(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep native executor tests independent of the developer's MultiDex config."""
+    from omnigent.harnesses.multidex_native import config as multidex_config
 
     def _missing_config(**_kwargs: object) -> None:
-        raise FileNotFoundError("LocalDex configuration is not part of this test")
+        raise FileNotFoundError("MultiDex configuration is not part of this test")
 
-    monkeypatch.setattr(localdex_config, "load_localdex_config", _missing_config)
+    monkeypatch.setattr(multidex_config, "load_multidex_config", _missing_config)
 
 
-def test_localdex_turn_refreshes_runtime_context_capability(
+def test_multidex_turn_refreshes_runtime_context_capability(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A LocalDex turn must use the endpoint's live, not bundled, window."""
-    from omnigent.harnesses.localdex_native import config as localdex_config
+    """A MultiDex turn must use the endpoint's live, not bundled, window."""
+    from omnigent.harnesses.multidex_native import config as multidex_config
 
-    registration = localdex_config.LocalDexConfig(
+    registration = multidex_config.MultiDexConfig(
         local_model="DS v4.1 Flash 1017",
-        provider="localdex",
+        provider="multidex",
         base_url="http://127.0.0.1:2120/v1",
         env_key="BEARER_TOKEN",
     )
     writes: list[tuple[Path, int]] = []
 
     async def _capabilities(
-        _config: localdex_config.LocalDexConfig,
-    ) -> localdex_config.LocalDexRuntimeCapabilities:
-        return localdex_config.LocalDexRuntimeCapabilities(
+        _config: multidex_config.MultiDexConfig,
+    ) -> multidex_config.MultiDexRuntimeCapabilities:
+        return multidex_config.MultiDexRuntimeCapabilities(
             context_window=262_144, max_prompt_tokens=262_142
         )
 
     def _write(
         home: Path,
-        _config: localdex_config.LocalDexConfig,
-        capabilities: localdex_config.LocalDexRuntimeCapabilities,
+        _config: multidex_config.MultiDexConfig,
+        capabilities: multidex_config.MultiDexRuntimeCapabilities,
     ) -> None:
         writes.append((home, capabilities.context_window))
 
-    monkeypatch.setattr(localdex_config, "load_localdex_config", lambda **_kwargs: registration)
+    monkeypatch.setattr(multidex_config, "load_multidex_config", lambda **_kwargs: registration)
     monkeypatch.setenv(registration.env_key, "test-token")
-    monkeypatch.setattr(localdex_config, "fetch_localdex_runtime_capabilities", _capabilities)
-    monkeypatch.setattr(localdex_config, "write_localdex_runtime_capabilities", _write)
+    monkeypatch.setattr(multidex_config, "fetch_multidex_runtime_capabilities", _capabilities)
+    monkeypatch.setattr(multidex_config, "write_multidex_runtime_capabilities", _write)
     state = CodexNativeBridgeState(
         session_id="session_123",
         socket_path=str(tmp_path / "app-server.sock"),
@@ -97,37 +97,37 @@ def test_localdex_turn_refreshes_runtime_context_capability(
     )
 
     actual = asyncio.run(
-        codex_native_executor._localdex_runtime_settings_overrides(
+        codex_native_executor._multidex_runtime_settings_overrides(
             state, {"model": "DS v4.1 Flash 1017"}
         )
     )
 
     assert actual == {
         "model": "DS v4.1 Flash 1017",
-        "modelProvider": localdex_config.localdex_runtime_provider_id("localdex"),
+        "modelProvider": multidex_config.multidex_runtime_provider_id("multidex"),
     }
     assert writes == [(tmp_path / "codex-home", 262_144)]
 
 
-def test_localdex_runtime_capability_snapshot_is_session_private(tmp_path: Path) -> None:
+def test_multidex_runtime_capability_snapshot_is_session_private(tmp_path: Path) -> None:
     """The live endpoint limit must not become shared global configuration."""
-    from omnigent.harnesses.localdex_native import config as localdex_config
+    from omnigent.harnesses.multidex_native import config as multidex_config
 
-    registration = localdex_config.LocalDexConfig(
+    registration = multidex_config.MultiDexConfig(
         local_model="DS v4.1 Flash 1017",
-        provider="localdex",
+        provider="multidex",
         base_url="http://127.0.0.1:2120/v1",
         env_key="BEARER_TOKEN",
     )
-    localdex_config.write_localdex_runtime_capabilities(
+    multidex_config.write_multidex_runtime_capabilities(
         tmp_path,
         registration,
-        localdex_config.LocalDexRuntimeCapabilities(
+        multidex_config.MultiDexRuntimeCapabilities(
             context_window=262_144, max_prompt_tokens=262_142
         ),
     )
 
-    snapshot = tmp_path / localdex_config.LOCALDEX_RUNTIME_CAPABILITIES_FILE
+    snapshot = tmp_path / multidex_config.MULTIDEX_RUNTIME_CAPABILITIES_FILE
     assert json.loads(snapshot.read_text()) == {
         "model": "DS v4.1 Flash 1017",
         "context_window": 262_144,
@@ -135,38 +135,38 @@ def test_localdex_runtime_capability_snapshot_is_session_private(tmp_path: Path)
     }
     assert snapshot.stat().st_mode & 0o777 == 0o600
 
-    localdex_config.clear_localdex_runtime_capabilities(tmp_path)
+    multidex_config.clear_multidex_runtime_capabilities(tmp_path)
     assert not snapshot.exists()
 
 
-def test_localdex_discovery_failure_discards_a_stale_larger_limit(
+def test_multidex_discovery_failure_discards_a_stale_larger_limit(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """A failed refresh must not admit a turn using an old endpoint limit."""
-    from omnigent.harnesses.localdex_native import config as localdex_config
+    from omnigent.harnesses.multidex_native import config as multidex_config
 
-    registration = localdex_config.LocalDexConfig(
+    registration = multidex_config.MultiDexConfig(
         local_model="DS v4.1 Flash 1017",
-        provider="localdex",
+        provider="multidex",
         base_url="http://127.0.0.1:2120/v1",
         env_key="BEARER_TOKEN",
     )
-    localdex_config.write_localdex_runtime_capabilities(
+    multidex_config.write_multidex_runtime_capabilities(
         tmp_path,
         registration,
-        localdex_config.LocalDexRuntimeCapabilities(
+        multidex_config.MultiDexRuntimeCapabilities(
             context_window=524_288, max_prompt_tokens=524_286
         ),
     )
 
     async def _unavailable(
-        _config: localdex_config.LocalDexConfig,
-    ) -> localdex_config.LocalDexRuntimeCapabilities:
+        _config: multidex_config.MultiDexConfig,
+    ) -> multidex_config.MultiDexRuntimeCapabilities:
         raise RuntimeError("endpoint unavailable")
 
-    monkeypatch.setattr(localdex_config, "load_localdex_config", lambda **_kwargs: registration)
+    monkeypatch.setattr(multidex_config, "load_multidex_config", lambda **_kwargs: registration)
     monkeypatch.setenv(registration.env_key, "test-token")
-    monkeypatch.setattr(localdex_config, "fetch_localdex_runtime_capabilities", _unavailable)
+    monkeypatch.setattr(multidex_config, "fetch_multidex_runtime_capabilities", _unavailable)
     state = CodexNativeBridgeState(
         session_id="session_123",
         socket_path=str(tmp_path / "app-server.sock"),
@@ -175,53 +175,53 @@ def test_localdex_discovery_failure_discards_a_stale_larger_limit(
     )
 
     actual = asyncio.run(
-        codex_native_executor._localdex_runtime_settings_overrides(
+        codex_native_executor._multidex_runtime_settings_overrides(
             state, {"model": "DS v4.1 Flash 1017"}
         )
     )
 
     assert actual == {
         "model": "DS v4.1 Flash 1017",
-        "modelProvider": localdex_config.localdex_runtime_provider_id("localdex"),
+        "modelProvider": multidex_config.multidex_runtime_provider_id("multidex"),
     }
-    assert not (tmp_path / localdex_config.LOCALDEX_RUNTIME_CAPABILITIES_FILE).exists()
+    assert not (tmp_path / multidex_config.MULTIDEX_RUNTIME_CAPABILITIES_FILE).exists()
 
 
 @pytest.mark.parametrize(
     ("stale_model", "stale_provider"),
     [
-        ("DS v4.1 Flash 1017", "localdex"),
+        ("DS v4.1 Flash 1017", "multidex"),
         ("gpt-6-sol", "openai"),
     ],
 )
-def test_localdex_runtime_preserves_live_provider_without_model_selection(
+def test_multidex_runtime_preserves_live_provider_without_model_selection(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     stale_model: str,
     stale_provider: str,
 ) -> None:
     """A resumed turn must not reassert provider state from a stale config."""
-    from omnigent.harnesses.localdex_native import config as localdex_config
+    from omnigent.harnesses.multidex_native import config as multidex_config
 
-    registration = localdex_config.LocalDexConfig(
+    registration = multidex_config.MultiDexConfig(
         local_model="DS v4.1 Flash 1017",
-        provider="localdex",
+        provider="multidex",
         base_url="http://127.0.0.1:2120/v1",
         env_key="BEARER_TOKEN",
     )
 
     async def _capabilities(
-        _config: localdex_config.LocalDexConfig,
-    ) -> localdex_config.LocalDexRuntimeCapabilities:
-        return localdex_config.LocalDexRuntimeCapabilities(
+        _config: multidex_config.MultiDexConfig,
+    ) -> multidex_config.MultiDexRuntimeCapabilities:
+        return multidex_config.MultiDexRuntimeCapabilities(
             context_window=262_144, max_prompt_tokens=262_142
         )
 
-    monkeypatch.setattr(localdex_config, "load_localdex_config", lambda **_kwargs: registration)
+    monkeypatch.setattr(multidex_config, "load_multidex_config", lambda **_kwargs: registration)
     monkeypatch.setenv(registration.env_key, "test-token")
-    monkeypatch.setattr(localdex_config, "fetch_localdex_runtime_capabilities", _capabilities)
+    monkeypatch.setattr(multidex_config, "fetch_multidex_runtime_capabilities", _capabilities)
     monkeypatch.setattr(
-        localdex_config, "write_localdex_runtime_capabilities", lambda *_args: None
+        multidex_config, "write_multidex_runtime_capabilities", lambda *_args: None
     )
     home = tmp_path / "codex-home"
     home.mkdir()
@@ -236,28 +236,28 @@ def test_localdex_runtime_preserves_live_provider_without_model_selection(
         default_model_provider=stale_provider,
     )
 
-    actual = asyncio.run(codex_native_executor._localdex_runtime_settings_overrides(state, {}))
+    actual = asyncio.run(codex_native_executor._multidex_runtime_settings_overrides(state, {}))
 
     assert actual == {}
 
 
-def test_localdex_turn_routes_official_model_to_openai(
+def test_multidex_turn_routes_official_model_to_openai(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """An official model must replace LocalDex's provider as well as its slug."""
-    from omnigent.harnesses.localdex_native import config as localdex_config
+    """An official model must replace MultiDex's provider as well as its slug."""
+    from omnigent.harnesses.multidex_native import config as multidex_config
 
-    registration = localdex_config.LocalDexConfig(
+    registration = multidex_config.MultiDexConfig(
         local_model="DS v4.1 Flash 1017",
-        provider="localdex",
+        provider="multidex",
         base_url="http://127.0.0.1:2120/v1",
         env_key="BEARER_TOKEN",
     )
-    monkeypatch.setattr(localdex_config, "load_localdex_config", lambda **_kwargs: registration)
+    monkeypatch.setattr(multidex_config, "load_multidex_config", lambda **_kwargs: registration)
     home = tmp_path / "codex-home"
     home.mkdir()
     (home / "config.toml").write_text(
-        f'model = "{registration.local_model}"\nmodel_provider = "localdex"\n'
+        f'model = "{registration.local_model}"\nmodel_provider = "multidex"\n'
     )
     state = CodexNativeBridgeState(
         session_id="session_123",
@@ -267,7 +267,7 @@ def test_localdex_turn_routes_official_model_to_openai(
     )
 
     actual = asyncio.run(
-        codex_native_executor._localdex_runtime_settings_overrides(state, {"model": "gpt-5.6-sol"})
+        codex_native_executor._multidex_runtime_settings_overrides(state, {"model": "gpt-5.6-sol"})
     )
 
     # ThreadSettingsUpdateParams is serialized with camelCase.  A snake_case
@@ -275,19 +275,19 @@ def test_localdex_turn_routes_official_model_to_openai(
     assert actual == {"model": "gpt-5.6-sol", "modelProvider": "openai"}
 
 
-def test_localdex_switch_restores_the_resolved_non_local_provider(
+def test_multidex_switch_restores_the_resolved_non_local_provider(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Leaving a LocalDex model restores the session's configured provider."""
-    from omnigent.harnesses.localdex_native import config as localdex_config
+    """Leaving a MultiDex model restores the session's configured provider."""
+    from omnigent.harnesses.multidex_native import config as multidex_config
 
-    registration = localdex_config.LocalDexConfig(
+    registration = multidex_config.MultiDexConfig(
         local_model="DS v4.1 Flash 1017",
-        provider="localdex",
+        provider="multidex",
         base_url="http://127.0.0.1:2120/v1",
         env_key="BEARER_TOKEN",
     )
-    monkeypatch.setattr(localdex_config, "load_localdex_config", lambda **_kwargs: registration)
+    monkeypatch.setattr(multidex_config, "load_multidex_config", lambda **_kwargs: registration)
     state = CodexNativeBridgeState(
         session_id="session_123",
         socket_path=str(tmp_path / "app-server.sock"),
@@ -297,32 +297,32 @@ def test_localdex_switch_restores_the_resolved_non_local_provider(
     )
 
     actual = asyncio.run(
-        codex_native_executor._localdex_runtime_settings_overrides(state, {"model": "gpt-5.6-sol"})
+        codex_native_executor._multidex_runtime_settings_overrides(state, {"model": "gpt-5.6-sol"})
     )
 
     assert actual == {"model": "gpt-5.6-sol", "modelProvider": "gateway"}
 
 
-def test_named_localdex_provider_routes_its_model_without_capability_probe(
+def test_named_multidex_provider_routes_its_model_without_capability_probe(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """Each registry model selects only its declared provider and token key."""
-    from omnigent.harnesses.localdex_native import config as localdex_config
+    from omnigent.harnesses.multidex_native import config as multidex_config
 
-    registration = localdex_config.LocalDexConfig(
+    registration = multidex_config.MultiDexConfig(
         local_model="vendor/model-a",
         provider="provider_a",
         base_url="https://a.example/v1",
         env_key="PROVIDER_A_TOKEN",
         models=(
-            localdex_config.LocalDexModelRegistration(
+            multidex_config.MultiDexModelRegistration(
                 model="vendor/model-a",
                 provider="provider_a",
                 display_name="Model A",
                 base_url="https://a.example/v1",
                 env_key="PROVIDER_A_TOKEN",
             ),
-            localdex_config.LocalDexModelRegistration(
+            multidex_config.MultiDexModelRegistration(
                 model="vendor/model-b",
                 provider="provider_b",
                 display_name="Model B",
@@ -331,7 +331,7 @@ def test_named_localdex_provider_routes_its_model_without_capability_probe(
             ),
         ),
     )
-    monkeypatch.setattr(localdex_config, "load_localdex_config", lambda **_kwargs: registration)
+    monkeypatch.setattr(multidex_config, "load_multidex_config", lambda **_kwargs: registration)
     monkeypatch.setenv("PROVIDER_B_TOKEN", "selected-token")
     monkeypatch.delenv("PROVIDER_A_TOKEN", raising=False)
 
@@ -342,16 +342,16 @@ def test_named_localdex_provider_routes_its_model_without_capability_probe(
         codex_home=str(tmp_path / "codex-home"),
     )
     actual = asyncio.run(
-        codex_native_executor._localdex_runtime_settings_overrides(
+        codex_native_executor._multidex_runtime_settings_overrides(
             state, {"model": "vendor/model-b"}
         )
     )
 
-    from omnigent.harnesses.localdex_native.config import localdex_runtime_provider_id
+    from omnigent.harnesses.multidex_native.config import multidex_runtime_provider_id
 
     assert actual == {
         "model": "vendor/model-b",
-        "modelProvider": localdex_runtime_provider_id("provider_b"),
+        "modelProvider": multidex_runtime_provider_id("provider_b"),
     }
 
 

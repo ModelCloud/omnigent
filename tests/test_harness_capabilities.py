@@ -239,11 +239,11 @@ def test_catalog_rows_carry_setup_steps() -> None:
             # JSON-serializable primitives only.
             for value in step.values():
                 assert value is None or isinstance(value, str)
-    # LocalDex is the sole Codex-compatible harness: install (one-click) then
+    # MultiDex is the sole Codex-compatible harness: install (one-click) then
     # the existing account-auth step, which still uses `codex login`.
-    localdex = rows["codex-native"]["setup_steps"]
-    assert [s["action"] for s in localdex] == ["install", "auth"]
-    assert localdex[1]["command"] == "codex login"
+    multidex = rows["codex-native"]["setup_steps"]
+    assert [s["action"] for s in multidex] == ["install", "auth"]
+    assert multidex[1]["command"] == "codex login"
 
 
 def test_setup_steps_by_spelling_covers_native_and_installable_ids() -> None:

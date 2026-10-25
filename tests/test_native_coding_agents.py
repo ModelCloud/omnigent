@@ -13,6 +13,7 @@ from omnigent._wrapper_labels import (
     UI_MODE_TERMINAL_VALUE,
     WRAPPER_LABEL_KEY,
 )
+from omnigent.harness_aliases import canonicalize_harness
 from omnigent.harness_plugins import (
     CODEX_NATIVE_CODING_AGENT,
     KIRO_NATIVE_CODING_AGENT,
@@ -20,6 +21,7 @@ from omnigent.harness_plugins import (
     native_agents,
 )
 from omnigent.native.native_coding_agents import (
+    native_coding_agent_for_agent_name,
     native_coding_agent_for_harness,
     native_coding_agent_for_wrapper_label,
     native_shell_terminal_spec,
@@ -58,18 +60,32 @@ def test_canonical_native_harnesses_resolve() -> None:
         assert native_coding_agent_for_harness(harness) is not None
 
 
-def test_localdex_replaces_codex_as_the_single_codex_compatible_agent() -> None:
-    """The picker exposes LocalDex once; old LocalDex ids alias the same runtime."""
-    assert CODEX_NATIVE_CODING_AGENT.display_name == "LocalDex"
+def test_multidex_replaces_codex_as_the_single_codex_compatible_agent() -> None:
+    """The picker exposes MultiDex once; retired LocalDex ids stay unresolvable."""
+    assert CODEX_NATIVE_CODING_AGENT.display_name == "MultiDex"
     assert native_coding_agent_for_harness("codex-native") is CODEX_NATIVE_CODING_AGENT
     assert native_coding_agent_for_harness("codex") is CODEX_NATIVE_CODING_AGENT
-    assert native_coding_agent_for_harness("localdex-native") is CODEX_NATIVE_CODING_AGENT
+    assert native_coding_agent_for_harness("multidex-native") is CODEX_NATIVE_CODING_AGENT
     assert native_coding_agent_for_wrapper_label("codex-native-ui") is CODEX_NATIVE_CODING_AGENT
-    assert native_coding_agent_for_wrapper_label("localdex-native-ui") is CODEX_NATIVE_CODING_AGENT
-    codex_family_agents = [
-        agent for agent in native_agents() if agent.harness in {"codex-native", "localdex-native"}
-    ]
+    assert native_coding_agent_for_wrapper_label("localdex-native-ui") is None
+    codex_family_agents = [agent for agent in native_agents() if agent.harness in {"codex-native"}]
     assert codex_family_agents == [CODEX_NATIVE_CODING_AGENT]
+
+
+def test_retired_localdex_ids_resolve_to_nothing() -> None:
+    """Stale ``localdex`` sessions fail lookup rather than migrating silently.
+
+    The LocalDex→MultiDex rename ships no compatibility layer: sessions
+    stored with ``localdex`` ids must surface as unresolvable so the user
+    recovers by forking onto a supported agent (manual switch) instead of a
+    silent localdex→multidex rewrite.
+    """
+    assert native_coding_agent_for_agent_name("localdex-native-ui") is None
+    assert native_coding_agent_for_agent_name("localdex") is None
+    assert native_coding_agent_for_harness("localdex") is None
+    assert native_coding_agent_for_harness("localdex-native") is None
+    assert canonicalize_harness("localdex") == "localdex"
+    assert canonicalize_harness("localdex-native") == "localdex-native"
 
 
 def test_native_kimi_alias_resolves_like_canonical() -> None:
@@ -117,7 +133,7 @@ def test_public_agent_name_hides_native_ui_wrapper_names() -> None:
     """
     assert public_agent_name("pi-native-ui") == "Pi"
     assert public_agent_name("claude-native-ui") == "Claude"
-    assert public_agent_name("codex-native-ui") == "LocalDex"
+    assert public_agent_name("codex-native-ui") == "MultiDex"
     assert public_agent_name("cursor-native-ui") == "Cursor"
 
 

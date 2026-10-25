@@ -6561,7 +6561,7 @@ async def _post_reasoning_item(
     """
     Persist a completed public Codex reasoning item.
 
-    LocalDex streams the raw public trace as reasoning deltas, then emits the
+    MultiDex streams the raw public trace as reasoning deltas, then emits the
     same item in ``item/completed`` with ``content`` and optional ``summary``
     arrays.  The live deltas give immediate feedback; this durable mirror
     prevents the thought from disappearing when the UI reconciles history for
@@ -7682,7 +7682,7 @@ async def _handle_reasoning_delta(
             forwarder_state.raw_reasoning_item_ids.add(reasoning_key)
         elif reasoning_key in forwarder_state.raw_reasoning_item_ids:
             # Inference-Ultra emits the same public trace on both Responses
-            # reasoning channels.  LocalDex preserves both app-server events;
+            # reasoning channels.  MultiDex preserves both app-server events;
             # choose the raw one so Omnigent's append-only web stream sees it
             # exactly once.
             return

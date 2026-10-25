@@ -13,7 +13,7 @@ import { nativeAgentSortRank } from "@/lib/nativeCodingAgents";
 // two, so this is a frontend allowlist for now.
 export const BUILTIN_AGENTS = new Set([
   "claude-native-ui", // Claude Code
-  "codex-native-ui", // LocalDex (Codex-compatible)
+  "codex-native-ui", // MultiDex (Codex-compatible)
   "opencode-native-ui", // OpenCode
   "pi-native-ui", // Pi
   "cursor-native-ui", // Cursor
@@ -62,7 +62,7 @@ export function isAcpHarnessAgent(
 // after, in server order.
 export const AGENT_DISPLAY_ORDER = [
   "Claude Code",
-  "LocalDex",
+  "MultiDex",
   "OpenCode",
   "Cursor",
   "Pi",
@@ -97,7 +97,10 @@ export function sortAgentsForDisplay<T extends AvailableAgent>(agents: readonly 
 // Hidden from session-creation pickers. `nessie` is superseded by polly.
 // `kimi` / `kimi-code` are the headless SDK harness (kept for sub-agent /
 // `run --harness kimi` use) — pickers offer only the native TUI
-// (`kimi-native-ui`).
+// (`kimi-native-ui`). `localdex-native-ui` is the retired LocalDex built-in:
+// its row persists in stores upgraded from before the MultiDex rename, but
+// its harness resolves to nothing, so a new session bound to it could never
+// launch (existing sessions recover by forking onto a supported agent).
 export const NEW_SESSION_HIDDEN_AGENTS = new Set([
   "nessie",
   "kimi",

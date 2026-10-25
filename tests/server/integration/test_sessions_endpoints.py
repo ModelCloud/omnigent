@@ -3478,7 +3478,7 @@ async def test_patch_session_archive_hides_from_default_list(
     assert sid in default_ids_after, "unarchived session must reappear in the default list"
 
 
-@pytest.mark.parametrize("reasoning_effort", ["high", "xhigh", "max"])
+@pytest.mark.parametrize("reasoning_effort", ["none", "high", "xhigh", "max"])
 async def test_patch_session_updates_reasoning_effort(
     client: httpx.AsyncClient,
     reasoning_effort: str,
@@ -3493,6 +3493,8 @@ async def test_patch_session_updates_reasoning_effort(
     )
     assert resp.status_code == 200
     assert resp.json()["reasoning_effort"] == reasoning_effort
+    snapshot = await client.get(f"/v1/sessions/{session['id']}")
+    assert snapshot.json()["reasoning_effort"] == reasoning_effort
 
 
 async def test_create_session_sets_terminal_launch_args(
@@ -8408,9 +8410,12 @@ async def test_post_external_model_options_rejects_non_pi_native_session(
     assert session["id"] not in _mod._pushed_model_options_cache
 
 
+@pytest.mark.parametrize(("effort", "expected"), [("medium", "medium"), ("off", "none")])
 async def test_post_external_reasoning_effort_change_publishes_session_effort(
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
+    effort: str,
+    expected: str,
 ) -> None:
     """
     ``external_reasoning_effort_change`` persists effort and posts SSE.
@@ -8428,7 +8433,7 @@ async def test_post_external_reasoning_effort_change_publishes_session_effort(
         f"/v1/sessions/{session['id']}/events",
         json={
             "type": "external_reasoning_effort_change",
-            "data": {"reasoning_effort": "medium"},
+            "data": {"reasoning_effort": effort},
         },
     )
 
@@ -8436,10 +8441,10 @@ async def test_post_external_reasoning_effort_change_publishes_session_effort(
     assert resp.json() == {"queued": False}
     assert [event["type"] for _, event in published] == ["session.reasoning_effort"]
     assert published[0][1]["conversation_id"] == session["id"]
-    assert published[0][1]["reasoning_effort"] == "medium"
+    assert published[0][1]["reasoning_effort"] == expected
     # Persisted snapshot proves this was not just a transient SSE update.
     snapshot = (await client.get(f"/v1/sessions/{session['id']}")).json()
-    assert snapshot["reasoning_effort"] == "medium"
+    assert snapshot["reasoning_effort"] == expected
 
 
 async def test_post_external_reasoning_effort_change_clears_effort(

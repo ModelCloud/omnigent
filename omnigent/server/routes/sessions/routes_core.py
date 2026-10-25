@@ -27,7 +27,6 @@ from fastapi.responses import Response
 from pydantic import ValidationError
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
-from omnigent._wrapper_labels import LOCALDEX_NATIVE_WRAPPER_VALUE
 from omnigent.codex_approval_modes import (
     CODEX_NATIVE_PERMISSION_VALUES,
 )
@@ -120,6 +119,7 @@ from omnigent.server.routes._sessions.common import (
 from omnigent.server.routes._sessions.helpers import (
     _CODEX_NATIVE_SETTINGS_FORWARD_TIMEOUT_S,
     _TUI_INJECT_FORWARD_TIMEOUT_S,
+    AUTO_HARNESS_SENTINEL,
     SessionLiveness,
     _agent_carries_cursor_fork_history,
     _agent_carries_native_fork_history,
@@ -3072,8 +3072,7 @@ def register_core_routes(
         )
         settings_forward_timeout = (
             _CODEX_NATIVE_SETTINGS_FORWARD_TIMEOUT_S
-            if updated_native_agent is not None
-            and updated_native_agent.harness in ("codex-native", "localdex-native")
+            if updated_native_agent is not None and updated_native_agent.harness == "codex-native"
             else _TUI_INJECT_FORWARD_TIMEOUT_S
         )
         # The runner applies native settings live. Silent startup metadata
@@ -3081,7 +3080,6 @@ def register_core_routes(
         live_forward = not body.silent
         codex_native = updated.labels.get(_CLAUDE_NATIVE_WRAPPER_LABEL_KEY) in (
             _CODEX_NATIVE_WRAPPER_LABEL_VALUE,
-            LOCALDEX_NATIVE_WRAPPER_VALUE,
         )
         # This server rolls back Codex refusals and keeps unconfirmed changes, so the
         # runner neither saves a refusal nor waits out this server's forward timeout.
@@ -3640,11 +3638,24 @@ def register_core_routes(
         # A model id is provider-bound, so the source's model_override /
         # reasoning_effort only carry over when the switch stays in the same
         # provider family. A cross-family switch (or an undeterminable
-        # family) resets them; same-agent forks always copy.
+        # family) resets them; same-agent forks always copy. A stale harness
+        # override from a retired integration is not model settings to keep:
+        # leaving it on the clone would make the manual fork recovery fail
+        # with the same unresolvable harness.
         copy_model_settings = True
+        if source.harness_override not in {None, AUTO_HARNESS_SENTINEL}:
+            from omnigent.harness_aliases import canonicalize_harness
+            from omnigent.spec._omnigent_compat import OMNIGENT_HARNESSES
+
+            canonical_override = (
+                canonicalize_harness(source.harness_override) or source.harness_override
+            )
+            copy_model_settings = canonical_override in OMNIGENT_HARNESSES
         if switching_agent:
-            copy_model_settings = source_agent is not None and await asyncio.to_thread(
-                _same_provider_family, source_agent, base_agent
+            copy_model_settings = (
+                copy_model_settings
+                and source_agent is not None
+                and await asyncio.to_thread(_same_provider_family, source_agent, base_agent)
             )
 
         # Explicit run-config overrides from the fork dialog. Each field is
