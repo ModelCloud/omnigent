@@ -2606,6 +2606,9 @@ def _validate_external_reasoning_effort(body: SessionEventInput) -> str | None:
             code=ErrorCode.INVALID_INPUT,
         )
     effort = raw_effort.strip()
+    if effort == "off":
+        # Native LocalDex's explicit Off is not the session PATCH reset alias.
+        effort = "none"
     try:
         return validate_effort(effort, "session metadata", EFFORT_VALUES)
     except ValueError as exc:

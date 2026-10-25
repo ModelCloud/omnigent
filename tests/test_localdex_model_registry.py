@@ -35,6 +35,11 @@ def test_lithos_provider_registers_three_variants_with_one_model_label(
     assert {row["providerId"] for row in rows} == {"lithos"}
     assert {row["variant"] for row in rows} == {"regular", "fast", "ultra"}
     assert all(row["defaultReasoningEffort"] == "max" for row in rows)
+    assert all(
+        [level["reasoningEffort"] for level in row["supportedReasoningEfforts"]]
+        == ["none", "low", "high", "max"]
+        for row in rows
+    )
     assert next(row for row in rows if row["variant"] == "regular")["id"] == (
         "deepseek-ai/DeepSeek-V4.1-Flash"
     )
@@ -53,8 +58,9 @@ def test_lithos_provider_registers_three_variants_with_one_model_label(
         'wire_api = "responses"\nrequires_openai_auth = false\nname = "OpenRouter"\n',
     ],
 )
+@pytest.mark.parametrize("default_effort", ["max", "off"])
 def test_openrouter_registration_keeps_native_routing_and_picker_metadata(
-    tmp_path: Path, provider_fields: str
+    tmp_path: Path, provider_fields: str, default_effort: str
 ) -> None:
     providers = tmp_path / "config.toml"
     providers.write_text(
@@ -83,7 +89,7 @@ def test_openrouter_registration_keeps_native_routing_and_picker_metadata(
         "id": model,
         "model": model,
         "displayName": "DS v4.1 Flash 1017 (OpenRouter)",
-        "defaultReasoningEffort": "max",
+        "defaultReasoningEffort": default_effort,
         "supportedReasoningEfforts": [
             {"reasoningEffort": effort, "description": effort}
             for effort in ["off", "low", "high", "max"]
@@ -99,8 +105,15 @@ def test_openrouter_registration_keeps_native_routing_and_picker_metadata(
             "modelLabel": "DeepSeek v4.1 Flash",
             "providerId": "openrouter",
             "variant": "regular",
+            "defaultReasoningEffort": "none" if default_effort == "off" else default_effort,
+            "supportedReasoningEfforts": [
+                {"reasoningEffort": "none", "description": "off"},
+                *source["supportedReasoningEfforts"][1:],
+            ],
         }
     ]
+    assert source["defaultReasoningEffort"] == default_effort
+    assert source["supportedReasoningEfforts"][0]["reasoningEffort"] == "off"
 
 
 def test_named_localdex_models_map_to_their_explicit_provider(tmp_path: Path) -> None:
@@ -166,7 +179,7 @@ display_name = "Lab Coder"
     ]
     assert rows[0]["isDefault"] is True
     assert rows[0]["defaultReasoningEffort"] == "max"
-    assert rows[0]["supportedReasoningEfforts"][0]["reasoningEffort"] == "off"
+    assert rows[0]["supportedReasoningEfforts"][0]["reasoningEffort"] == "none"
 
 
 def test_localdex_row_overrides_an_upstream_default(tmp_path: Path) -> None:

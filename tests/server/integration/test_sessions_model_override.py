@@ -40,8 +40,10 @@ async def _create_session(
     return resp.json()
 
 
+@pytest.mark.parametrize("model", ["claude-opus-4-7", "DS v4.1 Flash 1017"])
 async def test_patch_model_override_round_trips_through_snapshot(
     client: httpx.AsyncClient,
+    model: str,
 ) -> None:
     """PATCH writes the column and ``GET`` returns the same value.
 
@@ -59,15 +61,15 @@ async def test_patch_model_override_round_trips_through_snapshot(
     # PATCH a concrete model.
     patch = await client.patch(
         f"/v1/sessions/{sid}",
-        json={"model_override": "claude-opus-4-7"},
+        json={"model_override": model},
     )
     assert patch.status_code == 200, patch.text
-    assert patch.json()["model_override"] == "claude-opus-4-7"
+    assert patch.json()["model_override"] == model
 
     # GET reflects the new value.
     get = await client.get(f"/v1/sessions/{sid}")
     assert get.status_code == 200
-    assert get.json()["model_override"] == "claude-opus-4-7"
+    assert get.json()["model_override"] == model
 
 
 async def test_patch_model_override_clear_alias_resets(
@@ -175,8 +177,10 @@ async def test_patch_model_override_rejects_malformed(
     assert get.json().get("model_override") is None
 
 
+@pytest.mark.parametrize("model", ["databricks-claude-sonnet-4-6", "DS v4.1 Flash 1017"])
 async def test_create_session_with_model_override_persists(
     client: httpx.AsyncClient,
+    model: str,
 ) -> None:
     """Create-time ``model_override`` lands on the row and the snapshot.
 
@@ -190,18 +194,18 @@ async def test_create_session_with_model_override_persists(
         json={
             "agent_id": agent["id"],
             "initial_items": [],
-            "model_override": "databricks-claude-sonnet-4-6",
+            "model_override": model,
         },
     )
     assert resp.status_code == 201, resp.text
     created = resp.json()
     # The create response itself must carry the override — the runner's
     # launch-config fetch consumes this exact snapshot shape.
-    assert created["model_override"] == "databricks-claude-sonnet-4-6"
+    assert created["model_override"] == model
 
     get = await client.get(f"/v1/sessions/{created['id']}")
     assert get.status_code == 200
-    assert get.json()["model_override"] == "databricks-claude-sonnet-4-6"
+    assert get.json()["model_override"] == model
 
 
 @pytest.mark.parametrize(
@@ -239,8 +243,10 @@ async def test_create_session_rejects_malformed_model_override(
     )
 
 
+@pytest.mark.parametrize("effort", ["high", "none"])
 async def test_create_session_with_reasoning_effort_persists(
     client: httpx.AsyncClient,
+    effort: str,
 ) -> None:
     """Create-time ``reasoning_effort`` lands on the row and the snapshot.
 
@@ -255,18 +261,18 @@ async def test_create_session_with_reasoning_effort_persists(
         json={
             "agent_id": agent["id"],
             "initial_items": [],
-            "reasoning_effort": "high",
+            "reasoning_effort": effort,
         },
     )
     assert resp.status_code == 201, resp.text
     created = resp.json()
     # The create response itself must carry the effort — the runner's
     # launch-config fetch consumes this exact snapshot shape.
-    assert created["reasoning_effort"] == "high"
+    assert created["reasoning_effort"] == effort
 
     get = await client.get(f"/v1/sessions/{created['id']}")
     assert get.status_code == 200
-    assert get.json()["reasoning_effort"] == "high"
+    assert get.json()["reasoning_effort"] == effort
 
 
 async def test_create_session_rejects_invalid_reasoning_effort(

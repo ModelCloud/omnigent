@@ -791,7 +791,7 @@ async def test_handle_model_options_codex_localdex_row_keeps_reasoning_capabilit
     assert {key: result.models[0][key] for key in expected_local_row} == expected_local_row
     assert [
         option["reasoningEffort"] for option in expected_local_row["supportedReasoningEfforts"]
-    ] == ["off", "low", "high", "max"]
+    ] == ["none", "low", "high", "max"]
     assert [row["id"] for row in result.models] == [registration.local_model, "gpt-6-sol"]
     assert result.routable_models == [registration.local_model, "gpt-6-sol"]
     _cleanup_host(host)
@@ -7172,10 +7172,10 @@ async def test_handle_model_options_serves_localdex_from_the_native_codex_catalo
     assert result.request_id == "req_localdex"
     assert [row["id"] for row in result.models] == ["DS v4.1 Flash 1017", "gpt-5.6"]
     assert result.models[0]["model"] == "DS v4.1 Flash 1017"
-    assert result.models[0]["displayName"] == "DS v4.1 Flash 1017"
+    assert result.models[0]["displayName"] == "DeepSeek v4.1 Flash"
     assert result.models[0]["isDefault"] is True
     assert result.models[0]["defaultReasoningEffort"] == "max"
-    assert result.models[0]["supportedReasoningEfforts"][0]["reasoningEffort"] == "off"
+    assert result.models[0]["supportedReasoningEfforts"][0]["reasoningEffort"] == "none"
     assert result.routable_models == ["DS v4.1 Flash 1017", "gpt-5.6"]
     _cleanup_host(host)
 

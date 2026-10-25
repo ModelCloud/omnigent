@@ -59,9 +59,9 @@ def localdex_model_picker_row(
     This mirrors LocalDex's bundled ``ModelInfo`` for DeepSeek
     v4.1-Flash-1017. The model accepts ``off``, ``low``, ``high``, and
     ``max``; in particular, do not offer Codex's generic ``medium`` value
-    because the endpoint rejects it. ``off`` is intentionally explicit and
-    unambiguous; the inference endpoint also accepts Responses' legacy
-    ``none`` alias for compatibility.
+    because the endpoint rejects it. Expose disabled thinking as ``none`` in
+    Omnigent; the native settings boundary translates it to the advertised
+    provider spelling.
     """
     model = model_registration or next(
         (item for item in localdex_models(config) if item.model == config.local_model), None
@@ -86,7 +86,7 @@ def localdex_model_picker_row(
             "defaultReasoningEffort": "max",
             "supportedReasoningEfforts": [
                 {
-                    "reasoningEffort": "off",
+                    "reasoningEffort": "none",
                     "description": "Disable thinking for the fastest responses",
                 },
                 {
@@ -181,7 +181,21 @@ def with_localdex_model_picker_row(
     if any(row.get("isDefault") is True for row in registered_rows):
         for row in remaining_rows:
             row.pop("isDefault", None)
-    return [*registered_rows, *remaining_rows]
+    picker_rows = [*registered_rows, *remaining_rows]
+    for row in picker_rows:
+        # Omnigent stores disabled reasoning as ``none``; ``off`` is a reset
+        # alias in its session API, but an explicit native LocalDex effort.
+        if row.get("defaultReasoningEffort") == "off":
+            row["defaultReasoningEffort"] = "none"
+        levels = row.get("supportedReasoningEfforts")
+        if isinstance(levels, list):
+            row["supportedReasoningEfforts"] = [
+                {**level, "reasoningEffort": "none"}
+                if isinstance(level, dict) and level.get("reasoningEffort") == "off"
+                else level
+                for level in levels
+            ]
+    return picker_rows
 
 
 @dataclass(frozen=True)

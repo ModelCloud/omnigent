@@ -824,6 +824,10 @@ def clamp_codex_effort_for_model(
         for level in levels
         if isinstance(level, dict)
     ]
+    # LocalDex advertises disabled thinking as ``off`` rather than Omnigent's
+    # canonical ``none``. Preserve the choice instead of clamping it up to low.
+    if effort == "none" and "off" in advertised and "none" not in advertised:
+        return "off"
     supported = [
         value
         for value in EFFORT_ORDER
@@ -3734,7 +3738,11 @@ def build_codex_native_server(
     explicit_provider_env = tuple(
         sorted(
             set(provider_env_keys)
-            | set(_configured_provider_env_keys(config_source or _codex_home_config_source_from_env()))
+            | set(
+                _configured_provider_env_keys(
+                    config_source or _codex_home_config_source_from_env()
+                )
+            )
         )
     )
     env = _clean_codex_env((*authless_profile_env, *explicit_provider_env))

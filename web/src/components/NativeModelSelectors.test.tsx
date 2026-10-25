@@ -10,7 +10,7 @@ const options: NativeModelOption[] = [
     modelFamily: "ds",
     modelLabel: "DeepSeek v4.1 Flash",
     providerId: "localdex",
-    supportedReasoningEfforts: [{ reasoningEffort: "max" }],
+    supportedReasoningEfforts: [{ reasoningEffort: "none" }, { reasoningEffort: "max" }],
     defaultReasoningEffort: "max",
   },
   {
@@ -19,7 +19,11 @@ const options: NativeModelOption[] = [
     modelLabel: "DeepSeek v4.1 Flash",
     providerId: "lithos",
     variant: "regular",
-    supportedReasoningEfforts: [{ reasoningEffort: "low" }, { reasoningEffort: "max" }],
+    supportedReasoningEfforts: [
+      { reasoningEffort: "none" },
+      { reasoningEffort: "low" },
+      { reasoningEffort: "max" },
+    ],
     defaultReasoningEffort: "max",
   },
   {
@@ -28,7 +32,7 @@ const options: NativeModelOption[] = [
     modelLabel: "DeepSeek v4.1 Flash",
     providerId: "lithos",
     variant: "ultra",
-    supportedReasoningEfforts: [{ reasoningEffort: "max" }],
+    supportedReasoningEfforts: [{ reasoningEffort: "none" }, { reasoningEffort: "max" }],
     defaultReasoningEffort: "max",
   },
 ];
@@ -68,3 +72,26 @@ it("selects a provider's regular model atomically and only shows its available s
   fireEvent.click(await screen.findByRole("option", { name: "Lithos" }));
   expect(change).toHaveBeenCalledWith("lithos-regular");
 });
+
+it.each(options.map((row) => row.id))(
+  "keeps explicit Off distinct from Default for %s",
+  async (id) => {
+    const onEffortChange = vi.fn();
+    const props = {
+      options,
+      selectedModel: id,
+      onModelChange: vi.fn(),
+      onEffortChange,
+    };
+    const { rerender } = render(<NativeModelSelectors {...props} effort={null} />);
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Reasoning" }), { key: "ArrowDown" });
+    fireEvent.click(await screen.findByRole("option", { name: "Off" }));
+    expect(onEffortChange).toHaveBeenLastCalledWith("none");
+
+    rerender(<NativeModelSelectors {...props} effort="none" />);
+    expect(screen.getByRole("combobox", { name: "Reasoning" })).toHaveTextContent("Off");
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Reasoning" }), { key: "ArrowDown" });
+    fireEvent.click(await screen.findByRole("option", { name: "Default (Max)" }));
+    expect(onEffortChange).toHaveBeenLastCalledWith(null);
+  },
+);
