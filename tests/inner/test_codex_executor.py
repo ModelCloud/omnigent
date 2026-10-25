@@ -4562,6 +4562,70 @@ def test_materialize_codex_provider_config_applies_custom_retry_policy(tmp_path:
     assert provider["stream_idle_timeout_ms"] == 300_000
 
 
+def test_materialize_codex_provider_config_preserves_explicit_retry_policy(
+    tmp_path: Path,
+) -> None:
+    """An explicitly configured provider policy is not overwritten by the defaults.
+
+    Omnigent used to stamp its own retry budget onto every custom provider on
+    each launch. That silently replaced a provider's deliberate
+    ``max_retries = 0``, so a dropped stream replayed a very large prompt.
+    """
+    import tomllib
+
+    from omnigent.inner.codex_executor import materialize_codex_provider_config
+
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_text(
+        '[model_providers.gateway]\nname = "Gateway"\n'
+        'base_url = "https://example.test"\n'
+        "request_max_retries = 0\n"
+        "stream_max_retries = 0\n"
+        "stream_idle_timeout_ms = 900000\n"
+    )
+
+    materialize_codex_provider_config(codex_home, [])
+
+    provider = tomllib.loads((codex_home / "config.toml").read_text())["model_providers"][
+        "gateway"
+    ]
+    assert provider["request_max_retries"] == 0
+    assert provider["stream_max_retries"] == 0
+    assert provider["stream_idle_timeout_ms"] == 900_000
+
+
+def test_materialize_codex_provider_config_pins_multidex_retry_policy(
+    tmp_path: Path,
+) -> None:
+    """MultiDex never replays a prefill, even if its table inherits a retry budget."""
+    import tomllib
+
+    from omnigent.inner.codex_executor import materialize_codex_provider_config
+    from omnigent.spec.types import RetryPolicy
+
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_text(
+        '[model_providers.multidex]\nname = "multidex"\n'
+        'base_url = "http://10.0.13.33:2120/v1"\n'
+        "request_max_retries = 7\n"
+        "stream_max_retries = 7\n"
+        "stream_idle_timeout_ms = 120000\n"
+    )
+
+    materialize_codex_provider_config(
+        codex_home, [], retry_policy=RetryPolicy(max_retries=7, timeout_per_request_s=120)
+    )
+
+    provider = tomllib.loads((codex_home / "config.toml").read_text())["model_providers"][
+        "multidex"
+    ]
+    assert provider["request_max_retries"] == 0
+    assert provider["stream_max_retries"] == 0
+    assert provider["stream_idle_timeout_ms"] == 900_000
+
+
 def test_materialize_codex_provider_config_leaves_builtin_provider_tables_untouched(
     tmp_path: Path,
 ) -> None:

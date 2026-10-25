@@ -1559,10 +1559,23 @@ def materialize_codex_provider_config(
                 inline_provider[key] = value
             providers[provider_name] = inline_provider
             provider_config = inline_provider
-        provider_config["request_max_retries"] = policy.max_retries
-        provider_config["stream_max_retries"] = policy.max_retries
-        if policy.timeout_per_request_s is not None:
-            provider_config["stream_idle_timeout_ms"] = int(policy.timeout_per_request_s * 1000)
+        # Local model endpoints must never replay a very large prompt on a
+        # dropped stream: a silent retry can spend minutes re-prefilling the
+        # same unchanged context. Pin their retry budget instead of inheriting
+        # Omnigent's general policy.
+        if provider_name == "multidex" or provider_name.startswith("omnigent-multidex-"):
+            provider_config["request_max_retries"] = 0
+            provider_config["stream_max_retries"] = 0
+            provider_config["stream_idle_timeout_ms"] = 900_000
+        else:
+            # Respect an explicitly configured provider policy and only supply
+            # values the provider table did not already define.
+            provider_config.setdefault("request_max_retries", policy.max_retries)
+            provider_config.setdefault("stream_max_retries", policy.max_retries)
+            if policy.timeout_per_request_s is not None:
+                provider_config.setdefault(
+                    "stream_idle_timeout_ms", int(policy.timeout_per_request_s * 1000)
+                )
         # MultiDex's configured Responses endpoint retains completed response
         # items and supports `previous_response_id`.  A session-private
         # CODEX_HOME can outlive an older registration that predates this
