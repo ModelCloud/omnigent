@@ -5861,14 +5861,17 @@ def test_list_tasks_is_not_runner_local_builtin() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "wrapper_label", ["claude-code-native-ui", "codex-native-ui", "localdex-native-ui"]
+)
 async def test_sys_cancel_task_stops_subagent_and_dedupes_late_completion(
     monkeypatch: pytest.MonkeyPatch,
+    wrapper_label: str,
 ) -> None:
     """
-    ``sys_cancel_task`` hard-stops a running claude-native child cleanly.
+    ``sys_cancel_task`` hard-stops a running native child cleanly.
 
-    The created child carries the ``claude-code-native-ui`` wrapper label, so
-    the cancel routes to ``stop_session`` (the claude-native hard-stop). The
+    The created child carries a native wrapper label with a hard-stop path. The
     mock server marks the child cancelled when it receives the event, matching
     the synchronous claude-native stop path (``_handle_claude_native_stop``
     kills the pane and reclaims the work entry). A later completion attempt
@@ -5890,13 +5893,13 @@ async def test_sys_cancel_task_stops_subagent_and_dedupes_late_completion(
         ):
             return httpx.Response(200, json={"data": []})
         if request.method == "POST" and request.url.path == "/v1/sessions":
-            # claude-native sub-agent: the server stamps the wrapper label so
+            # Native sub-agent: the server stamps the wrapper label so
             # the cancel routes to stop_session (the hard-stop path).
             return httpx.Response(
                 201,
                 json={
                     "id": "conv_child_cancel",
-                    "labels": {"omnigent.wrapper": "claude-code-native-ui"},
+                    "labels": {"omnigent.wrapper": wrapper_label},
                 },
             )
         if (
@@ -5970,31 +5973,31 @@ async def test_sys_cancel_task_stops_subagent_and_dedupes_late_completion(
 
 
 @pytest.mark.asyncio
-async def test_sys_cancel_task_reports_codex_native_cancel_as_best_effort() -> None:
+async def test_sys_cancel_task_reports_pi_native_cancel_as_best_effort() -> None:
     """
-    Unconfirmed codex-native cancel must not promise terminal inbox status.
+    Unconfirmed pi-native cancel must not promise terminal inbox status.
 
-    Codex-native has no runner-side hard-stop path (stop aliases to
+    Pi-native has no runner-side hard-stop path (stop aliases to
     interrupt), so the cancel routes to ``interrupt`` and the tool result
     must say cancellation is best-effort instead of telling the parent to
     wait forever for a terminal inbox item.
     """
     from omnigent.runner.tool_dispatch import execute_tool
 
-    parent_id = "conv_parent_codex_cancel"
-    child_id = "conv_child_codex_cancel"
+    parent_id = "conv_parent_pi_cancel"
+    child_id = "conv_child_pi_cancel"
     subagent_work.register_subagent_work(
         parent_session_id=parent_id,
         child_session_id=child_id,
-        agent="codex_impl",
+        agent="pi_impl",
         title="native",
-        wrapper_label="codex-native-ui",
+        wrapper_label="pi-native-ui",
     )
     stops: list[dict[str, Any]] = []
 
     async def _server_handler(request: httpx.Request) -> httpx.Response:
         """
-        Accept the interrupt without marking the child terminal (codex no-op).
+        Accept the interrupt without marking the child terminal.
 
         :param request: Request sent to the child session events route.
         :returns: Accepted response.
@@ -6021,7 +6024,7 @@ async def test_sys_cancel_task_reports_codex_native_cancel_as_best_effort() -> N
     finally:
         subagent_work.unregister_subagent_work(child_id)
 
-    # Codex-native routes to interrupt; ``data`` rides along for
+    # Pi-native routes to interrupt; ``data`` rides along for
     # SessionEventInput compatibility with older servers.
     assert stops == [{"type": "interrupt", "data": {}}]
     assert cancel_output == {

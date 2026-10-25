@@ -223,7 +223,7 @@ async def _cancel_auto_forwarder_task(session_id: str) -> None:
         )
 
 
-async def teardown_codex_native_app_server(session_id: str) -> None:
+async def teardown_codex_native_app_server(session_id: str, *, strict: bool = False) -> None:
     """
     Tear down a host-spawned codex-native session's app-server subprocess.
 
@@ -235,18 +235,30 @@ async def teardown_codex_native_app_server(session_id: str) -> None:
     Cancelling the forwarder closes the app-server via the forwarder's own
     ``finally`` (see :func:`_codex_discover_thread_and_forward`). The captured
     server is also closed if no forwarder adopted it; a replacement registered
-    during cancellation keeps its ownership. Without a registered backend, only
-    the remembered launch directory is retired.
+    during cancellation keeps its ownership. Without a registered backend,
+    best-effort cleanup only retires the remembered launch directory; explicit
+    stop also cancels any remaining forwarder.
 
     :param session_id: Session/conversation id, e.g. ``"conv_abc123"``.
+    :param strict: Surface close failures for an explicit user stop.
     :returns: None.
     """
     app_server = _AUTO_CODEX_APP_SERVERS.get(session_id)
     bridge_dir = _AUTO_CODEX_BRIDGE_DIRS.get(session_id)
     if app_server is None:
-        _AUTO_CODEX_BRIDGE_DIRS.pop(session_id, None)
+        if strict:
+            await _cancel_auto_forwarder_task(session_id)
+        if _AUTO_CODEX_APP_SERVERS.get(session_id) is None and (
+            _AUTO_CODEX_BRIDGE_DIRS.get(session_id) is bridge_dir
+        ):
+            _AUTO_CODEX_BRIDGE_DIRS.pop(session_id, None)
         return
     await _cancel_auto_forwarder_task(session_id)
+    try:
+        await app_server.close()
+    except Exception:
+        if strict:
+            raise
     registered_server = _AUTO_CODEX_APP_SERVERS.get(session_id)
     if registered_server is app_server:
         _AUTO_CODEX_APP_SERVERS.pop(session_id, None)
@@ -255,8 +267,6 @@ async def teardown_codex_native_app_server(session_id: str) -> None:
         _AUTO_CODEX_BRIDGE_DIRS.get(session_id) is bridge_dir
     ):
         _AUTO_CODEX_BRIDGE_DIRS.pop(session_id, None)
-    with contextlib.suppress(Exception):
-        await app_server.close()
 
 
 async def teardown_all_codex_native_app_servers() -> None:
@@ -4939,7 +4949,11 @@ async def _launch_codex_native_tui(
             ),
             command=codex_command,
             args=codex_launch_args,
-            env=codex_terminal_env(app_server),
+            env={
+                **codex_terminal_env(app_server),
+                # LocalDex must not replace the runner's composer with a goal modal.
+                "LOCALDEX_SKIP_RESUME_GOAL_PROMPT": "1",
+            },
             # Match the local ``omnigent codex`` terminal scrollback.
             scrollback=100_000,
             # Preserve the final frame and exit status until lifecycle cleanup.

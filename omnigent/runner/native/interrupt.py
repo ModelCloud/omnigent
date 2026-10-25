@@ -17,7 +17,7 @@ two parametrized methods driven by :data:`_UNIFORM_INTERRUPT` /
 :data:`_UNIFORM_STOP`. claude interrupt (bridge-id resolution), codex interrupt
 (MCP-startup + app-server ``turn/interrupt``), and opencode interrupt (native
 ``POST /session/{id}/abort``) keep dedicated methods; claude stop is likewise
-special-cased and codex/pi alias stop to their interrupt handler.
+special-cased, as is codex stop; pi aliases stop to its interrupt handler.
 
 Coverage note: opencode-native stop and both antigravity-native paths return
 ``None`` and fall through to the in-process cancel.
@@ -40,6 +40,7 @@ from omnigent.native.native_coding_agents import native_coding_agent_for_harness
 from omnigent.runner.native.orchestration import (
     _cancel_auto_forwarder_task,
     _claude_native_bridge_id_for_session,
+    teardown_codex_native_app_server,
 )
 from omnigent.runner.resource_registry import (
     _STATUS_EMITTING_TERMINAL_ROLES,
@@ -229,8 +230,8 @@ _UNIFORM_INTERRUPT: dict[str, _UniformInterrupt] = {
     ),
 }
 
-# The seven uniform stop harnesses (claude has a special stop; codex/pi have no
-# distinct stop — they route to interrupt, handled in ``stop``).
+# The seven uniform stop harnesses (Claude/Codex have dedicated stops;
+# Pi routes to interrupt).
 _UNIFORM_STOP: dict[str, _UniformStop] = {
     "cursor": _UniformStop(
         "omnigent.harnesses.cursor_native.bridge",
@@ -307,8 +308,8 @@ def native_cancel_capability(wrapper_label: str | None) -> str:
     Mirrors :meth:`NativeInterruptRunner.stop` instead of comparing one Claude
     wrapper label:
 
-    * ``"stop"`` — Claude's dedicated stop, or a key in :data:`_UNIFORM_STOP`
-    * ``"best_effort"`` — remaining native agents (Codex/Pi alias stop to
+    * ``"stop"`` — Claude/Codex's dedicated stop, or a key in :data:`_UNIFORM_STOP`
+    * ``"best_effort"`` — remaining native agents (Pi aliases stop to
       interrupt; Antigravity/OpenCode have no stop handler)
     * ``"inprocess"`` — no native agent for this label
 
@@ -318,7 +319,7 @@ def native_cancel_capability(wrapper_label: str | None) -> str:
     agent = native_agent_for_cancel(wrapper_label)
     if agent is None:
         return "inprocess"
-    if agent.key == "claude" or agent.key in _UNIFORM_STOP:
+    if agent.key in ("claude", "codex") or agent.key in _UNIFORM_STOP:
         return "stop"
     return "best_effort"
 
@@ -329,6 +330,7 @@ def native_cancel_capability(wrapper_label: str | None) -> str:
 # hook, so this timer is the liveness floor that keeps the parent from
 # hanging; a confirmed completion that lands later still corrects the record.
 _NATIVE_INTERRUPT_CANCEL_GRACE_S = 20.0
+_CODEX_STOP_INTERRUPT_TIMEOUT_S = 5.0
 
 
 class NativeInterruptRunner:
@@ -389,8 +391,8 @@ class NativeInterruptRunner:
     async def stop(self, harness_name: str | None, conv_id: str) -> Response | None:
         """Dispatch a stop_session to the harness's bridge.
 
-        codex/pi have no distinct stop — they route to their interrupt handler,
-        exactly as the original dispatch chain did.
+        pi has no distinct stop — it routes to its interrupt handler, exactly
+        as the original dispatch chain did.
 
         :returns: A response when this harness has a stop handler, else ``None``
             so the caller falls through to the in-process turn cancel.
@@ -401,7 +403,9 @@ class NativeInterruptRunner:
         key = agent.key
         if key == "claude":
             return await self._claude_stop(conv_id)
-        if key in ("codex", "pi"):
+        if key == "codex":
+            return await self._codex_stop(conv_id)
+        if key == "pi":
             return await self.interrupt(harness_name, conv_id)
         spec = _UNIFORM_STOP.get(key)
         if spec is None:
@@ -526,7 +530,7 @@ class NativeInterruptRunner:
                 delivery_ack.reason,
             )
 
-    async def _teardown_session_terminals(self, conv_id: str) -> None:
+    async def _teardown_session_terminals(self, conv_id: str, *, strict: bool = False) -> None:
         from omnigent.entities.session_resources import terminal_resource_id
         from omnigent.runner.tool_dispatch import _publish_terminal_deleted_event
 
@@ -537,23 +541,29 @@ class NativeInterruptRunner:
             (entry.terminal_name, entry.session_key)
             for entry in terminal_registry.list_for_conversation(conv_id)
         ]
+        close_error: Exception | None = None
         for terminal_name, session_key in terminals:
             terminal_id = terminal_resource_id(terminal_name, session_key)
             try:
                 await self._resource_registry.close_terminal(conv_id, terminal_id)
-            except (RuntimeError, OSError):
+            except (RuntimeError, OSError) as exc:
+                close_error = exc
                 self._logger.warning(
                     "Failed to close terminal %s for session %s during stop",
                     terminal_id,
                     conv_id,
                     exc_info=True,
                 )
+                if strict:
+                    continue
             _publish_terminal_deleted_event(
                 conversation_id=conv_id,
                 terminal_name=terminal_name,
                 session_key=session_key,
                 publish_event=self._publish_event,
             )
+        if strict and close_error is not None:
+            raise close_error
 
     async def _uniform_interrupt(
         self, spec: _UniformInterrupt, conv_id: str, *, terminal_role: str | None = None
@@ -702,7 +712,8 @@ class NativeInterruptRunner:
             )
         return Response(status_code=204)
 
-    async def _codex_interrupt(self, conv_id: str) -> Response:
+    async def _codex_interrupt(self, conv_id: str, *, stopping: bool = False) -> Response:
+        """Interrupt a turn; a full stop owns its own idle and cancellation edges."""
         from omnigent.harnesses.codex_native.app_server import (
             CodexAppServerResponseError,
             client_for_transport,
@@ -799,7 +810,9 @@ class NativeInterruptRunner:
                                 )
 
                         cleared = clear_active_turn_id_if_matches(
-                            bridge_dir, state.active_turn_id, on_cleared=_publish_idle
+                            bridge_dir,
+                            state.active_turn_id,
+                            on_cleared=None if stopping else _publish_idle,
                         )
                         self._logger.info(
                             "Codex-native interrupt reconciled an already-ended turn "
@@ -846,7 +859,71 @@ class NativeInterruptRunner:
         finally:
             with contextlib.suppress(Exception):
                 await codex_client.close()
-        self._defer_parent_wake_after_native_interrupt(conv_id)
+        if not stopping:
+            self._defer_parent_wake_after_native_interrupt(conv_id)
+        return Response(status_code=204)
+
+    async def _codex_stop(self, conv_id: str) -> Response:
+        """Stop a Codex/LocalDex native session without leaving a live TUI.
+
+        Interrupting alone leaves the ``localdex --remote`` pane attached: when
+        its app-server connection drops it treats that as a transport error and
+        its auto-reconnect resumes the thread the user just stopped.
+        """
+        work_id = (
+            self._subagent_work_id_for_session(conv_id)
+            if self._subagent_work_id_for_session is not None
+            else None
+        )
+        # A disconnected app-server cannot acknowledge an interrupt. Explicit
+        # stop must still kill the TUI and the runner-owned backend in that case.
+        try:
+            async with asyncio.timeout(_CODEX_STOP_INTERRUPT_TIMEOUT_S):
+                await self._codex_interrupt(conv_id, stopping=True)
+        except Exception:
+            self._logger.warning(
+                "Codex-native stop could not interrupt session=%s; continuing teardown",
+                conv_id,
+                exc_info=True,
+            )
+        try:
+            try:
+                await self._teardown_session_terminals(conv_id, strict=True)
+            finally:
+                await teardown_codex_native_app_server(conv_id, strict=True)
+        except Exception as exc:
+            self._logger.warning(
+                "Codex-native stop teardown failed for session=%s", conv_id, exc_info=True
+            )
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": "codex_native_stop_failed",
+                    "detail": self._client_safe_error_detail(exc, context="codex-native stop"),
+                },
+            )
+        self._publish_event(conv_id, {"type": "session.status", "status": "idle"})
+        self._resource_registry.note_external_session_status(conv_id, "idle")
+        # The teardown is confirmed, so this ``cancelled`` is truthful and
+        # settles any interrupt still waiting on its outcome.
+        self.clear_pending_interrupt(conv_id)
+        if self._subagent_work_id_for_session is not None and work_id is None:
+            return Response(status_code=204)
+        delivery_ack = self._mark_subagent_terminal_and_wake(
+            conv_id,
+            status="cancelled",
+            output=None,
+            only_if_work_id=work_id,
+        )
+        if not delivery_ack.delivered and (
+            delivery_ack.entry is not None or conv_id in self._session_sub_agent_names
+        ):
+            self._logger.warning(
+                "Codex-native stop succeeded but sub-agent delivery was "
+                "not confirmed; session=%s reason=%s",
+                conv_id,
+                delivery_ack.reason,
+            )
         return Response(status_code=204)
 
     async def _opencode_interrupt(self, conv_id: str) -> Response | None:

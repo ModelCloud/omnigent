@@ -476,34 +476,53 @@ async def test_teardown_codex_native_app_server_cancels_forwarder_and_closes_ser
 
 
 @pytest.mark.asyncio
-async def test_teardown_codex_native_app_server_noop_without_registered_server() -> None:
+@pytest.mark.parametrize("strict,replacement", [(False, False), (True, False), (True, True)])
+async def test_teardown_codex_native_app_server_without_registered_server(
+    strict: bool,
+    replacement: bool,
+    tmp_path: Path,
+) -> None:
     """
-    Teardown is a no-op for a session with no registered codex app-server.
+    Best-effort cleanup preserves a forwarder without an app-server; stop cancels it.
 
     Shared required-session and idle-reaper cleanup can fire for every native
     harness, so calling this for a non-codex session — or a codex session whose
     server is already gone — must not touch that session's forwarder or raise.
+    Explicit Codex stop cancels it but must preserve a concurrent replacement.
     """
     session_id = "1111111122222222aaaaaaaabbbbbbbb"
+    from omnigent.runner.native import orchestration
+
     run = _ForwarderRun()
+    replacement_dir = tmp_path / "replacement"
+    replacement_server = object()
 
     async def _parked() -> None:
         run.task = asyncio.current_task()
-        await asyncio.Event().wait()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            if replacement:
+                runner_app_mod._AUTO_CODEX_APP_SERVERS[session_id] = replacement_server
+                orchestration._AUTO_CODEX_BRIDGE_DIRS[session_id] = replacement_dir
 
     try:
         task = asyncio.create_task(_parked())
         runner_app_mod._register_auto_forwarder_task(session_id, task)
         await asyncio.sleep(0)
 
-        await runner_app_mod.teardown_codex_native_app_server(session_id)
+        await runner_app_mod.teardown_codex_native_app_server(session_id, strict=strict)
 
-        # No registered codex app-server -> the forwarder is left untouched.
-        assert not task.done()
-        assert session_id in runner_app_mod._AUTO_FORWARDER_TASKS
+        assert task.cancelled() == strict
+        assert (session_id in runner_app_mod._AUTO_FORWARDER_TASKS) == (not strict)
+        if replacement:
+            assert runner_app_mod._AUTO_CODEX_APP_SERVERS[session_id] is replacement_server
+            assert orchestration._AUTO_CODEX_BRIDGE_DIRS[session_id] is replacement_dir
     finally:
         runner_app_mod._AUTO_FORWARDER_TASKS.pop(session_id, None)
         await _drain_forwarder_runs([run])
+        runner_app_mod._AUTO_CODEX_APP_SERVERS.pop(session_id, None)
+        orchestration._AUTO_CODEX_BRIDGE_DIRS.pop(session_id, None)
 
 
 @pytest.mark.asyncio
