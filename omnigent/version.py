@@ -12,6 +12,8 @@ the two in sync, so releases are cut by bumping pyproject alone (via
 ``scripts/update_versions.py``).
 """
 
+import pathlib
+
 VERSION = "0.20.0.dev0"
 
 _DISPLAY_VERSION: str | None = None
@@ -70,7 +72,6 @@ def _worktree_head_sha(*, allow_dirty: bool = False) -> str:
         showing a stale ``_build_info.py`` commit — is strictly worse: a
         leftover stamp is guaranteed wrong, HEAD is usually right.
     """
-    import pathlib
     import subprocess
 
     root = pathlib.Path(__file__).resolve().parent.parent
@@ -99,7 +100,7 @@ def _worktree_head_sha(*, allow_dirty: bool = False) -> str:
     return sha
 
 
-def _worktree_has_changes(root: object) -> bool:
+def _worktree_has_changes(root: pathlib.Path) -> bool:
     """``True`` iff the worktree has staged or unstaged tracked changes."""
     import subprocess
 
