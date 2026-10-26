@@ -20,43 +20,49 @@ PROVIDER_HEALTH_TTL_S = 5.0
 _PROBE_TIMEOUT_S = 2.0
 
 
-async def _probe_one(base_url: str) -> bool:
-    """Return True when the endpoint's ``/models`` route answers healthily.
+async def _probe_one(base_url: str, token: str | None) -> bool:
+    """Return True when ``GET {base_url}/models`` succeeds.
 
-    ``GET {base_url}/models`` is the standard OpenAI-compatible listing every
-    client issues. A 2xx or 4xx status means the gateway is up (401/403 =
-    reachable but auth-gated; 404 = reachable, route unlisted); a 5xx means
-    the endpoint is reachable but broken — counted offline alongside
-    transport failures (DNS, refused, TLS, timeout).
+    The probe always authenticates with the provider's configured bearer
+    token when one exists, and then requires a 2xx — a 401/403 flags a wrong
+    or expired credential and counts offline. Providers with no configured
+    credential (e.g. ``openai``, authenticated via Codex login rather than a
+    bearer) fall back to a reachability check: any HTTP response below 5xx
+    means the gateway answers; 5xx and transport failures (DNS, refused,
+    TLS, timeout) count offline either way.
     """
+    headers = {"Authorization": f"Bearer {token}"} if token else None
     try:
         async with httpx.AsyncClient(timeout=_PROBE_TIMEOUT_S, follow_redirects=True) as client:
-            response = await client.get(f"{base_url.rstrip('/')}/models")
+            response = await client.get(f"{base_url.rstrip('/')}/models", headers=headers)
     except httpx.HTTPError:
         return False
     except Exception:  # noqa: BLE001 - a probe must never break the catalog answer
         return False
+    if token:
+        return 200 <= response.status_code < 300
     return response.status_code < 500
 
 
 async def probe_provider_health(
-    providers: dict[str, str],
+    providers: dict[str, tuple[str, str | None]],
     *,
     cache: dict[str, tuple[float, bool]] | None = None,
     now: float | None = None,
 ) -> dict[str, str]:
-    """Map ``provider_id -> "online" | "offline"`` for each ``base_url``.
+    """Map ``provider_id -> "online" | "offline"`` for each endpoint.
 
-    :param providers: Provider id to endpoint base_url.
+    :param providers: Provider id to ``(base_url, bearer_token_or_None)``.
     :param cache: Per-process TTL cache; misses and entries older than
         :data:`PROVIDER_HEALTH_TTL_S` are probed concurrently. Passing
         ``None`` probes every entry.
     :param now: Clock override for tests.
     """
     now = time.monotonic() if now is None else now
-    pending: dict[str, str] = {}
+    pending: dict[str, tuple[str, str | None]] = {}
     health: dict[str, str] = {}
-    for provider_id, base_url in providers.items():
+    for provider_id, endpoint in providers.items():
+        base_url = endpoint[0]
         if not base_url:
             continue
         if cache is not None:
@@ -64,9 +70,11 @@ async def probe_provider_health(
             if entry is not None and now - entry[0] < PROVIDER_HEALTH_TTL_S:
                 health[provider_id] = "online" if entry[1] else "offline"
                 continue
-        pending[provider_id] = base_url
+        pending[provider_id] = endpoint
     if pending:
-        results = await asyncio.gather(*(_probe_one(url) for url in pending.values()))
+        results = await asyncio.gather(
+            *(_probe_one(url, token) for url, token in pending.values())
+        )
         for provider_id, up in zip(pending, results, strict=True):
             if cache is not None:
                 cache[provider_id] = (now, up)
@@ -87,20 +95,20 @@ BUILTIN_PROVIDER_BASE_URLS = {
 _SHARED_CACHE: dict[str, tuple[float, bool]] = {}
 
 
-def _provider_base_urls(referenced: set[str]) -> dict[str, str]:
-    """Resolve each referenced provider id to its configured endpoint.
+def _provider_endpoints(referenced: set[str]) -> dict[str, tuple[str, str | None]]:
+    """Resolve each referenced provider id to ``(base_url, bearer_token)``.
 
-    MultiDex registrations carry their own ``base_url``; the remaining ids
+    MultiDex registrations carry both on the model entry; the remaining ids
     fall back to the shared ``config.toml`` provider table, then to the
-    compiled-in gateway defaults.
+    compiled-in gateway defaults (no token).
     """
-    from omnigent.harnesses.codex_native.app_server import _config_toml_provider_base_url
     from omnigent.harnesses.multidex_native.config import (
         load_multidex_config,
         multidex_models,
+        multidex_registration_bearer_token,
     )
 
-    base_urls: dict[str, str] = {}
+    endpoints: dict[str, tuple[str, str | None]] = {}
     try:
         multidex = load_multidex_config(require_token=False)
     except (FileNotFoundError, ValueError):
@@ -108,14 +116,41 @@ def _provider_base_urls(referenced: set[str]) -> dict[str, str]:
     if multidex is not None:
         for item in multidex_models(multidex):
             if item.provider in referenced and item.base_url:
-                base_urls[item.provider] = item.base_url
-    for provider_id in referenced - base_urls.keys():
-        url = _config_toml_provider_base_url(provider_id)
+                endpoints[item.provider] = (
+                    item.base_url,
+                    multidex_registration_bearer_token(item),
+                )
+    for provider_id in referenced - endpoints.keys():
+        url, token = _config_toml_provider_endpoint(provider_id)
         if url is None:
             url = BUILTIN_PROVIDER_BASE_URLS.get(provider_id)
         if url:
-            base_urls[provider_id] = url
-    return base_urls
+            endpoints[provider_id] = (url, token)
+    return endpoints
+
+
+def _config_toml_provider_endpoint(
+    provider_name: str,
+) -> tuple[str | None, str | None]:
+    """Read ``base_url`` + ``experimental_bearer_token`` for a config.toml provider."""
+    import tomllib
+
+    from omnigent.inner.codex_executor import _codex_home_config_source_from_env
+
+    config_path = _codex_home_config_source_from_env() / "config.toml"
+    try:
+        data = tomllib.loads(config_path.read_text(encoding="utf-8"))
+        table = data["model_providers"][provider_name]
+    except (OSError, tomllib.TOMLDecodeError, KeyError, TypeError):
+        return None, None
+    if not isinstance(table, dict):
+        return None, None
+    base_url = table.get("base_url")
+    token = table.get("experimental_bearer_token")
+    return (
+        base_url if isinstance(base_url, str) else None,
+        token if isinstance(token, str) else None,
+    )
 
 
 async def annotate_provider_health(
@@ -134,11 +169,11 @@ async def annotate_provider_health(
     referenced = {str(row.get("providerId") or "openai") for row in rows if isinstance(row, dict)}
     if not referenced:
         return
-    base_urls = await asyncio.to_thread(_provider_base_urls, referenced)
-    if not base_urls:
+    endpoints = await asyncio.to_thread(_provider_endpoints, referenced)
+    if not endpoints:
         return
     health = await probe_provider_health(
-        base_urls, cache=_SHARED_CACHE if cache is None else cache
+        endpoints, cache=_SHARED_CACHE if cache is None else cache
     )
     for row in rows:
         if not isinstance(row, dict):
