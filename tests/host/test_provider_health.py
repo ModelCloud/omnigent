@@ -8,6 +8,8 @@ from omnigent.host.provider_health import (
     PROVIDER_HEALTH_TTL_S,
     annotate_provider_health,
     probe_provider_health,
+    probe_provider_rtt,
+    provider_rtt,
 )
 
 
@@ -112,6 +114,61 @@ async def test_probe_rechecks_after_ttl_expiry(monkeypatch):
     clock["now"] += PROVIDER_HEALTH_TTL_S + 0.1
     await probe_provider_health(providers, cache=cache)
     assert calls == ["https://api.openai.com/v1/models", "https://api.openai.com/v1/models"]
+
+
+@pytest.mark.asyncio
+async def test_probe_provider_rtt_records_latest_and_average(monkeypatch):
+    """Each probe's round-trip is recorded; average covers the window."""
+    rtts = iter([0.10, 0.20])
+    clock = {"now": 0.0}
+
+    async def get(url, headers):
+        clock["now"] += next(rtts)  # request latency = the intended RTT
+        return _Response(200)
+
+    monkeypatch.setattr(
+        "omnigent.host.provider_health.httpx.AsyncClient", lambda **kw: _client(get)()
+    )
+    monkeypatch.setattr(
+        "omnigent.host.provider_health.time.monotonic", lambda: clock["now"]
+    )
+    cache: dict = {}
+    for _ in range(2):
+        online, latest, average = await probe_provider_rtt(
+            "p", "https://api.openai.com/v1", None, cache=cache
+        )
+        assert online is True
+    assert (latest, average) == (pytest.approx(0.20), pytest.approx(0.15))
+    assert provider_rtt("p", cache=cache) == (pytest.approx(0.20), pytest.approx(0.15))
+    assert provider_rtt("missing", cache=cache) == (None, None)
+
+
+@pytest.mark.asyncio
+async def test_probe_provider_rtt_failed_probe_keeps_prior_samples(monkeypatch):
+    """A transport failure stores no RTT and preserves earlier samples."""
+    calls = {"n": 0}
+    clock = {"now": 0.0}
+
+    async def get(url, headers):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            clock["now"] += 0.05  # first request's RTT
+            return _Response(200)
+        raise TimeoutError("unreachable")
+
+    monkeypatch.setattr(
+        "omnigent.host.provider_health.httpx.AsyncClient", lambda **kw: _client(get)()
+    )
+    monkeypatch.setattr(
+        "omnigent.host.provider_health.time.monotonic", lambda: clock["now"]
+    )
+    cache: dict = {}
+    await probe_provider_rtt("p", "https://api.openai.com/v1", None, cache=cache)
+    online, latest, average = await probe_provider_rtt(
+        "p", "https://api.openai.com/v1", None, cache=cache
+    )
+    assert online is False
+    assert (latest, average) == (pytest.approx(0.05), pytest.approx(0.05))  # failed probe adds no sample
 
 
 def test_annotate_provider_speed_stamps_relative_speed_per_combo():

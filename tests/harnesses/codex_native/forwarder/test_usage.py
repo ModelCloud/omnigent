@@ -107,6 +107,28 @@ def test_turn_token_rate_fields_omits_unmeasurable_channels() -> None:
     assert fwd._turn_token_rate_fields(_usage_frame(), state) == {}
 
 
+def test_turn_token_rate_fields_subtracts_probed_rtt() -> None:
+    """The probed round-trip is removed from the measured delta span."""
+    state = fwd._CodexForwarderState()
+    state.turn_output_first_at = 20.0
+    state.turn_output_last_at = 29.0
+    state.provider_rtt_seconds = 3.0  # 90 tok / (9s - 3s) = 15.0 t/s
+
+    fields = fwd._turn_token_rate_fields(_usage_frame(), state)
+
+    assert fields["turn_output_tps"] == 15.0
+
+
+def test_turn_token_rate_fields_drops_span_fully_consumed_by_rtt() -> None:
+    """An RTT at least as wide as the span leaves nothing measurable."""
+    state = fwd._CodexForwarderState()
+    state.turn_output_first_at = 20.0
+    state.turn_output_last_at = 21.0
+    state.provider_rtt_seconds = 5.0
+
+    assert fwd._turn_token_rate_fields(_usage_frame(), state) == {}
+
+
 @pytest.mark.asyncio
 async def test_usage_post_carries_response_id_and_rates() -> None:
     """The usage post pins rates to the turn's response id."""

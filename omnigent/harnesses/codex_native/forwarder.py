@@ -51,6 +51,7 @@ from omnigent.harnesses.codex_native.bridge import (
     read_codex_config_developer_instructions_state,
     read_codex_config_effort,
     read_codex_config_model,
+    read_codex_config_provider_endpoint,
     read_mcp_startup,
     settle_pending_mcp_startup,
     update_active_turn_id,
@@ -64,6 +65,7 @@ from omnigent.harnesses.codex_native.elicitation import (
 from omnigent.harnesses.codex_native.elicitation import (
     is_codex_request_id as _is_codex_request_id,
 )
+from omnigent.host.provider_health import probe_provider_rtt
 from omnigent.native._native_forwarder_health import (
     note_post_success as note_native_post_success,
 )
@@ -122,6 +124,10 @@ _DELTA_POST_TIMEOUT_SECONDS = 5.0
 # Preserve healthy queued deltas briefly at ordering boundaries. If they do not
 # drain, shed the remaining previews and wait only for the current bounded POST.
 _DELTA_FLUSH_GRACE_SECONDS = 1.0
+# Provider round-trip probe: a health-checked ``GET {base_url}/models`` every
+# 30s whose measured RTT is subtracted from delta spans so turn rates exclude
+# network transfer.
+_PROVIDER_RTT_PROBE_INTERVAL_SECONDS = 30.0
 # Bound the post-shedding wait below the runner's 10s cancellation budget and
 # above the delta POST deadline.
 _DELTA_MARKER_TIMEOUT_SECONDS = 6.0
@@ -586,6 +592,11 @@ class _CodexForwarderState:
     turn_reasoning_last_at: float | None = None
     turn_output_first_at: float | None = None
     turn_output_last_at: float | None = None
+    # Latest + rolling-average provider round-trip (seconds) from the
+    # periodic health probe; latest is subtracted from delta spans so rates
+    # exclude network transfer.
+    provider_rtt_seconds: float | None = None
+    provider_rtt_avg_seconds: float | None = None
     turn_diff_by_turn: dict[str, str] = field(default_factory=dict)
     # Whether model output has already settled the synthesized MCP startup
     # round. The round is seeded once per forwarder connection (never on
@@ -2293,6 +2304,10 @@ async def supervise_forwarder(
             ),
             name="codex-native-forwarder-side-chat",
         )
+        rtt_probe_task = asyncio.create_task(
+            _provider_rtt_probe_loop(bridge_dir, forwarder_state),
+            name="codex-native-forwarder-rtt-probe",
+        )
         await _sleep(0)
         try:
             async for event in client.iter_events():
@@ -2371,8 +2386,38 @@ async def supervise_forwarder(
             side_chat_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await side_chat_task
+            rtt_probe_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await rtt_probe_task
             await forwarder_state.close_child_streams()
             await client.close()
+
+
+async def _provider_rtt_probe_loop(
+    bridge_dir: Path, forwarder_state: _CodexForwarderState
+) -> None:
+    """Measure the provider's HTTP round-trip latency every 30s.
+
+    Times an authenticated ``GET {base_url}/models`` via the same probe
+    machinery that drives the picker's health dots and keeps the latest +
+    rolling-average RTT on ``forwarder_state`` so
+    :func:`_turn_token_rate_fields` can subtract measured network transfer
+    from each delta span. The endpoint re-resolves from config.toml every
+    pass so an in-TUI ``/model`` provider switch applies on the next probe.
+    A failed probe keeps the last measurement rather than zeroing it — a
+    stale-but-real RTT is closer than none. Runs until cancelled.
+    """
+    while True:
+        endpoint = read_codex_config_provider_endpoint(bridge_dir)
+        if endpoint is not None:
+            provider, base_url, token = endpoint
+            # Records into provider_health's shared cache, so the in-session
+            # picker's online dots ride these probes instead of pinging again.
+            _online, rtt, average = await probe_provider_rtt(provider, base_url, token)
+            if rtt is not None:
+                forwarder_state.provider_rtt_seconds = rtt
+                forwarder_state.provider_rtt_avg_seconds = average
+        await _sleep(_PROVIDER_RTT_PROBE_INTERVAL_SECONDS)
 
 
 async def _drive_side_chat_requests(
@@ -7876,10 +7921,11 @@ def _turn_token_rate_fields(
     Derive the turn's generation rates (tokens/sec) for the UI display.
 
     Token counts come from Codex's ``tokenUsage.last`` per-completion
-    breakdown; durations come from the forwarder's own delta-stream bounds,
-    which cover generation only — queue wait, prompt processing and network
-    transfer sit outside the measured span. Reasoning tokens are a subset of
-    ``outputTokens``, so the visible-output rate subtracts them.
+    breakdown; durations come from the forwarder's own delta-stream bounds
+    minus the latest probed provider round-trip, which cover generation only
+    — queue wait, prompt processing and network transfer sit outside the
+    measured span. Reasoning tokens are a subset of ``outputTokens``, so the
+    visible-output rate subtracts them.
 
     :param params: Codex ``thread/tokenUsage/updated`` params.
     :param forwarder_state: Forwarder state carrying delta timestamps.
@@ -7893,19 +7939,26 @@ def _turn_token_rate_fields(
     last = token_usage.get("last") if isinstance(token_usage, dict) else None
     if not isinstance(last, dict):
         return fields
+    # The measured span includes one network hop at each end (provider →
+    # codex → forwarder). Subtract the latest probed round-trip so the rate
+    # reflects generation only; spans that shrink to nothing are dropped.
+    rtt = forwarder_state.provider_rtt_seconds
+    overhead = rtt if isinstance(rtt, (int, float)) and rtt > 0 else 0.0
     reasoning_tokens = last.get("reasoningOutputTokens")
     reasoning_first = forwarder_state.turn_reasoning_first_at
     reasoning_last = forwarder_state.turn_reasoning_last_at
+    reasoning_span = (
+        reasoning_last - reasoning_first - overhead
+        if reasoning_first is not None and reasoning_last is not None
+        else None
+    )
     if (
         isinstance(reasoning_tokens, int)
         and reasoning_tokens > 0
-        and reasoning_first is not None
-        and reasoning_last is not None
-        and reasoning_last > reasoning_first
+        and reasoning_span is not None
+        and reasoning_span > 0
     ):
-        fields["turn_reasoning_tps"] = round(
-            reasoning_tokens / (reasoning_last - reasoning_first), 1
-        )
+        fields["turn_reasoning_tps"] = round(reasoning_tokens / reasoning_span, 1)
     output_tokens = last.get("outputTokens")
     visible_output = (
         output_tokens - reasoning_tokens
@@ -7914,14 +7967,18 @@ def _turn_token_rate_fields(
     )
     output_first = forwarder_state.turn_output_first_at
     output_last = forwarder_state.turn_output_last_at
+    output_span = (
+        output_last - output_first - overhead
+        if output_first is not None and output_last is not None
+        else None
+    )
     if (
         isinstance(visible_output, int)
         and visible_output > 0
-        and output_first is not None
-        and output_last is not None
-        and output_last > output_first
+        and output_span is not None
+        and output_span > 0
     ):
-        fields["turn_output_tps"] = round(visible_output / (output_last - output_first), 1)
+        fields["turn_output_tps"] = round(visible_output / output_span, 1)
     return fields
 
 

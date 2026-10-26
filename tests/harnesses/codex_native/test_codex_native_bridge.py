@@ -33,6 +33,7 @@ from omnigent.harnesses.codex_native.bridge import (
     read_certificate_failure,
     read_codex_config_effort,
     read_codex_config_model,
+    read_codex_config_provider_endpoint,
     read_codex_home_config_effort,
     read_codex_home_config_model,
     read_codex_home_config_model_provider,
@@ -163,6 +164,34 @@ def test_read_codex_home_config_model_provider(tmp_path: Path) -> None:
     (codex_home / "config.toml").write_text('model_provider = "gateway"\n', encoding="utf-8")
 
     assert read_codex_home_config_model_provider(codex_home) == "gateway"
+
+
+def test_read_codex_config_provider_endpoint(tmp_path: Path) -> None:
+    """Endpoint resolves from the pinned provider's table in the session home."""
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_text(
+        'model_provider = "multidex"\n'
+        "[model_providers.multidex]\n"
+        'base_url = "http://127.0.0.1:19401/v1"\n'
+        'experimental_bearer_token = "tok-multidex"\n',
+        encoding="utf-8",
+    )
+
+    assert read_codex_config_provider_endpoint(tmp_path) == (
+        "multidex",
+        "http://127.0.0.1:19401/v1",
+        "tok-multidex",
+    )
+
+
+def test_read_codex_config_provider_endpoint_missing_pieces(tmp_path: Path) -> None:
+    """No endpoint without a usable provider table or base_url."""
+    assert read_codex_config_provider_endpoint(tmp_path) is None
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_text('model_provider = "gateway"\n', encoding="utf-8")
+    assert read_codex_config_provider_endpoint(tmp_path) is None
 
 
 @pytest.mark.parametrize(
