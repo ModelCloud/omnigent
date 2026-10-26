@@ -651,6 +651,8 @@ export interface NativeModelOption {
   providerHealth?: "online" | "offline";
   /** Serving variant supported by this exact provider/model combination. */
   variant?: string;
+  /** Relative endpoint speed for this provider/variant (1.0 = local baseline). */
+  speed?: number;
   /** Native picker id (a Claude alias or Codex model id). */
   id: string;
   /** Provider-facing model id the native harness will run. */

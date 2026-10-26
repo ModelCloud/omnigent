@@ -148,6 +148,41 @@ it("prefixes provider options with an online/offline status dot", async () => {
   expect(dots["OpenRouter"]).not.toContain("bg-muted-foreground");
 });
 
+it("shows the relative speed on provider and variant options", async () => {
+  const timed = options.map((row) =>
+    row.providerId === "lithos"
+      ? { ...row, speed: row.variant === "ultra" ? 2.0 : row.variant === "fast" ? 1.5 : 1.0 }
+      : { ...row, speed: 1.0 },
+  );
+  render(
+    <NativeModelSelectors
+      options={timed}
+      selectedModel="lithos-fast"
+      effort={null}
+      onModelChange={vi.fn()}
+      onEffortChange={vi.fn()}
+    />,
+  );
+  fireEvent.keyDown(screen.getByRole("combobox", { name: "Provider" }), { key: "ArrowDown" });
+  const providerTexts = screen.getAllByRole("option").map((option) => option.textContent);
+  expect(providerTexts).toEqual(
+    expect.arrayContaining([
+      expect.stringContaining("⚡1.0–2.0"), // Lithos spans its three variants
+      expect.stringContaining("⚡1.0"), // Local / OpenRouter flat baseline
+    ]),
+  );
+  fireEvent.keyDown(screen.getByRole("listbox"), { key: "Escape" });
+  fireEvent.keyDown(screen.getByRole("combobox", { name: "Speed" }), { key: "ArrowDown" });
+  const variantTexts = screen.getAllByRole("option").map((option) => option.textContent);
+  expect(variantTexts).toEqual(
+    expect.arrayContaining([
+      expect.stringContaining("Regular⚡1.0"),
+      expect.stringContaining("Fast⚡1.5"),
+      expect.stringContaining("Ultra⚡2.0"),
+    ]),
+  );
+});
+
 it.each(options.filter((row) => row.modelFamily === "ds").map((row) => row.id))(
   "keeps explicit Off distinct from Default for %s",
   async (id) => {

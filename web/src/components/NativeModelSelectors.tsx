@@ -64,12 +64,37 @@ export function NativeModelSelectors({
   const healthByProvider: Record<string, "online" | "offline"> = Object.fromEntries(
     familyRows.flatMap((r) => (r.providerHealth ? [[providerId(r), r.providerHealth]] : [])),
   );
+  const fmtSpeed = (n: number) => (Number.isInteger(n) ? n.toFixed(1) : `${n}`);
+  const speedByProvider: Record<string, string> = Object.fromEntries(
+    providers.map((p) => {
+      const speeds = [
+        ...new Set(
+          familyRows
+            .filter((r) => providerId(r) === p && typeof r.speed === "number")
+            .map((r) => r.speed as number),
+        ),
+      ].sort((a, b) => a - b);
+      if (!speeds.length) return [p, ""];
+      return [
+        p,
+        speeds.length > 1
+          ? `${fmtSpeed(speeds[0])}–${fmtSpeed(speeds[speeds.length - 1])}`
+          : fmtSpeed(speeds[0]),
+      ];
+    }),
+  );
+  const speedByVariant: Record<string, string> = Object.fromEntries(
+    familyRows
+      .filter((r) => providerId(r) === provider && typeof r.speed === "number")
+      .map((r) => [variantId(r), fmtSpeed(r.speed as number)]),
+  );
   function field(
     label: string,
     value: string | undefined,
     entries: readonly (readonly [string, string])[],
     change: (v: string) => void,
     health?: Record<string, "online" | "offline">,
+    speed?: Record<string, string>,
   ) {
     if (entries.length <= 1) return null;
     return (
@@ -93,6 +118,13 @@ export function NativeModelSelectors({
                     />
                   )}
                   <span className="truncate">{text}</span>
+                  {speed?.[id] && (
+                    <span className="shrink-0 text-muted-foreground">
+                      <span aria-hidden>⚡</span>
+                      {speed[id]}
+                      <span className="sr-only">, speed {speed[id]}</span>
+                    </span>
+                  )}
                   {health?.[id] && <span className="sr-only">, {health[id]}</span>}
                 </span>
               </SelectItem>
@@ -116,12 +148,15 @@ export function NativeModelSelectors({
         providers.map((v) => [v, labels[v] ?? v]),
         (v) => family && choose(family, v),
         healthByProvider,
+        speedByProvider,
       )}
       {field(
         "Speed",
         variant,
         variants.map((v) => [v, labels[v] ?? v]),
         (v) => family && choose(family, provider, v),
+        undefined,
+        speedByVariant,
       )}
       {field(
         "Reasoning",

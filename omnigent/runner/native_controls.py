@@ -988,8 +988,12 @@ def build_native_controls(
                 multidex = None
             rows = with_multidex_model_picker_row(rows, multidex)
         try:
-            from omnigent.host.provider_health import annotate_provider_health
+            from omnigent.host.provider_health import (
+                annotate_provider_health,
+                annotate_provider_speed,
+            )
 
+            annotate_provider_speed(rows)
             await annotate_provider_health(rows)
         except Exception:
             _logger.warning("Provider health probe failed for session=%s", conv_id, exc_info=True)
