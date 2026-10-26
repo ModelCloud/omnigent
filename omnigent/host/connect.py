@@ -3521,8 +3521,12 @@ class HostProcess:
 
     async def _annotate_provider_health(self, rows: list[dict[str, object]]) -> None:
         """Set ``providerHealth`` on each picker row from a cached endpoint ping."""
-        from omnigent.host.provider_health import annotate_provider_health
+        from omnigent.host.provider_health import (
+            annotate_provider_health,
+            annotate_provider_speed,
+        )
 
+        annotate_provider_speed(rows)
         try:
             await annotate_provider_health(rows)
         except Exception:
