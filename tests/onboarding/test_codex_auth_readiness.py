@@ -44,22 +44,33 @@ model_provider = "profile-provider"
     assert effective_codex_model_provider(parsed) == "profile-provider"
 
 
-@pytest.mark.parametrize(
-    "provider,default_key", [("openrouter", "OPENROUTER_API_KEY"), ("lithos", "LITHOS_API_KEY")]
-)
-@pytest.mark.parametrize("custom_key", [False, True])
-@pytest.mark.parametrize("value", [None, "", "   ", "test-key"])
-def test_openrouter_builtin_readiness_uses_local_env(
-    tmp_path: Path, provider: str, default_key: str, custom_key: bool, value: str | None
+@pytest.mark.parametrize("provider", ["openrouter", "lithos"])
+@pytest.mark.parametrize("with_table", [False, True])
+@pytest.mark.parametrize("value", [None, "test-key"])
+def test_builtin_gateway_needs_a_config_toml_credential(
+    tmp_path: Path, provider: str, with_table: bool, value: str | None
 ) -> None:
-    env_key = "CUSTOM_PROVIDER_KEY" if custom_key else default_key
+    """Env vars can never authenticate the gateway built-ins.
+
+    Neither an exported variable nor an ``env_key`` naming one counts —
+    the launch environment forwards no provider credentials.
+    """
     body = f'model_provider = "{provider}"\n'
-    if custom_key:
-        body += f'[model_providers.{provider}]\nenv_key = "{env_key}"\n'
+    if with_table:
+        body += f'[model_providers.{provider}]\nenv_key = "PROVIDER_TOKEN"\n'
     path = _config(tmp_path, body)
-    env = {} if value is None else {env_key: value}
-    expected = "provider-ready" if value and value.strip() else "provider-auth-missing"
-    assert codex_config_effective_auth(path, env=env) == expected
+    env = {} if value is None else {"PROVIDER_TOKEN": value}
+    assert codex_config_effective_auth(path, env=env) == "provider-auth-missing"
+
+
+@pytest.mark.parametrize("provider", ["openrouter", "lithos"])
+def test_builtin_gateway_bearer_token_is_ready(tmp_path: Path, provider: str) -> None:
+    path = _config(
+        tmp_path,
+        f'model_provider = "{provider}"\n[model_providers.{provider}]\n'
+        'experimental_bearer_token = "token"\n',
+    )
+    assert codex_config_effective_auth(path, env={}) == "provider-ready"
 
 
 def test_openrouter_builtin_auth_command_does_not_require_env_key(tmp_path: Path) -> None:
@@ -72,9 +83,11 @@ def test_openrouter_builtin_auth_command_does_not_require_env_key(tmp_path: Path
 
 
 @pytest.mark.parametrize("value", ["token", " token "])
-def test_env_key_present_is_provider_ready(tmp_path: Path, value: str) -> None:
+def test_env_key_present_is_provider_auth_missing(tmp_path: Path, value: str) -> None:
     path = _config(tmp_path, _ENV_KEY_CONFIG)
-    assert codex_config_effective_auth(path, env={"GATEWAY_TOKEN": value}) == "provider-ready"
+    assert (
+        codex_config_effective_auth(path, env={"GATEWAY_TOKEN": value}) == "provider-auth-missing"
+    )
 
 
 @pytest.mark.parametrize("env", [{}, {"GATEWAY_TOKEN": ""}, {"GATEWAY_TOKEN": "   "}])

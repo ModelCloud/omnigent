@@ -766,7 +766,15 @@ async def test_handle_model_options_codex_multidex_row_keeps_reasoning_capabilit
         local_model=multidex_config.MULTIDEX_MODEL,
         provider="multidex",
         base_url="http://10.0.13.33:2120/v1",
-        env_key="MULTIDEX_TEST_BEARER",
+        models=(
+            multidex_config.MultiDexModelRegistration(
+                model=multidex_config.MULTIDEX_MODEL,
+                provider="multidex",
+                display_name=multidex_config.MULTIDEX_MODEL,
+                base_url="http://10.0.13.33:2120/v1",
+                provider_config={"experimental_bearer_token": "test-bearer"},
+            ),
+        ),
     )
 
     async def _catalog(**_kwargs: object) -> list[dict[str, object]]:
@@ -779,7 +787,6 @@ async def test_handle_model_options_codex_multidex_row_keeps_reasoning_capabilit
 
     monkeypatch.setattr(codex_native_app_server, "codex_launch_catalog", _catalog)
     monkeypatch.setattr(multidex_config, "load_multidex_config", lambda **_kwargs: registration)
-    monkeypatch.setenv(registration.env_key, "test-token")
     host = _make_host_process()
 
     result = await host._handle_model_options(
@@ -4300,66 +4307,15 @@ def test_build_runner_env_forwards_harness_credentials_and_endpoints() -> None:
     assert "MY_UNRELATED_SECRET" not in env
 
 
-@pytest.mark.parametrize("registration_present", [True, False])
-def test_build_runner_env_forwards_declared_multidex_key_to_codex_only(
-    monkeypatch: pytest.MonkeyPatch,
-    registration_present: bool,
-) -> None:
-    """The local provider's configured bearer reaches its Codex runner only."""
-    from omnigent.harnesses.multidex_native import config as multidex_config
-
-    registration = multidex_config.MultiDexConfig(
-        local_model="DS v4.1 Flash 1017",
-        provider="multidex",
-        base_url="http://10.0.13.33:2120/v1",
-        env_key="MULTIDEX_API_KEY",
-    )
-
-    def load_config(**_kwargs: object) -> multidex_config.MultiDexConfig:
-        if not registration_present:
-            raise FileNotFoundError("no optional MultiDex registration")
-        return registration
-
-    monkeypatch.setattr(multidex_config, "load_multidex_config", load_config)
-    base = {
-        "PATH": "/usr/bin",
-        "MULTIDEX_API_KEY": "test-multidex-key",
-        "OPENROUTER_API_KEY": "test-openrouter-key",
-    }
-
-    codex_env = _build_runner_env(
-        base,
-        server_url="http://server",
-        runner_id="runner_abc",
-        binding_token="tok",
-        workspace="/ws",
-        parent_pid=42,
-        harness="codex-native",
-    )
-    other_env = _build_runner_env(
-        base,
-        server_url="http://server",
-        runner_id="runner_abc",
-        binding_token="tok",
-        workspace="/ws",
-        parent_pid=42,
-        harness="claude-native",
-    )
-
-    assert ("MULTIDEX_API_KEY" in codex_env) is registration_present
-    assert "MULTIDEX_API_KEY" not in other_env
-    assert codex_env["OPENROUTER_API_KEY"] == "test-openrouter-key"
-    assert "OPENROUTER_API_KEY" not in other_env
-
-
-def test_build_runner_env_forwards_codex_config_declared_env_keys(
+def test_build_runner_env_never_forwards_provider_credential_env(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Provider ``env_key``s declared in the shared Codex config reach the runner.
+    """Provider credentials come only from config.toml — never the env.
 
-    The app-server allowlists every ``env_key`` scanned from
-    ``~/.codex/config.toml``; if the host forward omits them the declared
-    credential (e.g. a Lithos bearer) never reaches that allowlist.
+    Even a ``env_key`` declared in the shared Codex config must not leak its
+    value into a Codex runner: the credential has to live in the provider
+    table (``experimental_bearer_token``), so an exported variable cannot
+    shadow or supply it.
     """
     (tmp_path / "config.toml").write_text(
         "[model_providers.lithos]\n"
@@ -4374,6 +4330,8 @@ def test_build_runner_env_forwards_codex_config_declared_env_keys(
     base = {
         "PATH": "/usr/bin",
         "LITHOS_API_KEY": "test-lithos-key",
+        "MULTIDEX_API_KEY": "test-multidex-key",
+        "OPENROUTER_API_KEY": "test-openrouter-key",
     }
 
     codex_env = _build_runner_env(
@@ -4385,18 +4343,10 @@ def test_build_runner_env_forwards_codex_config_declared_env_keys(
         parent_pid=42,
         harness="codex-native",
     )
-    other_env = _build_runner_env(
-        base,
-        server_url="http://server",
-        runner_id="runner_abc",
-        binding_token="tok",
-        workspace="/ws",
-        parent_pid=42,
-        harness="claude-native",
-    )
 
-    assert codex_env["LITHOS_API_KEY"] == "test-lithos-key"
-    assert "LITHOS_API_KEY" not in other_env
+    assert "LITHOS_API_KEY" not in codex_env
+    assert "MULTIDEX_API_KEY" not in codex_env
+    assert "OPENROUTER_API_KEY" not in codex_env
 
 
 def test_build_runner_env_forwards_omnigent_prefixed_harness_credentials() -> None:
@@ -7214,11 +7164,21 @@ async def test_handle_model_options_serves_multidex_from_the_native_codex_catalo
     monkeypatch.setattr(
         multidex_config,
         "load_multidex_config",
-        lambda *, require_token: SimpleNamespace(
-            local_model="DS v4.1 Flash 1017", env_key="MULTIDEX_TEST_BEARER"
+        lambda *, require_token: multidex_config.MultiDexConfig(
+            local_model="DS v4.1 Flash 1017",
+            provider="multidex",
+            base_url="http://127.0.0.1:2120/v1",
+            models=(
+                multidex_config.MultiDexModelRegistration(
+                    model="DS v4.1 Flash 1017",
+                    provider="multidex",
+                    display_name="DS v4.1 Flash 1017",
+                    base_url="http://127.0.0.1:2120/v1",
+                    provider_config={"experimental_bearer_token": "test-bearer"},
+                ),
+            ),
         ),
     )
-    monkeypatch.setenv("MULTIDEX_TEST_BEARER", "test-token")
 
     result = await host._handle_model_options(
         HostModelOptionsFrame(request_id="req_multidex", harness="multidex-native"),
