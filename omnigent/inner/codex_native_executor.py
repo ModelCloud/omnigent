@@ -686,9 +686,7 @@ async def _multidex_runtime_settings_overrides(
                     CODEX_BUILTIN_PROVIDERS,
                 )
 
-                defined_providers = read_codex_home_config_provider_names(
-                    Path(state.codex_home)
-                )
+                defined_providers = read_codex_home_config_provider_names(Path(state.codex_home))
                 # Built-in providers (``openai`` and the self-authenticating
                 # gateways) never appear as ``[model_providers]`` tables, so
                 # only a *custom* name can be the stale one being rejected.
