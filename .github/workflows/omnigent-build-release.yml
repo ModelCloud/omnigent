@@ -1,0 +1,137 @@
+# Publish a prebuilt-wheel release for a commit: `omnigent-build-<version>-<sha>`.
+#
+# This is the release channel `omni upgrade` installs from by default (see
+# `_ARTIFACT_REPO_URL` in omnigent/update_check.py). It exists because a dev
+# build of this fork cannot be upgraded from an index: `omnigent` pins
+# `omnigent-client` and `omnigent-ui-sdk` to the exact same dev version, and
+# neither sibling is published anywhere. So every build ships all three wheels
+# as release assets, and the CLI reinstalls them by URL.
+#
+# `omni upgrade` picks the newest release whose tag matches the convention and
+# which has a main wheel attached, so a release that fails midway (siblings
+# uploaded, main wheel not) is skipped rather than breaking upgrades.
+#
+# The wheel is built with the web UI compiled in, exactly like a release build,
+# so installing it needs no Node/pnpm on the target machine.
+name: Omnigent build release
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: "Commit SHA to build. Defaults to the triggering workflow's SHA or main."
+        required: false
+        type: string
+  # Publish automatically for every push to main, so the channel never lags
+  # behind the branch the fleet tracks.
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  # One publisher at a time: two runs racing to create a release for the same
+  # tag would collide, and a half-created release is exactly the "unusable
+  # release" case the CLI has to skip.
+  group: omnigent-build-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build and publish wheels
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Resolve target commit
+        id: target
+        env:
+          INPUT_COMMIT: ${{ inputs.commit }}
+          EVENT_SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          commit="${INPUT_COMMIT:-$EVENT_SHA}"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "short=${commit:0:9}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ steps.target.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+
+      - name: Set up pnpm
+        uses: ./.github/actions/setup-pnpm
+
+      - name: Read version
+        id: version
+        run: |
+          set -eu
+          # Single source of truth; the wheel build stamps the same value.
+          version=$(uv run --no-config --no-project python -c \
+            "import re,pathlib; print(re.search(r'^version = \"([^\"]+)\"', pathlib.Path('pyproject.toml').read_text(), re.M).group(1))")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Building omnigent ${version} at ${{ steps.target.outputs.commit }}"
+
+      - name: Build wheels (web UI compiled in)
+        env:
+          # Bake the web UI into the wheel so installing needs no Node on the host.
+          OMNIGENT_BUILD_WEB_UI: "1"
+        run: |
+          set -eu
+          # `uv.toml` carries a relative `exclude-newer` window that some uv
+          # releases reject; `--no-config` keeps this independent of that.
+          uv build --no-config --wheel --out-dir dist .
+          # The sibling packages are unpublished, so they must ship alongside.
+          uv run --no-config --with build python scripts/build_subpackages.py \
+            omnigent-client omnigent-ui-sdk --out-dir dist --wheel
+
+      - name: Write manifest
+        env:
+          COMMIT: ${{ steps.target.outputs.commit }}
+        run: |
+          set -eu
+          cd dist
+          # `COMMIT_SHA` is the machine-readable build identity the CLI compares
+          # against; `SHA256SUMS` lets an operator verify a manual download.
+          printf '%s\n' "$COMMIT" > COMMIT_SHA
+          sha256sum ./*.whl > SHA256SUMS
+          ls -l
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: omnigent-build-${{ steps.version.outputs.version }}-${{ steps.target.outputs.short }}
+          VERSION: ${{ steps.version.outputs.version }}
+          COMMIT: ${{ steps.target.outputs.commit }}
+        run: |
+          set -eu
+
+          # Release notes live in a file so the body is not mangled by shell
+          # quoting. The CLI compares COMMIT_SHA, so name the commit here.
+          {
+            echo "Source commit ${COMMIT}."
+            echo
+            echo "Prebuilt wheels for \`omni upgrade\`:"
+            echo "- \`omnigent\`, \`omnigent-client\`, \`omnigent-ui-sdk\` (one dev version, install together)"
+            echo "- \`COMMIT_SHA\` - build identity the CLI compares"
+            echo "- \`SHA256SUMS\` - checksums for manual downloads"
+            echo
+            echo "The web UI is compiled into the wheel; installing needs no Node/pnpm."
+          } > notes.md
+
+          # Idempotent: a re-run for the same commit replaces the assets of the
+          # existing release instead of failing on the duplicate tag.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; replacing assets."
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* \
+              --title "Omnigent build ${VERSION} (${COMMIT:0:9})" \
+              --notes-file notes.md
+          fi

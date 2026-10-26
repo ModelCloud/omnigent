@@ -6017,6 +6017,115 @@ def _upgrade_to_nightly(
     )
 
 
+def _upgrade_from_artifacts(
+    info: _InstalledWheelInfo,
+    *,
+    check_only: bool,
+    force: bool,
+    extra_overrides: tuple[str, ...],
+    dry_run: bool,
+) -> bool:
+    """Move this install onto the newest prebuilt wheel release.
+
+    This is the default ``omni upgrade`` path for this fork: releases are cut
+    by CI as ``omnigent-build-<version>-<sha>`` tags carrying all three wheels,
+    so the upgrade is a download-and-swap rather than a source build. Returns
+    ``False`` (having printed nothing) when the channel is unreachable or has
+    no usable release, so the caller can fall back to the index path.
+
+    :param info: Installed-distribution metadata.
+    :param check_only: Only report; exit non-zero when an upgrade is available.
+    :param force: Stop in-flight sessions immediately instead of draining.
+    :param extra_overrides: Extras supplied by ``omni upgrade --extra``.
+    :param dry_run: Print the command and exit without running it.
+    :returns: ``True`` when this path handled the upgrade (or decided there
+        was nothing to do), ``False`` when the caller should fall back.
+    """
+    import importlib.metadata
+
+    from omnigent.update_check import (
+        _build_artifact_upgrade_suggestion,
+        _is_newer,
+        _probe_installed_distribution,
+        _run_upgrade_command,
+        _upgrade_failure_message,
+        fetch_latest_artifact_release,
+    )
+
+    release = fetch_latest_artifact_release()
+    if release is None:
+        return False
+
+    current = importlib.metadata.version("omnigent")
+    # Compare on both version AND commit: the version string is a development
+    # ``.dev0`` that does not move between builds, so a newer build is usually
+    # the same version with a different sha. Treat the commit as authoritative
+    # when both sides have one.
+    same_version = not _is_newer(release.version, current) and not _is_newer(
+        current, release.version
+    )
+    installed_sha = (info.commit_sha or "")[: len(release.short_sha)]
+    same_build = same_version and (not installed_sha or installed_sha == release.short_sha)
+    if same_build:
+        click.echo(f"omnigent is up to date (v{current}, build {release.short_sha}).")
+        return True
+
+    click.echo(
+        f"A new build is available: v{current} → v{release.version}+{release.short_sha} "
+        f"({release.tag})."
+    )
+    if check_only:
+        # Non-zero so scripts/CI can gate on "an upgrade is available", the
+        # same contract as the index path.
+        raise SystemExit(1)
+
+    suggestion = _build_artifact_upgrade_suggestion(info, release, extra_overrides=extra_overrides)
+    if not suggestion.runnable:
+        raise click.ClickException(
+            f"No automatic upgrade command is known for this install. {suggestion.command}."
+        )
+
+    if dry_run:
+        extras = sorted(set(extra_overrides or info.extras))
+        click.echo(
+            f"Detected installer: {info.detected_installer or info.installer}\n"
+            f"Detected extras: {', '.join(extras) if extras else '(none)'}\n"
+            f"Would run: {suggestion.command}"
+        )
+        return True
+
+    _drain_and_stop_local_server(force=force)
+
+    console = Console()
+    code = _run_upgrade_command(suggestion.command, console)
+    if code != 0:
+        raise click.ClickException(
+            _upgrade_failure_message(code, set(info.extras) | set(extra_overrides))
+        )
+
+    # Trust the disk, not the exit code: verify the build stamp moved. This is
+    # the only reliable signal here because the version string is unchanged
+    # between builds.
+    new_version, new_sha = _probe_installed_distribution()
+    if new_sha and new_sha[: len(release.short_sha)] == release.short_sha:
+        click.echo(
+            f"✓ Upgraded to v{new_version}+{release.short_sha}. Re-run your command — "
+            "the local server will start on the new build."
+        )
+        return True
+    if new_version is None:
+        click.echo(
+            "Ran the upgrade command, but couldn't confirm the installed version. "
+            f"Run `{cli_invocation(name='omni')} upgrade --check` to verify."
+        )
+        return True
+    raise click.ClickException(
+        f"The upgrade command ran but omnigent is still build "
+        f"{(new_sha or 'unknown')[:9]} (expected {release.short_sha}). Try the command "
+        f"directly: {suggestion.command}"
+    )
+
+
 @cli.command("upgrade")
 @click.option(
     "--check",
@@ -6052,6 +6161,13 @@ def _upgrade_to_nightly(
     "May be given multiple times. Overrides extras detected from installer metadata.",
 )
 @click.option(
+    "--index-only",
+    "index_only",
+    is_flag=True,
+    help="Upgrade from the package index (PyPI / OMNIGENT_INDEX_URL) instead "
+    "of this fork's prebuilt release channel.",
+)
+@click.option(
     "--target-version",
     help="Upgrade to a specific version instead of the latest release.",
 )
@@ -6066,17 +6182,23 @@ def upgrade(
     force: bool,
     pre: bool,
     nightly: bool,
+    index_only: bool,
     extra_overrides: tuple[str, ...],
     target_version: str | None,
     dry_run: bool,
 ) -> None:
     """Upgrade Omnigent to the latest release.
 
-    Detects how omnigent was installed (uv tool / pipx), checks the
-    configured index for a newer release and — unless ``--check`` — drains
-    and stops the local background server and host daemon, then runs the
-    matching upgrade command. The next ``omni`` invocation starts a fresh
-    server on the new code automatically, so no explicit restart is needed.
+    Detects how omnigent was installed (uv tool / pipx) and, by default,
+    installs the newest prebuilt wheel release published by this fork's CI
+    (``omnigent-build-<version>-<sha>`` tags). Those releases carry all three
+    wheels, so the upgrade needs no compiler and no Node. Pass ``--index-only``
+    to upgrade from the package index instead.
+
+    Unless ``--check``, this drains and stops the local background server and
+    host daemon, then runs the matching upgrade command. The next ``omni``
+    invocation starts a fresh server on the new code automatically, so no
+    explicit restart is needed.
 
     In-flight agent sessions are waited on by default; pass ``--force`` to
     stop them immediately. Pass ``--pre`` to consider pre-releases (rc /
@@ -6100,6 +6222,8 @@ def upgrade(
     :param pre: Consider pre-releases and allow the installer to fetch them.
     :param nightly: Upgrade to the newest nightly git tag instead of the
         latest index release.
+    :param index_only: Skip this fork's prebuilt release channel and upgrade
+        from the package index instead.
     :param extra_overrides: Extras requested via ``--extra``.
     :param target_version: Pin the upgrade to this version.
     :param dry_run: Print the command and exit without running it.
@@ -6206,6 +6330,24 @@ def upgrade(
 
     current = importlib.metadata.version("omnigent")
     latest: str | None
+    if not index_only and not target_version:
+        # Default channel for this fork: prebuilt wheels published by CI.
+        # The sibling packages are unpublished at the same dev version, so an
+        # index upgrade cannot work; the artifact channel always can. A
+        # pinned ``--target-version`` stays on the index, since an explicit
+        # version is a deliberate request for a registry release.
+        if _upgrade_from_artifacts(
+            info,
+            check_only=check_only,
+            force=force,
+            extra_overrides=extra_overrides,
+            dry_run=dry_run,
+        ):
+            return
+        click.echo(
+            "Couldn't reach the artifact release channel; falling back to the package index.",
+            err=True,
+        )
     if target_version:
         # A pinned target version means we don't have to ask the index what
         # "latest" is. Treat the target as the desired release. This is

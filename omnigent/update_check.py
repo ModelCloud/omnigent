@@ -120,6 +120,10 @@ class _CacheEntry:
         last shown for, e.g. ``"0.2.0"``. Used to fire the "update
         available" notice exactly once per new release rather than on
         every invocation. Empty string when no notice has been shown.
+    :param latest_commit: Short commit sha of the newest prebuilt release
+        from the artifact channel, e.g. ``"6aaa67f8f0"``. Only meaningful
+        when ``kind == "artifact"``; the version string alone cannot
+        distinguish two dev builds cut from different commits.
     """
 
     last_check_epoch: float
@@ -128,6 +132,7 @@ class _CacheEntry:
     kind: str = "clone"
     latest_version: str = ""
     last_notified_version: str = ""
+    latest_commit: str = ""
 
 
 @dataclass
@@ -291,7 +296,28 @@ def _run_installed_wheel_check() -> None:
         return
 
     cache = _read_cache()
-    if (
+    if cache is not None and cache.kind == "artifact" and cache.latest_commit:
+        # Artifact channel: the version string is a ``.dev0`` shared by every
+        # build, so "is there something newer" is answered by the commit, not
+        # the version. Notify only when the advertised build differs from the
+        # installed one, and only once per build.
+        installed_commit = (info.commit_sha or "")[: len(cache.latest_commit)]
+        if (
+            installed_commit != cache.latest_commit
+            and cache.latest_commit != cache.last_notified_version
+        ):
+            _print_artifact_notice(info.package_version, cache.latest_version, cache.latest_commit)
+            _write_cache(
+                _CacheEntry(
+                    last_check_epoch=cache.last_check_epoch,
+                    commits_behind=0,
+                    kind="artifact",
+                    latest_version=cache.latest_version,
+                    last_notified_version=cache.latest_commit,
+                    latest_commit=cache.latest_commit,
+                )
+            )
+    elif (
         cache is not None
         and cache.kind == "wheel"
         and cache.latest_version
@@ -313,8 +339,34 @@ def _run_installed_wheel_check() -> None:
 
     # Refresh the cached "latest version" out of band when it is missing,
     # stale, or was written by the (other-shape) clone path.
-    if cache is None or cache.kind != "wheel" or _is_stale(cache):
+    if cache is None or cache.kind not in {"wheel", "artifact"} or _is_stale(cache):
         _spawn_background_refresh()
+
+
+def _print_artifact_notice(current: str, latest: str, short_sha: str) -> None:
+    """Print the "new build available" notice for the artifact channel.
+
+    The version alone cannot identify a build (every dev build shares the same
+    ``.dev0`` string), so the notice names the commit as well.
+
+    :param current: The installed version, e.g. ``"0.20.0.dev0"``.
+    :param latest: The newest build's version, e.g. ``"0.20.0.dev0"``.
+    :param short_sha: The newest build's short commit sha, e.g. ``"6aaa67f8f0"``.
+    """
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.text import Text
+
+    console = Console(stderr=True)
+    body = Text.assemble(
+        ("Update available", "bold yellow"),
+        " — omnigent ",
+        (f"{latest}+{short_sha}", "bold"),
+        f" is out (you have {current}).\nRun ",
+        ("omni upgrade", "bold"),
+        " to update.",
+    )
+    console.print(Panel(body, border_style="yellow", expand=False))
 
 
 def _is_newer(latest: str, current: str) -> bool:
@@ -634,11 +686,31 @@ def refresh_update_cache() -> None:
     with contextlib.suppress(Exception):
         if os.environ.get(_ENV_SKIP):
             return
-        # Only the wheel shape consults the index; a clone refreshes via git.
+        # Only the wheel shape consults a release channel; a clone refreshes via git.
         if _find_repo_root() is not None:
             return
         info = _read_installed_wheel_info()
         if info is None or info.is_editable:
+            return
+        # Prefer this fork's prebuilt release channel: the sibling packages are
+        # unpublished at the same dev version, so an index lookup can never
+        # name a build that is actually installable here.
+        release = fetch_latest_artifact_release()
+        if release is not None:
+            prev = _read_cache()
+            last_notified = (
+                prev.last_notified_version if prev is not None and prev.kind == "artifact" else ""
+            )
+            _write_cache(
+                _CacheEntry(
+                    last_check_epoch=time.time(),
+                    commits_behind=0,
+                    kind="artifact",
+                    latest_version=release.version,
+                    last_notified_version=last_notified,
+                    latest_commit=release.short_sha,
+                )
+            )
             return
         latest = fetch_latest_version()
         if latest is None:
@@ -742,6 +814,7 @@ def _read_cache() -> _CacheEntry | None:
             kind=str(data.get("kind", "clone")),
             latest_version=str(data.get("latest_version", "")),
             last_notified_version=str(data.get("last_notified_version", "")),
+            latest_commit=str(data.get("latest_commit", "")),
         )
     except (OSError, json.JSONDecodeError, KeyError, ValueError, TypeError):
         return None
@@ -773,6 +846,7 @@ def _write_cache(entry: _CacheEntry) -> None:
             "kind": entry.kind,
             "latest_version": entry.latest_version,
             "last_notified_version": entry.last_notified_version,
+            "latest_commit": entry.latest_commit,
         }
     )
     # ``dir=`` on the same filesystem guarantees atomic replace.
@@ -1616,10 +1690,42 @@ def _build_upgrade_suggestion(
     )
 
 
-# Canonical public repo for nightly builds. Nightlies are git tags consumed
-# straight from GitHub (they never reach an index), so the channel lives
-# upstream by definition: fork installs also upgrade onto upstream nightlies.
-_NIGHTLY_REPO_URL = "https://github.com/omnigent-ai/omnigent"
+# Canonical repo for nightly builds. Nightlies are git tags consumed straight
+# from GitHub (they never reach an index). This fork publishes its own nightly
+# tags, so the channel points at the fork rather than upstream — an ``omni
+# upgrade`` must never silently move a fork install onto upstream code.
+_NIGHTLY_REPO_URL = "https://github.com/ModelCloud/omnigent"
+
+
+# ------------------------------------------------------------------
+# Artifact channel (this fork's prebuilt wheels)
+# ------------------------------------------------------------------
+# ``omnigent`` depends on two unpublished sibling packages
+# (``omnigent-client`` / ``omnigent-ui-sdk``) pinned to the exact same dev
+# version, so a plain ``uv tool upgrade omnigent`` can never work for a dev
+# build: the index does not have the siblings. Instead CI publishes a release
+# per build:
+#
+#     tag:    omnigent-build-<version>-<short-sha>
+#     assets: COMMIT_SHA, SHA256SUMS, and the three ``py3-none-any`` wheels
+#
+# So the artifact channel is: list releases, pick the newest build, and
+# reinstall all three wheels straight from that release's asset URLs. No index,
+# no source build, no dependence on upstream PyPI.
+_ARTIFACT_REPO_URL = "https://github.com/ModelCloud/omnigent"
+# Override for mirrors / staging. Accepts ``owner/repo`` or a full
+# ``https://github.com/<owner>/<repo>`` URL.
+_ENV_ARTIFACT_REPO = "OMNIGENT_ARTIFACT_REPO"
+# Tag prefix CI writes for every build.
+_ARTIFACT_TAG_PREFIX = "omnigent-build-"
+# Asset name of the main installable wheel. The two sibling wheels are
+# discovered from the same release listing, so adding a sub-package does not
+# need a code change here.
+_ARTIFACT_MAIN_WHEEL_PREFIX = "omnigent-"
+_ARTIFACT_RELEASE_TIMEOUT_SECONDS = 10.0
+# Cap on releases per page; 100 is the GitHub maximum and enough to cover
+# several months of builds at the current cadence.
+_ARTIFACT_RELEASES_PER_PAGE = 100
 
 
 def _newest_nightly_version(ls_remote_output: str) -> str | None:
@@ -1672,6 +1778,281 @@ def _latest_nightly_version(repo_url: str = _NIGHTLY_REPO_URL) -> str | None:
     except (subprocess.SubprocessError, OSError):
         return None
     return _newest_nightly_version(result.stdout)
+
+
+def _artifact_repo_slug() -> str:
+    """Resolve the ``owner/repo`` whose release assets we install from.
+
+    ``OMNIGENT_ARTIFACT_REPO`` overrides the baked-in default so a mirror or a
+    staging fork can serve the same channel without patching code. Accepts
+    either a bare ``owner/repo`` slug or a full GitHub URL (the form people
+    copy out of a browser).
+
+    :returns: ``"owner/repo"``, e.g. ``"ModelCloud/omnigent"``.
+    """
+    raw = (os.environ.get(_ENV_ARTIFACT_REPO) or "").strip()
+    if not raw:
+        raw = _ARTIFACT_REPO_URL
+    # Accept https://github.com/owner/repo[.git][/] as well as owner/repo.
+    for prefix in ("https://github.com/", "http://github.com/", "git@github.com:"):
+        if raw.startswith(prefix):
+            raw = raw[len(prefix) :]
+            break
+    raw = raw.strip("/")
+    if raw.endswith(".git"):
+        raw = raw[: -len(".git")]
+    segments = [segment for segment in raw.split("/") if segment]
+    if len(segments) < 2:
+        return _ARTIFACT_REPO_URL.removeprefix("https://github.com/")
+    return f"{segments[0]}/{segments[1]}"
+
+
+def _parse_artifact_tag(tag: str) -> tuple[str, str] | None:
+    """Split an artifact release tag into ``(version, short_sha)``.
+
+    Tags are ``omnigent-build-<version>-<short-sha>``; the version itself can
+    contain hyphens after a local-metadata ``+`` (e.g. ``0.20.0.dev0+abc``), so
+    the split is anchored on the *last* hyphen, which always precedes the short
+    SHA.
+
+    :param tag: Release tag name, e.g. ``"omnigent-build-0.20.0.dev0-6aaa67f8f0"``.
+    :returns: ``("0.20.0.dev0", "6aaa67f8f0")``, or ``None`` when the tag does
+        not follow the convention.
+    """
+    if not tag.startswith(_ARTIFACT_TAG_PREFIX):
+        return None
+    remainder = tag[len(_ARTIFACT_TAG_PREFIX) :]
+    version, sep, short_sha = remainder.rpartition("-")
+    if not sep or not version or not short_sha:
+        return None
+    return version, short_sha
+
+
+@dataclass(frozen=True)
+class _ArtifactRelease:
+    """A published prebuilt-wheel release of omnigent.
+
+    :param tag: Release tag, e.g. ``"omnigent-build-0.20.0.dev0-6aaa67f8f0"``.
+    :param version: Version parsed out of the tag, e.g. ``"0.20.0.dev0"``.
+    :param short_sha: Short commit sha parsed out of the tag, e.g.
+        ``"6aaa67f8f0"``.
+    :param wheel_urls: ``(asset_name, download_url)`` for every wheel asset in
+        the release, main wheel first. Empty when the release published no
+        wheels (a still-running build), which callers treat as unusable.
+    :param published_at: ISO-8601 publish timestamp, used only to break ties
+        between two tags carrying the same version.
+    """
+
+    tag: str
+    version: str
+    short_sha: str
+    wheel_urls: tuple[tuple[str, str], ...]
+    published_at: str = ""
+
+    @property
+    def usable(self) -> bool:
+        """Whether this release can actually be installed.
+
+        :returns: ``True`` when a main ``omnigent`` wheel is present.
+        """
+        return any(name.startswith(_ARTIFACT_MAIN_WHEEL_PREFIX) for name, _ in self.wheel_urls)
+
+    def spec(self, extras: Collection[str] = ()) -> str:
+        """Build the PEP 508 spec for the main wheel.
+
+        Extras belong inside the requirement name (``omnigent[all] @ url``), not
+        after the URL, so they are applied here rather than by the caller.
+
+        :param extras: Extras to request, e.g. ``("databricks",)``.
+        :returns: e.g. ``"omnigent @ https://…/omnigent-0.20.0.dev0-py3-none-any.whl"``
+            or ``"omnigent[databricks] @ https://…"``.
+        """
+        suffix = _extras_str(sorted(extras))
+        for name, url in self.wheel_urls:
+            if name.startswith(_ARTIFACT_MAIN_WHEEL_PREFIX):
+                return f"{_DIST_NAME}{suffix} @ {url}"
+        raise ValueError(f"release {self.tag} has no {_DIST_NAME} wheel")
+
+    def sibling_specs(self) -> list[str]:
+        """Build PEP 508 specs for the non-main wheels (``omnigent-client`` …).
+
+        :returns: One spec per sibling wheel, e.g.
+            ``["omnigent-client @ https://…/omnigent_client-…whl"]``. Empty when
+            the release published only the main wheel.
+        """
+        specs: list[str] = []
+        for name, url in self.wheel_urls:
+            if name.startswith(_ARTIFACT_MAIN_WHEEL_PREFIX):
+                continue
+            # ``omnigent_client-0.20.0.dev0-py3-none-any.whl`` → ``omnigent-client``.
+            dist = name.split("-", 1)[0].replace("_", "-")
+            specs.append(f"{dist} @ {url}")
+        return specs
+
+
+def _parse_artifact_releases(payload: object) -> list[_ArtifactRelease]:
+    """Extract installable releases from a GitHub releases API payload.
+
+    Kept separate from the HTTP call so the parsing rules — tag shape, wheel
+    asset filtering, newest-first ordering — are testable without a network.
+
+    :param payload: Decoded JSON body from ``/repos/<slug>/releases``. Anything
+        that is not a list of objects is ignored rather than raising.
+    :returns: Usable releases, newest first (highest version wins; same version
+        falls back to the later publish time).
+    """
+    from packaging.version import InvalidVersion, Version
+
+    if not isinstance(payload, list):
+        return []
+    releases: list[_ArtifactRelease] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        if item.get("draft") or item.get("prerelease"):
+            # Drafts are not public. Prereleases are skipped: the artifact
+            # channel is the stable "latest build" lane.
+            continue
+        tag = item.get("tag_name")
+        if not isinstance(tag, str):
+            continue
+        parsed = _parse_artifact_tag(tag)
+        if parsed is None:
+            continue
+        version, short_sha = parsed
+        wheels: list[tuple[str, str]] = []
+        assets = item.get("assets")
+        if isinstance(assets, list):
+            for asset in assets:
+                if not isinstance(asset, dict):
+                    continue
+                name = asset.get("name")
+                url = asset.get("browser_download_url")
+                if not isinstance(name, str) or not isinstance(url, str):
+                    continue
+                if not name.endswith(".whl"):
+                    continue
+                wheels.append((name, url))
+        # Main wheel first so ``spec()`` never has to scan far and the
+        # ordering is stable for the caller that appends siblings.
+        wheels.sort(key=lambda entry: not entry[0].startswith(_ARTIFACT_MAIN_WHEEL_PREFIX))
+        published_at = item.get("published_at")
+        releases.append(
+            _ArtifactRelease(
+                tag=tag,
+                version=version,
+                short_sha=short_sha,
+                wheel_urls=tuple(wheels),
+                published_at=published_at if isinstance(published_at, str) else "",
+            )
+        )
+
+    def sort_key(release: _ArtifactRelease) -> tuple[Version, str]:
+        with contextlib.suppress(InvalidVersion):
+            return Version(release.version), release.published_at
+        # Unparseable version: sort below every valid one, but keep it stable.
+        return Version("0"), release.published_at
+
+    releases.sort(key=sort_key, reverse=True)
+    return releases
+
+
+def fetch_latest_artifact_release(
+    *, timeout: float = _ARTIFACT_RELEASE_TIMEOUT_SECONDS
+) -> _ArtifactRelease | None:
+    """Fetch the newest installable prebuilt-wheel release, or ``None``.
+
+    Calls the public GitHub releases API (no auth; anonymous rate limit is
+    plenty for a once-a-day update check). Every failure — offline, rate
+    limited, malformed JSON — returns ``None`` so the caller can fall back to a
+    clear message instead of crashing.
+
+    :param timeout: Per-request timeout in seconds.
+    :returns: The newest release with at least a main wheel, or ``None``.
+    """
+    import httpx
+
+    slug = _artifact_repo_slug()
+    url = f"https://api.github.com/repos/{slug}/releases"
+    try:
+        resp = httpx.get(
+            url,
+            params={"per_page": _ARTIFACT_RELEASES_PER_PAGE},
+            headers={
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            timeout=timeout,
+            follow_redirects=True,
+        )
+    except httpx.HTTPError:
+        return None
+    if resp.status_code != 200:
+        return None
+    try:
+        payload = resp.json()
+    except ValueError:
+        return None
+    for release in _parse_artifact_releases(payload):
+        if release.usable:
+            return release
+    return None
+
+
+def _build_artifact_upgrade_suggestion(
+    info: _InstalledWheelInfo,
+    release: _ArtifactRelease,
+    *,
+    extra_overrides: tuple[str, ...] = (),
+) -> _UpgradeSuggestion:
+    """Build the command that reinstalls from a published wheel release.
+
+    Unlike the nightly channel this needs no compiler and no Node: the wheels
+    are prebuilt, so the install is a plain wheel download. That makes
+    ``--reinstall`` (never ``--force``) safe, and it keeps the existing
+    environment intact if the download fails.
+
+    :param info: Metadata from :func:`_read_installed_wheel_info`.
+    :param release: Target release, from :func:`fetch_latest_artifact_release`.
+    :param extra_overrides: Extras supplied with ``omni upgrade --extra``.
+    :returns: See :func:`_build_upgrade_suggestion`.
+    """
+    extras = sorted(set(info.extras) | set(extra_overrides))
+    main_spec = release.spec(extras)
+    siblings = release.sibling_specs()
+    quoted_siblings = "".join(f" --with '{spec}'" for spec in siblings)
+    installer = info.detected_installer or info.installer
+
+    if installer == "uv":
+        return _UpgradeSuggestion(
+            command=(
+                f"uv tool install --reinstall{_uv_python_pin()} '{main_spec}'{quoted_siblings}"
+            ),
+            runnable=True,
+        )
+    if installer == "pipx":
+        # pipx installs a single package into its own venv and has no
+        # ``--with``, so the three sibling wheels (which must move together)
+        # cannot be installed safely through pipx itself. Print the exact pip
+        # command inside the pipx venv instead of guessing.
+        return _UpgradeSuggestion(
+            command=(
+                f"reinstall {_DIST_NAME} into the pipx venv with: python -m pip install "
+                f"--force-reinstall '{main_spec}'{quoted_siblings}"
+            ),
+            runnable=False,
+        )
+    if installer == "pip":
+        return _UpgradeSuggestion(
+            command=(
+                f"{_pip_invocation()} install --force-reinstall '{main_spec}'{quoted_siblings}"
+            ),
+            runnable=True,
+        )
+    return _UpgradeSuggestion(
+        command=f"reinstall {_DIST_NAME} from {release.wheel_urls[0][1]}",
+        runnable=False,
+    )
 
 
 def _build_nightly_upgrade_suggestion(
