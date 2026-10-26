@@ -647,6 +647,8 @@ export interface NativeModelOption {
   modelLabel?: string;
   /** Short configured provider id, never an endpoint hostname. */
   providerId?: string;
+  /** Live endpoint liveness probed host-side; absent means unprobed. */
+  providerHealth?: "online" | "offline";
   /** Serving variant supported by this exact provider/model combination. */
   variant?: string;
   /** Native picker id (a Claude alias or Codex model id). */

@@ -7116,6 +7116,12 @@ async def test_handle_model_options_serves_codex_probe_rows_and_caches(
     monkeypatch.setattr(
         "omnigent.host.connect._model_configuration_source_for_harness", lambda harness: None
     )
+
+    # Endpoint liveness is a separate probe; keep this catalog scenario offline.
+    async def _no_health(_rows: list[dict[str, object]]) -> None:
+        return None
+
+    monkeypatch.setattr("omnigent.host.provider_health.annotate_provider_health", _no_health)
     host = _make_host_process()
 
     first = await host._handle_model_options(
@@ -7315,6 +7321,12 @@ async def test_model_options_frame_replies_off_the_receive_loop(
     monkeypatch.setattr(
         "omnigent.host.connect._model_configuration_source_for_harness", lambda harness: None
     )
+
+    # Endpoint liveness is a separate probe; keep this frame-lifecycle test offline.
+    async def _no_health(_rows: list[dict[str, object]]) -> None:
+        return None
+
+    monkeypatch.setattr("omnigent.host.provider_health.annotate_provider_health", _no_health)
     host = _make_host_process()
     ws = _RecordingWS()
     raw = encode_host_frame(HostModelOptionsFrame(request_id="req_slow", harness="codex-native"))
