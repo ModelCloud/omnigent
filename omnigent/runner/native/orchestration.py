@@ -21,9 +21,9 @@ import sys
 import time
 import urllib.parse
 import uuid
-from collections.abc import Awaitable, Callable, Coroutine, Mapping, MutableMapping
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, MutableMapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, Sequence
+from typing import TYPE_CHECKING, Any, NamedTuple, Protocol
 
 from omnigent.util.http_retry import jittered_retry_delay
 from omnigent.util.json_types import JsonObject as _JsonObject
@@ -4838,9 +4838,7 @@ def _codex_provider_env_keys(config_profile: str | None) -> tuple[str, ...]:
     source_home = _codex_home_config_source_from_env()
     names: set[str] = set(codex_config_env_key_names(source_home / "config.toml"))
     if config_profile:
-        names.update(
-            codex_config_env_key_names(source_home / f"{config_profile}.config.toml")
-        )
+        names.update(codex_config_env_key_names(source_home / f"{config_profile}.config.toml"))
     return tuple(sorted(names))
 
 
@@ -5255,7 +5253,7 @@ async def _auto_create_codex_terminal(
                     f"{_selected_local_registration.provider!r} has no credential: set "
                     "experimental_bearer_token in config.toml"
                 )
-        if selected_local_model:
+        if selected_local_model and selected_model is not None:
             # Retarget the launch onto the local provider while keeping every
             # provider table the non-local launch resolved, so a later web-UI
             # switch to an official model can name ``omnigent_provider`` and
@@ -5265,9 +5263,7 @@ async def _auto_create_codex_terminal(
                 _codex_launch,
                 config_overrides=_local_model_config_overrides(
                     _codex_launch.config_overrides,
-                    provider=multidex_runtime_provider_id(
-                        _selected_local_registration.provider
-                    ),
+                    provider=multidex_runtime_provider_id(_selected_local_registration.provider),
                     model=selected_model,
                 ),
                 model=selected_model,
