@@ -3374,7 +3374,7 @@ describe("Sidebar view options", () => {
         expect(
           within(groupSection("Updated today"))
             .getAllByRole("link", { name: /^conv_/ })
-            .map((link) => link.textContent),
+            .map((link) => link.getAttribute("aria-label")),
         ).toEqual(["conv_today", "conv_old"]);
       }
       expect(screen.queryByText("Projects")).toBeNull();
@@ -3427,7 +3427,7 @@ describe("Sidebar view options", () => {
     fireEvent.click(created);
     expect(JSON.parse(localStorage.getItem("omnigent:sidebar-view")!).ordering).toBe("created");
     const links = within(groupSection("Sessions")).getAllByRole("link", { name: /^conv_/ });
-    expect(links.map((link) => link.textContent)).toEqual([
+    expect(links.map((link) => link.getAttribute("aria-label"))).toEqual([
       "conv_done_new",
       "conv_done_old",
       "conv_running",
@@ -3445,7 +3445,7 @@ describe("Sidebar view options", () => {
     expect(
       within(groupSection("Sessions"))
         .getAllByRole("link", { name: /^conv_/ })
-        .map((link) => link.textContent),
+        .map((link) => link.getAttribute("aria-label")),
     ).toEqual(["conv_done_new", "conv_done_old", "conv_running"]);
   });
 
@@ -3475,7 +3475,9 @@ describe("Sidebar view options", () => {
       if (grouping === "default")
         fireEvent.click(screen.getByRole("button", { name: /^Customer X/ }));
       expect(
-        screen.getAllByRole("link", { name: /^conv_/ }).map((link) => link.textContent),
+        screen
+          .getAllByRole("link", { name: /^conv_/ })
+          .map((link) => link.getAttribute("aria-label")),
       ).toEqual(["conv_project_new", "conv_project_old", "conv_new", "conv_old"]);
     },
   );
@@ -3495,15 +3497,15 @@ describe("Sidebar view options", () => {
     ]);
     renderGroupingSidebar();
     const row = screen.getByText("conv_meta").closest("li")!;
-    expect(within(row).queryByTestId("session-row-meta")).toBeNull();
+    expect(within(row).getByTestId("session-row-meta")).toHaveTextContent("Build Mac");
     expect(within(row).queryByTestId("session-row-updated")).toBeNull();
     const controls = () => within(row).getByTestId("quick-pin-conversation").closest(".absolute");
-    expect(controls()).toHaveClass("top-1/2");
+    expect(controls()).toHaveClass("top-4", "md:top-3.5");
 
     openViewSubmenu("session-show-menu");
-    // Checkbox items keep the menu open, so all three toggle in one visit.
+    // The host pill is mandatory; other metadata can be toggled.
+    expect(screen.queryByTestId("session-show-environment")).toBeNull();
     fireEvent.click(screen.getByTestId("session-show-branch"));
-    fireEvent.click(screen.getByTestId("session-show-environment"));
     fireEvent.click(screen.getByTestId("session-show-updated"));
 
     // Environment shows as a compact visible pill naming the host.
@@ -3523,7 +3525,6 @@ describe("Sidebar view options", () => {
     expect(within(bare).getByTestId("session-row-environment")).not.toHaveClass("sr-only");
     expect(JSON.parse(localStorage.getItem("omnigent:sidebar-view")!).show).toEqual([
       "updated",
-      "environment",
       "branch",
     ]);
   });
@@ -3539,10 +3540,10 @@ describe("Sidebar view options", () => {
     const pill = within(row).getByTestId("session-row-automation");
     expect(pill).toHaveTextContent("Nightly review");
     expect(pill).toHaveClass("rounded-full");
-    // A manually-created session carries no automation label — no pill, and
-    // no empty meta line either.
+    // A manually-created session keeps only its machine pill.
     const manual = screen.getByText("conv_manual").closest("li")!;
-    expect(within(manual).queryByTestId("session-row-meta")).toBeNull();
+    expect(within(manual).queryByTestId("session-row-automation")).toBeNull();
+    expect(within(manual).getByTestId("session-row-meta")).toHaveTextContent("Local machine");
   });
 
   it("toggles the automation badge from the Show menu", () => {
@@ -3583,7 +3584,7 @@ describe("Sidebar view options", () => {
     openViewSubmenu("session-show-menu");
     fireEvent.click(screen.getByTestId("session-show-branch"));
     const row = within(screen.getByText("conv_workspace").closest("li")!);
-    expect(row.getByTestId("session-row-meta")).toHaveTextContent(/^feature\/web$/);
+    expect(row.getByTestId("session-row-meta")).toHaveTextContent("host·feature/web");
     expect(row.getByTestId("quick-pin-conversation").closest(".absolute")).toHaveClass("top-4");
     expect(screen.getByText("recorded/branch")).toBeInTheDocument();
     expect(useSessionWorktreesMock).toHaveBeenCalledWith(
@@ -3595,7 +3596,7 @@ describe("Sidebar view options", () => {
     expect(usePullRequestInfoMock).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByTestId("session-show-branch"));
-    expect(screen.queryByTestId("session-row-meta")).toBeNull();
+    expect(row.getByTestId("session-row-meta")).toHaveTextContent(/^host$/);
   });
 
   it.each([
@@ -3608,10 +3609,10 @@ describe("Sidebar view options", () => {
     useSessionWorktreesMock.mockReturnValue({ data });
     mockConversations([conv("conv_workspace", "Codex", { host_id: "host", workspace: "/repo" })]);
     renderGroupingSidebar();
-    expect(screen.queryByTestId("session-row-meta")).toBeNull();
+    expect(screen.getByTestId("session-row-meta")).toHaveTextContent(/^host$/);
   });
 
-  it("keeps the device name accessible on the environment icon", () => {
+  it("shows the actual local host name rather than a generic device label", () => {
     localStorage.setItem("omnigent:sidebar-view", JSON.stringify({ show: ["environment"] }));
     // A loopback server with one online host: that host is this machine.
     isServerLocalMock.mockReturnValue(true);
@@ -3623,9 +3624,8 @@ describe("Sidebar view options", () => {
     const meta = within(screen.getByText("conv_here").closest("li")!).getByTestId(
       "session-row-meta",
     );
-    expect(meta).toHaveTextContent(/^This /);
-    expect(within(meta).getByText(/^This /)).not.toHaveClass("sr-only");
-    expect(meta).not.toHaveTextContent("Build Mac");
+    expect(meta).toHaveTextContent(/^Build Mac$/);
+    expect(within(meta).getByText("Build Mac")).not.toHaveClass("sr-only");
   });
 
   it("shows a managed-sandbox session's repo name from its label when Show → Repo is on", () => {
@@ -3642,10 +3642,12 @@ describe("Sidebar view options", () => {
     fireEvent.click(screen.getByTestId("session-show-repo"));
 
     const sandbox = screen.getByText("conv_sandbox").closest("li")!;
-    expect(within(sandbox).getByTestId("session-row-meta")).toHaveTextContent(/^omnigent$/);
-    // A session with no repo label omits the row entirely.
+    expect(within(sandbox).getByTestId("session-row-meta")).toHaveTextContent(
+      "Local machine·omnigent",
+    );
+    // A session with no repo label keeps its machine pill.
     const local = screen.getByText("conv_local").closest("li")!;
-    expect(within(local).queryByTestId("session-row-meta")).toBeNull();
+    expect(within(local).getByTestId("session-row-meta")).toHaveTextContent(/^Local machine$/);
   });
 
   it("adds the harness and on-demand repo, PR and branch to the session tooltip", async () => {
@@ -3795,11 +3797,11 @@ describe("sidebar_grouping_ui release flag", () => {
       expect(
         within(sessions)
           .getAllByRole("link", { name: /^conv_/ })
-          .map((link) => link.textContent),
+          .map((link) => link.getAttribute("aria-label")),
       ).toEqual(["conv_mine", "conv_shared"]);
       expect(screen.queryByRole("button", { name: "Shared" })).toBeNull();
       expect(screen.queryByRole("button", { name: "Done" })).toBeNull();
-      expect(screen.queryByTestId("session-row-meta")).toBeNull();
+      expect(screen.getAllByTestId("session-row-meta")).toHaveLength(2);
       expect(screen.queryByTestId("session-row-updated")).toBeNull();
 
       // The menu offers Display alone, as a flat list.

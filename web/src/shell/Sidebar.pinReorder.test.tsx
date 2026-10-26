@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   pinned: [] as ReturnType<typeof conv>[],
   filterHonored: true,
   pinFn: vi.fn(),
+  moveToProject: vi.fn(),
   reorderPins: vi.fn(),
 }));
 
@@ -23,7 +24,8 @@ vi.mock("@/hooks/useConversations", async () => {
   const { PIN_WRITE_MUTATION_KEY } = await import("@/lib/sessionListCache");
   return {
     ...conversationHooksMock(),
-    useProjects: vi.fn(() => ({ data: [] })),
+    useProjects: vi.fn(() => ({ data: [{ id: "alpha", name: "Alpha" }] })),
+    useMoveToProject: () => ({ mutate: mocks.moveToProject }),
     usePinnedConversations: () => ({
       data: { conversations: mocks.pinned, filterHonored: mocks.filterHonored },
       isSuccess: true,
@@ -46,10 +48,11 @@ const ROW_HEIGHT = 30;
 
 // jsdom has no layout, so give each session row a stacked rect for dnd-kit's
 // pointer collision; everything else stays zero-sized and never collides.
-function stubRowRects() {
+function stubRowRects(target?: HTMLElement) {
   return vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
     this: Element,
   ) {
+    if (this === target) return new DOMRect(300, 0, 200, 100);
     const rows = [...document.querySelectorAll("li[data-sidebar-session-id]")];
     const index = rows.indexOf(this);
     if (index < 0) return new DOMRect(0, 0, 0, 0);
@@ -225,6 +228,9 @@ describe("unpinning from a sidebar row", () => {
     renderSidebar();
 
     unpin();
+    expect(mocks.pinFn).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "No" })).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "Yes" }));
 
     await waitFor(() =>
       expect(mocks.pinFn).toHaveBeenCalledExactlyOnceWith({ id: "conv_a", pinned: false }),
@@ -237,5 +243,64 @@ describe("unpinning from a sidebar row", () => {
       expect(mocks.pinFn).toHaveBeenLastCalledWith({ id: "conv_a", pinned: true, pinnedAt: 1000 }),
     );
     await waitFor(() => expect(pill).not.toBeInTheDocument());
+  });
+});
+
+describe("dragging a pinned session out of Pinned", () => {
+  it.each([
+    ["project", false],
+    ["project", true],
+    ["chats", false],
+    ["chats", true],
+    ["ungroup", false],
+    ["ungroup", true],
+  ] as const)("confirms before %s drop (accept: %s)", async (destination, accept) => {
+    mocks.pinFn.mockResolvedValue({});
+    mocks.pinned = [
+      conv("conv_a", {
+        labels: {
+          "omnigent.pinned": "1000",
+          ...(destination === "ungroup" ? { omni_project: "Alpha" } : {}),
+        },
+      }),
+    ];
+    renderSidebar();
+    const target =
+      destination === "project"
+        ? screen.getByRole("button", { name: "Alpha" }).closest("section")!.parentElement!
+        : screen.getByTestId("sidebar-chats-drop-zone");
+    stubRowRects(target);
+    const source = screen.getByRole("link", { name: "conv_a" }).closest("li")!;
+    fireEvent.mouseDown(source, { button: 0, ...rowCenter("conv_a") });
+    fireEvent.mouseMove(document, { clientX: 70, clientY: 15 });
+    await act(async () => {
+      fireEvent.mouseMove(document, { clientX: 350, clientY: 50 });
+    });
+    await act(async () => {
+      fireEvent.mouseUp(document, { clientX: 350, clientY: 50 });
+      // dnd-kit removes its post-drag click suppression after 50 ms.
+      await new Promise((resolve) => {
+        setTimeout(resolve, 55);
+      });
+    });
+    expect(screen.getByRole("button", { name: "No" })).toHaveFocus();
+    expect(mocks.pinFn).not.toHaveBeenCalled();
+    expect(mocks.moveToProject).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: accept ? "Yes" : "No" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    if (accept) {
+      await waitFor(() =>
+        expect(mocks.pinFn).toHaveBeenCalledExactlyOnceWith({ id: "conv_a", pinned: false }),
+      );
+      if (destination !== "chats") {
+        expect(mocks.moveToProject).toHaveBeenCalledExactlyOnceWith({
+          id: "conv_a",
+          project: destination === "project" ? "Alpha" : "",
+        });
+      }
+    } else {
+      expect(mocks.pinFn).not.toHaveBeenCalled();
+      expect(mocks.moveToProject).not.toHaveBeenCalled();
+    }
   });
 });

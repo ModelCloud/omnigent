@@ -5245,7 +5245,9 @@ async def _auto_create_codex_terminal(
         _selected_local_registration = multidex_model_for_selection(
             _multidex_config, selected_model
         )
-        selected_local_model = _selected_local_registration is not None
+        selected_local_model = (
+            _selected_local_registration is not None and selected_model is not None
+        )
         if selected_local_model:
             if multidex_registration_bearer_token(_selected_local_registration) is None:
                 raise ValueError(

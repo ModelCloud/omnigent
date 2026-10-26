@@ -210,6 +210,9 @@ describe("HeaderConversationMenu", () => {
 
     openMenu();
     fireEvent.click(screen.getByRole("menuitem", { name: "Unpin" }));
+    expect(mocks.togglePinnedAsync).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "No" })).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "Yes" }));
     expect(mocks.togglePinnedAsync).toHaveBeenCalledWith({ id: "conv-1", pinned: false });
     await waitFor(() =>
       expect(toast).toHaveBeenCalledWith(
