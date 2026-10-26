@@ -53,6 +53,7 @@ import {
 } from "@/components/composer/ComposerControls";
 import { DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { useAppName } from "@/lib/branding";
+import { hasPendingOwnElicitation } from "@/lib/blocks";
 import { cn } from "@/lib/utils";
 import { QueuedMessagesStrip } from "@/pages/QueuedMessagesStrip";
 import {
@@ -2534,12 +2535,7 @@ function ComposerImpl(
   // Mirrored sub-agent prompts (targetSessionId set to a child session)
   // don't gate this session's inbox, so they don't lock it.
   const hasPendingElicitation = useChatStore((s) =>
-    s.blocks.some(
-      (b) =>
-        b.type === "elicitation" &&
-        b.status === "pending" &&
-        (b.targetSessionId == null || b.targetSessionId === s.conversationId),
-    ),
+    hasPendingOwnElicitation(s.blocks, s.conversationId),
   );
 
   const codexPlanMode = useChatStore((s) => s.codexPlanMode);
