@@ -1777,14 +1777,14 @@ async def _inherited_parent_model(
     - a sub-agent spec that pins its own ``executor.model`` keeps it — the
       worker's author chose that model deliberately;
     - a child harness without model-override plumbing runs its default;
-    - a parent model outside the child harness's family (e.g. a Claude
-      selection dispatched to a codex worker) is not forced across vendors;
     - a child on a *different harness vendor* than the parent runs its own
       default unless an inference binding validates the id (see
       :func:`_child_is_foreign_harness` and
       :func:`_harness_has_inference_binding`). The parent's model belongs to the
       parent harness's provider vocabulary, so a foreign harness resolves it
-      against its own provider where it may not be servable.
+      against its own provider where it may not be servable. Without a binding,
+      same-vendor children inherit the parent's live selection without the
+      family-name heuristic, which cannot recognize arbitrary gateway models.
 
     :param server_client: HTTP client pointed at the Omnigent server.
     :param conversation_id: The parent session id.
@@ -1818,20 +1818,21 @@ async def _inherited_parent_model(
         parent_model = validate_model_override(raw_model)
     except ValueError:
         return None
-    if child_harness is not None and _dispatch_model_mismatch(child_harness, parent_model):
-        _logger.info(
-            "sys_session_send: not inheriting parent model %r for sub-agent %r "
-            "(family mismatch with harness %s); child runs its default",
-            parent_model,
-            sub_agent_name,
-            child_harness,
-            extra={"session_id": runner_primary_session_id()},
-        )
-        return None
-    if (
-        child_harness is not None
-        and not _harness_has_inference_binding(child_harness)
-        and _child_is_foreign_harness(child_harness, snap.get("harness"))
+    if child_harness is not None and _harness_has_inference_binding(child_harness):
+        mismatch_reason = _dispatch_model_mismatch(child_harness, parent_model)
+        if mismatch_reason is not None:
+            _logger.info(
+                "sys_session_send: not inheriting parent model %r for sub-agent "
+                "%r (model mismatch with bound harness %s); child runs its "
+                "default",
+                parent_model,
+                sub_agent_name,
+                child_harness,
+                extra={"session_id": runner_primary_session_id()},
+            )
+            return None
+    elif child_harness is not None and _child_is_foreign_harness(
+        child_harness, snap.get("harness")
     ):
         _logger.info(
             "sys_session_send: not inheriting parent model %r for sub-agent %r "
