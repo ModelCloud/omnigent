@@ -118,6 +118,7 @@ import { isSideChatCommand, usesNativeSideChatFork } from "@/lib/sideChat";
 // ids without an import cycle back to the store.
 import { isTempConvId, newTempConversation } from "@/lib/tempConversationId";
 import { useTerminalActivityStore } from "./terminalActivity";
+import { useTurnTpsStore } from "./turnTps";
 import { terminalInfoFromResource, terminalsQueryKey, type TerminalInfo } from "@/lib/terminals";
 import type {
   BackgroundTaskInfo,
@@ -7754,6 +7755,15 @@ export function handleSessionEvent(event: StreamEvent, streamConversationId?: st
       }
       if (event.usageByModel !== undefined) {
         patch.sessionUsageByModel = event.usageByModel;
+      }
+      if (
+        event.responseId !== undefined &&
+        (event.turnReasoningTps !== undefined || event.turnOutputTps !== undefined)
+      ) {
+        useTurnTpsStore.getState().record(event.conversationId, event.responseId, {
+          reasoning: event.turnReasoningTps,
+          output: event.turnOutputTps,
+        });
       }
       if (event.totalCostUsd !== undefined || event.usageByModel !== undefined) {
         const entry =

@@ -3378,6 +3378,12 @@ class SessionUsageEvent(_SSEEventBase):
         ``{"claude-sonnet-4-6": ModelUsage(input_tokens=12000, ...)}``.
         ``None`` (stripped by ``exclude_none``) on a broadcast that carries
         no per-model change, so the client keeps its cached map.
+    :param response_id: Response (turn) id the rate fields belong to, so
+        the UI can pin them to that turn's reasoning/assistant blocks.
+    :param turn_reasoning_tps: Measured generation rate in tokens/sec for
+        the turn's reasoning deltas (queue/prompt/transfer excluded).
+    :param turn_output_tps: Measured generation rate in tokens/sec for the
+        turn's visible assistant output.
 
     Category: **transient** (SSE-only). On reconnect, clients seed
     the ring from the session snapshot's ``last_total_tokens`` and
@@ -3391,6 +3397,9 @@ class SessionUsageEvent(_SSEEventBase):
     context_window: int | None = None
     total_cost_usd: float | None = None
     usage_by_model: dict[str, ModelUsage] | None = None
+    response_id: str | None = None
+    turn_reasoning_tps: float | None = None
+    turn_output_tps: float | None = None
 
 
 class SessionModelEvent(_SSEEventBase):

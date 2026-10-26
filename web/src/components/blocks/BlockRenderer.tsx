@@ -29,6 +29,7 @@ import { cn } from "@/lib/utils";
 import { FilePathAwareMessageResponse } from "./ChatMarkdown";
 import { ElicitationCard } from "./ApprovalCard";
 import { ReasoningView } from "./ReasoningView";
+import { formatTps, turnTpsKey, useTurnTpsStore } from "@/store/turnTps";
 import { SlashCommandCard } from "./SlashCommandCard";
 import { SmartRoutingCard } from "./SmartRoutingCard";
 import { TerminalCommandCard } from "./TerminalCommandCard";
@@ -106,6 +107,13 @@ interface BlockRendererProps {
   showsWorking?: boolean;
   /** Start a fold containing a mid-turn user interjection open. */
   defaultExpanded?: boolean;
+  /**
+   * Session + response this bubble belongs to, used to look up the
+   * forwarder-measured turn rates (tokens/sec) rendered on the
+   * reasoning header and the worked fold.
+   */
+  conversationId?: string;
+  responseId?: string;
 }
 
 /** The subset of {@link BlockRendererProps} the fold decision reads. */
@@ -206,8 +214,15 @@ export function BlockRenderer({
   lastActivityAtS,
   showsWorking = false,
   defaultExpanded = false,
+  conversationId,
+  responseId,
   onRetryError,
 }: BlockRendererProps) {
+  const turnTps = useTurnTpsStore((s) =>
+    conversationId !== undefined && responseId !== undefined
+      ? s.byKey[turnTpsKey(conversationId, responseId)]
+      : undefined,
+  );
   const { isOwnTurnLive, possiblyLive, isTurnLive } = turnLiveness({
     sessionStatus,
     turnLifecycle,
@@ -290,6 +305,7 @@ export function BlockRenderer({
           ...renderSequence(segment.items, {
             liveEdge: false,
             indexBase: segment.startIndex,
+            reasoningTps: turnTps?.reasoning,
             onRetryError,
           }),
         );
@@ -297,7 +313,16 @@ export function BlockRenderer({
       }
       if (segment.kind === "exempt") {
         rendered.push(
-          renderItem(segment.item, segment.index, false, false, false, false, onRetryError),
+          renderItem(
+            segment.item,
+            segment.index,
+            false,
+            false,
+            false,
+            false,
+            onRetryError,
+            turnTps?.reasoning,
+          ),
         );
         continue;
       }
@@ -306,12 +331,14 @@ export function BlockRenderer({
         <TurnWorkedFold
           key={`worked:${segment.startIndex}`}
           workedForS={workRunCount === 1 ? workedForS : undefined}
+          outputTps={turnTps?.output}
           animateCollapse={animateCollapse}
           defaultOpen={defaultExpanded}
         >
           {renderSequence(segment.items, {
             liveEdge: false,
             indexBase: segment.startIndex,
+            reasoningTps: turnTps?.reasoning,
             onRetryError,
           })}
         </TurnWorkedFold>,
@@ -323,6 +350,7 @@ export function BlockRenderer({
   return renderSequence(items, {
     liveEdge: isTurnLive,
     suppressReasoningDuration: showsWorking,
+    reasoningTps: turnTps?.reasoning,
     onRetryError,
   });
 }
@@ -336,7 +364,13 @@ export function BlockRenderer({
  */
 function renderSequence(
   items: RenderItem[],
-  { liveEdge, suppressReasoningDuration = false, indexBase = 0, onRetryError }: TurnSequenceOptions,
+  {
+    liveEdge,
+    suppressReasoningDuration = false,
+    indexBase = 0,
+    reasoningTps,
+    onRetryError,
+  }: TurnSequenceOptions,
 ): ReactNode[] {
   const rendered: ReactNode[] = [];
   let previousRenderedItemWasText = false;
@@ -401,6 +435,7 @@ function renderSequence(
         suppressReasoningDuration,
         followsText,
         onRetryError,
+        reasoningTps,
       ),
     );
     previousRenderedItemWasText = item.kind === "text";
@@ -413,6 +448,8 @@ interface TurnSequenceOptions {
   liveEdge: boolean;
   suppressReasoningDuration?: boolean;
   indexBase?: number;
+  /** Measured reasoning rate for the turn, in tokens/sec. */
+  reasoningTps?: number;
   onRetryError?: BlockRendererProps["onRetryError"];
 }
 
@@ -513,16 +550,23 @@ function isProvisionalTrace(items: RenderItem[]): boolean {
  */
 function TurnWorkedFold({
   workedForS,
+  outputTps,
   animateCollapse,
   defaultOpen,
   children,
 }: {
   workedForS?: number;
+  /** Measured assistant-output rate for this turn, in tokens/sec. */
+  outputTps?: number;
   animateCollapse: boolean;
   defaultOpen: boolean;
   children: ReactNode;
 }) {
-  const label = workedForS !== undefined ? `Worked for ${formatWorkedFor(workedForS)}` : "Worked";
+  const tpsSuffix = outputTps !== undefined ? ` · ${formatTps(outputTps)} t/s` : "";
+  const label =
+    workedForS !== undefined
+      ? `Worked for ${formatWorkedFor(workedForS)}${tpsSuffix}`
+      : `Worked${tpsSuffix}`;
   const [open, setOpen] = useState(animateCollapse || defaultOpen);
   const userChangedOpenRef = useRef(false);
   useLayoutEffect(() => {
@@ -739,6 +783,7 @@ function renderItem(
   suppressReasoningDuration = false,
   followsText = false,
   onRetryError?: BlockRendererProps["onRetryError"],
+  reasoningTps?: number,
 ): ReactNode {
   const key = keyFor(item, index);
   switch (item.kind) {
@@ -774,6 +819,7 @@ function renderItem(
           text={item.text}
           isStreaming={isReasoningStreaming}
           duration={suppressReasoningDuration ? undefined : item.duration}
+          reasoningTps={reasoningTps}
         />
       );
     case "tool":

@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import re
+import time
 import urllib.error
 import urllib.request
 from collections.abc import AsyncIterator, Callable
@@ -338,6 +339,10 @@ class _CodexChildStream:
                 return False
             self.active_turn_id = turn_id
             self.state.reasoning_stream_item_id = None
+            self.state.turn_reasoning_first_at = None
+            self.state.turn_reasoning_last_at = None
+            self.state.turn_output_first_at = None
+            self.state.turn_output_last_at = None
         elif method in {"turn/completed", "turn/failed"}:
             if turn_id is not None:
                 if turn_id in self.terminal_turn_ids or self.active_turn_id not in {None, turn_id}:
@@ -504,6 +509,10 @@ class _CodexForwarderState:
         repeatedly as edits land; only the newest diff is kept and it is
         flushed once at the terminal turn boundary (see
         :func:`_handle_turn_diff_updated` / :func:`_flush_turn_diff`).
+    :param turn_reasoning_first_at: ``monotonic`` timestamp of the turn's
+        first reasoning delta (paired with ``turn_reasoning_last_at``).
+    :param turn_output_first_at: ``monotonic`` timestamp of the turn's
+        first assistant-message delta (paired with ``turn_output_last_at``).
     """
 
     model: str | None = None
@@ -568,6 +577,15 @@ class _CodexForwarderState:
     # chunks (for example, ``TThe usehe``).  Preserve summary-only providers,
     # but ignore a summary when its raw counterpart has already arrived.
     raw_reasoning_item_ids: set[str] = field(default_factory=set)
+    # Monotonic bounds of this turn's reasoning- and assistant-output delta
+    # streams. The first→last delta span covers generation only (queue wait,
+    # prompt processing and network transfer sit outside it), which is what
+    # the tokens/sec display divides into the turn's token counts. Reset at
+    # each ``turn/started``.
+    turn_reasoning_first_at: float | None = None
+    turn_reasoning_last_at: float | None = None
+    turn_output_first_at: float | None = None
+    turn_output_last_at: float | None = None
     turn_diff_by_turn: dict[str, str] = field(default_factory=dict)
     # Whether model output has already settled the synthesized MCP startup
     # round. The round is seeded once per forwarder connection (never on
@@ -1782,11 +1800,16 @@ class _SessionUsageCoalescer:
         """
         self._client = client
         self._session_id = session_id
-        self._pending: dict[str, int] = {}
-        self._last_posted: dict[str, int] = {}
+        self._pending: dict[str, int | float | str] = {}
+        self._last_posted: dict[str, int | float | str] = {}
         self._model: str | None = model
 
-    def record(self, params: _JsonObject, model: str | None = None) -> None:
+    def record(
+        self,
+        params: _JsonObject,
+        model: str | None = None,
+        extra: dict[str, float] | None = None,
+    ) -> None:
         """
         Record the latest usage values from one Codex notification.
 
@@ -1797,6 +1820,8 @@ class _SessionUsageCoalescer:
             tokens into ``total_cost_usd``. ``None`` leaves the prior
             value unchanged (Codex sends usage and settings separately,
             so a usage frame on its own carries no model).
+        :param extra: Additional fields to merge into the posted usage
+            payload (e.g. the turn's measured token rates).
         :returns: None.
         """
         if model:
@@ -1804,6 +1829,8 @@ class _SessionUsageCoalescer:
         data = _session_usage_data_from_params(params)
         if data is None:
             return
+        if extra:
+            data.update(extra)
         self._pending.update(data)
 
     async def flush(self) -> None:
@@ -4072,6 +4099,11 @@ async def _maybe_handle_delta_event(
     if method == "item/agentMessage/delta":
         if delta_coalescer is None:
             raise RuntimeError("Codex assistant delta handling requires a text-delta coalescer")
+        if forwarder_state is not None:
+            now = time.monotonic()
+            if forwarder_state.turn_output_first_at is None:
+                forwarder_state.turn_output_first_at = now
+            forwarder_state.turn_output_last_at = now
         await _handle_agent_message_delta(
             client,
             session_id,
@@ -4115,6 +4147,11 @@ async def _maybe_handle_delta_event(
     if method in {"item/reasoning/textDelta", "item/reasoning/summaryTextDelta"}:
         if delta_coalescer is None:
             raise RuntimeError("Codex reasoning delta handling requires a text-delta coalescer")
+        if forwarder_state is not None:
+            now = time.monotonic()
+            if forwarder_state.turn_reasoning_first_at is None:
+                forwarder_state.turn_reasoning_first_at = now
+            forwarder_state.turn_reasoning_last_at = now
         await _handle_reasoning_delta(
             params,
             delta_coalescer,
@@ -4295,7 +4332,11 @@ def _handle_usage_update(
     :returns: None.
     """
     model = forwarder_state.model if forwarder_state is not None else None
-    usage_coalescer.record(params, model=model)
+    usage_coalescer.record(
+        params,
+        model=model,
+        extra=_turn_token_rate_fields(params, forwarder_state),
+    )
 
 
 async def _handle_turn_plan_updated(
@@ -7757,7 +7798,9 @@ async def _post_session_interrupted(
     _log_failed_session_event_post(_EXTERNAL_SESSION_INTERRUPTED_TYPE, response)
 
 
-def _session_usage_data_from_params(params: _JsonObject) -> dict[str, int] | None:
+def _session_usage_data_from_params(
+    params: _JsonObject,
+) -> dict[str, int | float | str] | None:
     """
     Extract Omnigent session-usage fields from a Codex usage notification.
 
@@ -7766,7 +7809,8 @@ def _session_usage_data_from_params(params: _JsonObject) -> dict[str, int] | Non
         (context ring), ``cumulative_input_tokens`` /
         ``cumulative_output_tokens`` /
         ``cumulative_cache_read_input_tokens`` (priced into session cost by
-        the server), or ``None`` when the notification has no usable usage
+        the server), ``response_id`` (the turn's response for pinning the
+        rate display), or ``None`` when the notification has no usable usage
         values.
     """
     token_usage = params.get("tokenUsage")
@@ -7781,7 +7825,7 @@ def _session_usage_data_from_params(params: _JsonObject) -> dict[str, int] | Non
         context_window = total.get("contextWindow")
     output_tokens = total.get("outputTokens")
     cached_input_tokens = total.get("cachedInputTokens")
-    data: dict[str, int] = {}
+    data: dict[str, int | float | str] = {}
     if isinstance(cumulative_input_tokens, int) and cumulative_input_tokens >= 0:
         # Codex's ``tokenUsage.total`` is CUMULATIVE across the whole thread
         # (the CLI subtracts prior totals to recover per-turn deltas), so
@@ -7814,9 +7858,71 @@ def _session_usage_data_from_params(params: _JsonObject) -> dict[str, int] | Non
         data["cumulative_output_tokens"] = output_tokens
     if isinstance(context_window, int) and context_window > 0:
         data["context_window"] = context_window
+    turn_id = params.get("turnId")
+    if isinstance(turn_id, str) and turn_id:
+        # The response this usage frame belongs to; lets the UI pin the
+        # turn's rate figures to the right reasoning/assistant blocks.
+        data["response_id"] = _response_id(params)
     if not data:
         return None
     return data
+
+
+def _turn_token_rate_fields(
+    params: _JsonObject,
+    forwarder_state: _CodexForwarderState | None,
+) -> dict[str, float]:
+    """
+    Derive the turn's generation rates (tokens/sec) for the UI display.
+
+    Token counts come from Codex's ``tokenUsage.last`` per-completion
+    breakdown; durations come from the forwarder's own delta-stream bounds,
+    which cover generation only — queue wait, prompt processing and network
+    transfer sit outside the measured span. Reasoning tokens are a subset of
+    ``outputTokens``, so the visible-output rate subtracts them.
+
+    :param params: Codex ``thread/tokenUsage/updated`` params.
+    :param forwarder_state: Forwarder state carrying delta timestamps.
+    :returns: ``turn_reasoning_tps`` / ``turn_output_tps`` entries, each
+        present only when both a token count and a positive delta span exist.
+    """
+    fields: dict[str, float] = {}
+    if forwarder_state is None:
+        return fields
+    token_usage = params.get("tokenUsage")
+    last = token_usage.get("last") if isinstance(token_usage, dict) else None
+    if not isinstance(last, dict):
+        return fields
+    reasoning_tokens = last.get("reasoningOutputTokens")
+    reasoning_first = forwarder_state.turn_reasoning_first_at
+    reasoning_last = forwarder_state.turn_reasoning_last_at
+    if (
+        isinstance(reasoning_tokens, int)
+        and reasoning_tokens > 0
+        and reasoning_first is not None
+        and reasoning_last is not None
+        and reasoning_last > reasoning_first
+    ):
+        fields["turn_reasoning_tps"] = round(
+            reasoning_tokens / (reasoning_last - reasoning_first), 1
+        )
+    output_tokens = last.get("outputTokens")
+    visible_output = (
+        output_tokens - reasoning_tokens
+        if isinstance(output_tokens, int) and isinstance(reasoning_tokens, int)
+        else output_tokens
+    )
+    output_first = forwarder_state.turn_output_first_at
+    output_last = forwarder_state.turn_output_last_at
+    if (
+        isinstance(visible_output, int)
+        and visible_output > 0
+        and output_first is not None
+        and output_last is not None
+        and output_last > output_first
+    ):
+        fields["turn_output_tps"] = round(visible_output / (output_last - output_first), 1)
+    return fields
 
 
 @dataclass

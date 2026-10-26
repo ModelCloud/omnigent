@@ -2058,6 +2058,21 @@ async def _persist_external_session_usage(
             "external_session_usage data.context_window must be a positive int",
             code=ErrorCode.INVALID_INPUT,
         )
+    for rate_key in ("turn_reasoning_tps", "turn_output_tps"):
+        raw_rate = body.data.get(rate_key)
+        if raw_rate is not None and (not isinstance(raw_rate, (int, float)) or raw_rate < 0):
+            raise OmnigentError(
+                f"external_session_usage data.{rate_key} must be a non-negative number",
+                code=ErrorCode.INVALID_INPUT,
+            )
+    raw_response_id = body.data.get("response_id")
+    if raw_response_id is not None and (
+        not isinstance(raw_response_id, str) or not raw_response_id
+    ):
+        raise OmnigentError(
+            "external_session_usage data.response_id must be a non-empty str",
+            code=ErrorCode.INVALID_INPUT,
+        )
     _CUMULATIVE_USAGE_KEYS = (
         "cumulative_cost_usd",
         # ``policy_cost_usd`` alone is a valid post: mid-turn the displayed
@@ -2149,6 +2164,9 @@ async def _persist_external_session_usage(
         event_payload["total_cost_usd"] = subtree_cost
     if usage_by_model is not None:
         event_payload["usage_by_model"] = usage_by_model
+    for rate_key in ("turn_reasoning_tps", "turn_output_tps", "response_id"):
+        if body.data.get(rate_key) is not None:
+            event_payload[rate_key] = body.data[rate_key]
     event = SessionUsageEvent(**event_payload)
     session_stream.publish(session_id, event.model_dump(exclude_none=True))
     # This session's usage also moves its ANCESTORS' subtree cost (its spend

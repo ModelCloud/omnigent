@@ -1111,6 +1111,8 @@ function AssistantBubble({
             lastActivityAtS={bubble.lastActivityAtS}
             showsWorking={showsWorking}
             defaultExpanded={bubble.defaultExpanded}
+            conversationId={conversationId ?? undefined}
+            responseId={bubble.responseId}
             onRetryError={recoveryDisabled ? undefined : handleRetryError}
           />
         </MessageContent>
