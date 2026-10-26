@@ -818,7 +818,7 @@ async def test_hook_telemetry_failure_does_not_block_status(
     assert context["native_hook_recorded_at"] > 0
     assert context["native_session_id"] == "native-session"
     assert context.get("native_error_category") == hook_category
-    assert context["runner_version"] == forwarder.VERSION
+    assert context["runner_version"] == forwarder.display_version()
     assert context["failure_id"]
     assert "synthetic-private-telemetry-data" not in json.dumps(context)
     assert "Claude hook failure telemetry failed: TypeError" in caplog.text
