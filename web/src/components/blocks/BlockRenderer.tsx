@@ -307,6 +307,7 @@ export function BlockRenderer({
             indexBase: segment.startIndex,
             reasoningTps: turnTps?.reasoning,
             onRetryError,
+            conversationId,
           }),
         );
         continue;
@@ -322,6 +323,7 @@ export function BlockRenderer({
             false,
             onRetryError,
             turnTps?.reasoning,
+            conversationId,
           ),
         );
         continue;
@@ -340,6 +342,7 @@ export function BlockRenderer({
             indexBase: segment.startIndex,
             reasoningTps: turnTps?.reasoning,
             onRetryError,
+            conversationId,
           })}
         </TurnWorkedFold>,
       );
@@ -352,6 +355,7 @@ export function BlockRenderer({
     suppressReasoningDuration: showsWorking,
     reasoningTps: turnTps?.reasoning,
     onRetryError,
+    conversationId,
   });
 }
 
@@ -370,6 +374,7 @@ function renderSequence(
     indexBase = 0,
     reasoningTps,
     onRetryError,
+    conversationId,
   }: TurnSequenceOptions,
 ): ReactNode[] {
   const rendered: ReactNode[] = [];
@@ -436,6 +441,7 @@ function renderSequence(
         followsText,
         onRetryError,
         reasoningTps,
+        conversationId,
       ),
     );
     previousRenderedItemWasText = item.kind === "text";
@@ -451,6 +457,8 @@ interface TurnSequenceOptions {
   /** Measured reasoning rate for the turn, in tokens/sec. */
   reasoningTps?: number;
   onRetryError?: BlockRendererProps["onRetryError"];
+  /** Conversation these items belong to — scopes thinking-pane selections. */
+  conversationId?: string;
 }
 
 interface TurnPartition {
@@ -784,6 +792,7 @@ function renderItem(
   followsText = false,
   onRetryError?: BlockRendererProps["onRetryError"],
   reasoningTps?: number,
+  conversationId?: string,
 ): ReactNode {
   const key = keyFor(item, index);
   switch (item.kind) {
@@ -820,6 +829,8 @@ function renderItem(
           isStreaming={isReasoningStreaming}
           duration={suppressReasoningDuration ? undefined : item.duration}
           reasoningTps={reasoningTps}
+          conversationId={conversationId}
+          sectionKey={key}
         />
       );
     case "tool":

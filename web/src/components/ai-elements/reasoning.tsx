@@ -23,7 +23,12 @@ import {
 interface ReasoningContextValue {
   isStreaming: boolean;
   isOpen: boolean;
-  setIsOpen: (open: boolean) => void;
+  /**
+   * When set, clicking the trigger inspects the section in the
+   * right-side thinking pane instead of expanding it inline. Inline
+   * auto-open while streaming is unaffected.
+   */
+  onInspect?: () => void;
   duration: number | undefined;
   /**
    * Whether this reasoning section can be expanded to reveal content.
@@ -50,6 +55,11 @@ export type ReasoningProps = ComponentProps<typeof Collapsible> & {
   isStreaming?: boolean;
   duration?: number;
   /**
+   * Route trigger clicks to the thinking pane rather than toggling the
+   * inline collapsible. Unset callers keep the inline expand/collapse.
+   */
+  onInspect?: () => void;
+  /**
    * Whether the section has content worth expanding. Defaults to `true`
    * so existing callers keep the collapsible behavior. When `false`, the
    * collapsible is locked closed and the trigger renders as a flat,
@@ -70,6 +80,7 @@ export const Reasoning = memo(
     duration,
     expandable = true,
     tps,
+    onInspect,
     children,
     ...props
   }: ReasoningProps) => {
@@ -77,21 +88,27 @@ export const Reasoning = memo(
     // toggle takes precedence until the next time streaming starts.
     // Resetting on the next stream means a new reasoning section
     // doesn't inherit the user's choice from the previous one.
+    // When `onInspect` is set the section never expands inline — clicks
+    // open the thinking pane — so streaming alone drives the open state.
     const [userOverride, setUserOverride] = useState<boolean | null>(null);
     // A non-expandable section is always closed — there's nothing inside.
-    const isOpen = expandable ? (userOverride ?? isStreaming) : false;
+    const isOpen = expandable ? (onInspect ? isStreaming : (userOverride ?? isStreaming)) : false;
 
     useEffect(() => {
       if (isStreaming) setUserOverride(null);
     }, [isStreaming]);
 
-    const handleOpenChange = useCallback((newOpen: boolean) => {
-      setUserOverride(newOpen);
-    }, []);
+    const handleOpenChange = useCallback(
+      (newOpen: boolean) => {
+        if (onInspect) onInspect();
+        else setUserOverride(newOpen);
+      },
+      [onInspect],
+    );
 
     const contextValue = useMemo(
-      () => ({ duration, isOpen, isStreaming, setIsOpen: handleOpenChange, expandable, tps }),
-      [duration, isOpen, isStreaming, handleOpenChange, expandable, tps],
+      () => ({ duration, isOpen, isStreaming, onInspect, expandable, tps }),
+      [duration, isOpen, isStreaming, onInspect, expandable, tps],
     );
 
     return (
@@ -147,7 +164,7 @@ export const ReasoningTrigger = memo(
     getThinkingMessage = defaultGetThinkingMessage,
     ...props
   }: ReasoningTriggerProps) => {
-    const { isStreaming, isOpen, duration, expandable, tps } = useReasoning();
+    const { isStreaming, isOpen, duration, expandable, tps, onInspect } = useReasoning();
 
     const label = (
       <>
@@ -159,7 +176,10 @@ export const ReasoningTrigger = memo(
           <ChevronRightIcon
             className={cn(
               "size-3.5 shrink-0 transition-transform",
-              isOpen ? "rotate-90" : "rotate-0",
+              // With onInspect the chevron stays pointing right — it
+              // previews that the section opens in the side pane, and
+              // inline expansion never happens.
+              !onInspect && isOpen ? "rotate-90" : "rotate-0",
             )}
           />
         )}
@@ -200,11 +220,40 @@ export type ReasoningContentProps = ComponentProps<typeof CollapsibleContent> & 
   children: string;
 };
 
-export const ReasoningContent = memo(({ className, children, ...props }: ReasoningContentProps) => {
-  const { expandable } = useReasoning();
+/**
+ * The reasoning body as rendered markdown — shared by the inline
+ * collapsible content and the thinking pane so both show identical
+ * output. Rendered at normal body size in full contrast: reasoning is
+ * real content the user reads, not secondary chrome.
+ */
+export const ReasoningMarkdown = memo(({ children }: { children: string }) => {
   const themeMode = useResolvedThemeMode();
   const normalizedChildren = useMemo(() => normalizeExplicitMathDelimiters(children), [children]);
   const mermaidOptions = useMemo(() => mermaidOptionsForTheme(themeMode), [themeMode]);
+
+  return (
+    <MarkdownErrorBoundary source={normalizedChildren}>
+      {/* Streamdown is memoized and its comparator ignores the mermaid prop,
+          so remount on theme change to recolor already-rendered diagrams. */}
+      <Streamdown
+        {...MERMAID_STREAMDOWN_PROPS}
+        key={themeMode}
+        plugins={STREAMDOWN_PLUGINS}
+        mermaid={mermaidOptions}
+        // Let links open on a plain click (and cmd/ctrl-click in a new tab)
+        // instead of Streamdown's default "Open external link?" modal.
+        linkSafety={CHAT_LINK_SAFETY}
+        // Block remote image fetches that can exfiltrate data through URLs.
+        rehypePlugins={SECURE_STREAMDOWN_REHYPE_PLUGINS}
+      >
+        {normalizedChildren}
+      </Streamdown>
+    </MarkdownErrorBoundary>
+  );
+});
+
+export const ReasoningContent = memo(({ className, children, ...props }: ReasoningContentProps) => {
+  const { expandable } = useReasoning();
 
   // Non-expandable section has no content to reveal — render nothing so
   // there's no empty collapsible region under the flat header.
@@ -213,29 +262,13 @@ export const ReasoningContent = memo(({ className, children, ...props }: Reasoni
   return (
     <CollapsibleContent
       className={cn(
-        "mt-1 ml-2 border-l pl-3 py-1 text-sm",
-        "data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 text-muted-foreground outline-none data-[state=closed]:animate-out data-[state=open]:animate-in",
+        "mt-1 ml-2 border-l pl-3 py-1 text-ui",
+        "data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 text-foreground outline-none data-[state=closed]:animate-out data-[state=open]:animate-in",
         className,
       )}
       {...props}
     >
-      <MarkdownErrorBoundary source={normalizedChildren}>
-        {/* Streamdown is memoized and its comparator ignores the mermaid prop,
-            so remount on theme change to recolor already-rendered diagrams. */}
-        <Streamdown
-          {...MERMAID_STREAMDOWN_PROPS}
-          key={themeMode}
-          plugins={STREAMDOWN_PLUGINS}
-          mermaid={mermaidOptions}
-          // Let links open on a plain click (and cmd/ctrl-click in a new tab)
-          // instead of Streamdown's default "Open external link?" modal.
-          linkSafety={CHAT_LINK_SAFETY}
-          // Block remote image fetches that can exfiltrate data through URLs.
-          rehypePlugins={SECURE_STREAMDOWN_REHYPE_PLUGINS}
-        >
-          {normalizedChildren}
-        </Streamdown>
-      </MarkdownErrorBoundary>
+      <ReasoningMarkdown>{children}</ReasoningMarkdown>
     </CollapsibleContent>
   );
 });
@@ -243,3 +276,4 @@ export const ReasoningContent = memo(({ className, children, ...props }: Reasoni
 Reasoning.displayName = "Reasoning";
 ReasoningTrigger.displayName = "ReasoningTrigger";
 ReasoningContent.displayName = "ReasoningContent";
+ReasoningMarkdown.displayName = "ReasoningMarkdown";

@@ -283,6 +283,7 @@ import { useIsMobileViewport } from "@/hooks/useIsMobileViewport";
 import { CONTINUE_TURN_ERROR_CODES } from "@/components/blocks/StatusBlocks";
 import { ConnectionIndicator } from "./ChatIndicators";
 import { Transcript } from "@/components/chat/Transcript";
+import { ThinkingPane } from "@/components/chat/ThinkingPane";
 
 /** Server-info as consumers see it: the probe's result, or "loading". */
 type ServerInfoValue = ServerInfo | "loading";
@@ -1242,7 +1243,7 @@ export function ChatPage() {
 
   return (
     <SessionSharedContext.Provider value={isSessionShared}>
-      <SessionLayout mainAgent={mainAgent} />
+      <SessionLayout mainAgent={mainAgent} conversationId={urlConvId} />
       <ReconnectSessionDialog
         open={dialogOpen}
         onOpenChange={setDialogOpen}
@@ -1286,6 +1287,8 @@ export function ChatPage() {
 
 interface SessionLayoutProps {
   mainAgent: React.ReactNode;
+  /** Active conversation — scopes the thinking pane's selection. */
+  conversationId: string;
 }
 
 /**
@@ -1297,7 +1300,7 @@ interface SessionLayoutProps {
  * tab inside the right Workspace rail (WorkspacePanel), so it never floats as a
  * mid-page column.
  */
-function SessionLayout({ mainAgent }: SessionLayoutProps) {
+function SessionLayout({ mainAgent, conversationId }: SessionLayoutProps) {
   return (
     <div className="flex min-h-0 flex-1 overflow-hidden">
       {/* `relative`: positions MainAgentSurface's persistent terminal overlay
@@ -1306,6 +1309,10 @@ function SessionLayout({ mainAgent }: SessionLayoutProps) {
       <div data-chat-surface className="relative flex min-w-0 flex-1 flex-col">
         {mainAgent}
       </div>
+      {/* Reasoning sections open here on click rather than expanding
+          inline, so settled thinking stays readable while a live edge
+          streams underneath. */}
+      <ThinkingPane conversationId={conversationId} />
     </div>
   );
 }
