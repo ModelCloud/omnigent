@@ -21,20 +21,22 @@ _PROBE_TIMEOUT_S = 2.0
 
 
 async def _probe_one(base_url: str) -> bool:
-    """Return True when the endpoint answers an HTTP request at all.
+    """Return True when the endpoint's ``/models`` route answers healthily.
 
-    Any status code counts as online — a 401/404 still proves the service is
-    reachable; only transport failures (DNS, refused, TLS, timeout) are
-    offline.
+    ``GET {base_url}/models`` is the standard OpenAI-compatible listing every
+    client issues. A 2xx or 4xx status means the gateway is up (401/403 =
+    reachable but auth-gated; 404 = reachable, route unlisted); a 5xx means
+    the endpoint is reachable but broken — counted offline alongside
+    transport failures (DNS, refused, TLS, timeout).
     """
     try:
         async with httpx.AsyncClient(timeout=_PROBE_TIMEOUT_S, follow_redirects=True) as client:
-            await client.get(base_url)
+            response = await client.get(f"{base_url.rstrip('/')}/models")
     except httpx.HTTPError:
         return False
     except Exception:  # noqa: BLE001 - a probe must never break the catalog answer
         return False
-    return True
+    return response.status_code < 500
 
 
 async def probe_provider_health(

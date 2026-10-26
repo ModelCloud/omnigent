@@ -12,7 +12,13 @@ from omnigent.host.provider_health import (
 
 
 @pytest.mark.asyncio
-async def test_probe_classifies_any_http_response_as_online(monkeypatch):
+async def test_probe_queries_models_route_and_classifies_status(monkeypatch):
+    seen: list[str] = []
+
+    class _Response:
+        def __init__(self, status_code: int) -> None:
+            self.status_code = status_code
+
     class _Client:
         async def __aenter__(self):
             return self
@@ -21,20 +27,35 @@ async def test_probe_classifies_any_http_response_as_online(monkeypatch):
             return None
 
         async def get(self, url):
+            seen.append(url)
             if "dead" in url:
                 raise TimeoutError("unreachable")
-            return object()  # 404/401 still prove reachability
+            if "broken" in url:
+                return _Response(503)
+            return _Response(401)  # auth-gated still proves the gateway is up
 
     monkeypatch.setattr("omnigent.host.provider_health.httpx.AsyncClient", lambda **kw: _Client())
     health = await probe_provider_health(
-        {"up": "https://openrouter.ai/api/v1", "dead": "http://dead.invalid/v1"}
+        {
+            "up": "https://openrouter.ai/api/v1",
+            "broken": "https://broken.invalid/v1/",
+            "dead": "http://dead.invalid/v1",
+        }
     )
-    assert health == {"up": "online", "dead": "offline"}
+    assert health == {"up": "online", "broken": "offline", "dead": "offline"}
+    assert seen == [
+        "https://openrouter.ai/api/v1/models",
+        "https://broken.invalid/v1/models",
+        "http://dead.invalid/v1/models",
+    ]
 
 
 @pytest.mark.asyncio
 async def test_probe_serves_fresh_results_from_ttl_cache(monkeypatch):
     calls = []
+
+    class _Response:
+        status_code = 200
 
     class _Client:
         async def __aenter__(self):
@@ -45,7 +66,7 @@ async def test_probe_serves_fresh_results_from_ttl_cache(monkeypatch):
 
         async def get(self, url):
             calls.append(url)
-            return object()
+            return _Response()
 
     monkeypatch.setattr("omnigent.host.provider_health.httpx.AsyncClient", lambda **kw: _Client())
     cache: dict[str, tuple[float, bool]] = {}
@@ -53,13 +74,16 @@ async def test_probe_serves_fresh_results_from_ttl_cache(monkeypatch):
     assert (await probe_provider_health(providers, cache=cache)) == {"p": "online"}
     # Second call inside the TTL must not re-ping the endpoint.
     assert (await probe_provider_health(providers, cache=cache)) == {"p": "online"}
-    assert calls == ["https://api.openai.com/v1"]
+    assert calls == ["https://api.openai.com/v1/models"]
 
 
 @pytest.mark.asyncio
 async def test_probe_rechecks_after_ttl_expiry(monkeypatch):
     calls = []
     clock = {"now": 1000.0}
+
+    class _Response:
+        status_code = 200
 
     class _Client:
         async def __aenter__(self):
@@ -70,7 +94,7 @@ async def test_probe_rechecks_after_ttl_expiry(monkeypatch):
 
         async def get(self, url):
             calls.append(url)
-            return object()
+            return _Response()
 
     monkeypatch.setattr("omnigent.host.provider_health.httpx.AsyncClient", lambda **kw: _Client())
     monkeypatch.setattr("omnigent.host.provider_health.time.monotonic", lambda: clock["now"])
@@ -79,7 +103,7 @@ async def test_probe_rechecks_after_ttl_expiry(monkeypatch):
     await probe_provider_health(providers, cache=cache)
     clock["now"] += PROVIDER_HEALTH_TTL_S + 0.1
     await probe_provider_health(providers, cache=cache)
-    assert calls == ["https://api.openai.com/v1", "https://api.openai.com/v1"]
+    assert calls == ["https://api.openai.com/v1/models", "https://api.openai.com/v1/models"]
 
 
 @pytest.mark.asyncio
