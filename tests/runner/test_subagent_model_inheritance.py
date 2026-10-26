@@ -6,9 +6,8 @@ the parent session: the gate reads the parent's effective model
 (``model_override`` falling back to ``llm_model``) and persists it as the
 child's ``model_override``. Inheritance is best-effort and skips quietly
 when the sub-agent spec pins its own model, the child harness has no
-override plumbing, the parent model's family cannot run on the child
-harness, the child is a multi-model harness (pi, opencode, …) unlike the
-parent's harness (and no inference binding validates the id), or the
+override plumbing, the child uses a different harness vendor (and no
+inference binding validates the id), the child's binding rejects the id, or the
 parent snapshot is unavailable.
 """
 
@@ -22,6 +21,7 @@ from typing import Any
 import httpx
 import pytest
 
+from omnigent.models.model_fallbacks import MULTIDEX_DEEPSEEK_LITHOS, MULTIDEX_DEEPSEEK_OPENROUTER
 from omnigent.runner import subagent_work
 
 
@@ -318,6 +318,34 @@ async def test_unreachable_parent_snapshot_skips_inheritance(
         parent_snapshot=None,
     )
     assert "model_override" not in bodies[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("child_harness", ["codex-native", "codex"])
+@pytest.mark.parametrize(
+    "parent_model",
+    [*MULTIDEX_DEEPSEEK_OPENROUTER.model_ids, *MULTIDEX_DEEPSEEK_LITHOS.model_ids],
+)
+async def test_same_vendor_child_inherits_non_family_parent_model(
+    monkeypatch: pytest.MonkeyPatch,
+    child_harness: str,
+    parent_model: str,
+) -> None:
+    """Native and SDK children retain the parent's gateway model and variant."""
+    _stub_worker_launchable(monkeypatch)
+    bodies = await _dispatch_without_model(
+        monkeypatch,
+        agent_spec=_spec_with_worker(child_harness),
+        conv_id="conv_parent_codex_deepseek",
+        parent_snapshot={
+            "id": "conv_parent_codex_deepseek",
+            "agent_id": "ag_parent",
+            "harness": "codex-native",
+            "model_override": parent_model,
+            "llm_model": None,
+        },
+    )
+    assert bodies[0]["model_override"] == parent_model
 
 
 @pytest.mark.asyncio
