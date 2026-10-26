@@ -6998,7 +6998,7 @@ describe("chatStore — handleSessionEvent (session.* events)", () => {
         code: "native_turn_error",
         displayName: "Claude Code",
       },
-      { agentName: "codex-native-ui", code: "codex_turn_error", displayName: "Codex" },
+      { agentName: "codex-native-ui", code: "codex_turn_error", displayName: "MultiDex" },
       { agentName: "polly (fork ag_copy)", code: "executor_error", displayName: "Polly" },
     ])(
       "surfaces one named turn error per $displayName response",
