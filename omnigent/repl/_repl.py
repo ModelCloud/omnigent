@@ -6433,7 +6433,7 @@ def _build_github_issue_url(
     ]
 
     body = "\n".join(body_parts)
-    base = "https://github.com/omnigent-ai/omnigent/issues/new"
+    base = "https://github.com/ModelCloud/omnigent/issues/new"
     return (
         f"{base}"
         f"?title={quote('[Bug] TUI issue')}"

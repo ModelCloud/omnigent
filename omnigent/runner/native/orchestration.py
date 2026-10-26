@@ -23,7 +23,7 @@ import urllib.parse
 import uuid
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, MutableMapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple, Protocol
+from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, Sequence
 
 from omnigent.util.http_retry import jittered_retry_delay
 from omnigent.util.json_types import JsonObject as _JsonObject
@@ -4809,6 +4809,41 @@ def _codex_exit_watch_decision(
     return instance, None
 
 
+def _codex_provider_env_keys(config_profile: str | None) -> tuple[str, ...]:
+    """Collect the provider bearer names a native Codex session must receive.
+
+    The app-server and TUI run with a filtered environment, so a provider
+    declared in ``config.toml`` (or in a selected ``<profile>.config.toml``)
+    would otherwise name a credential that never reaches the child. Codex
+    then reports ``Missing environment variable: <PROVIDER>_API_KEY`` on every
+    turn even though the host service has it set.
+
+    This applies to every native launch, not just MultiDex: a plain
+    codex-native host whose ``config.toml`` declares an OpenRouter/Lithos
+    provider hits the same failure. The names come from the user's own config
+    file — an explicit routing contract, not ambient host secrets — so
+    honoring them does not widen the filter beyond what that file asks for.
+    Names the config does not declare stay filtered.
+
+    Both sources matter: providers may live in the shared ``config.toml``, in
+    a selected ``<profile>.config.toml``, or in both.
+
+    :param config_profile: Selected Codex configuration profile, e.g.
+        ``"local-openai"``; ``None`` for the shared config only.
+    :returns: Sorted env var names to forward, empty when nothing applies.
+    """
+    from omnigent.harnesses.codex_native.app_server import codex_config_env_key_names
+    from omnigent.inner.codex_executor import _codex_home_config_source_from_env
+
+    source_home = _codex_home_config_source_from_env()
+    names: set[str] = set(codex_config_env_key_names(source_home / "config.toml"))
+    if config_profile:
+        names.update(
+            codex_config_env_key_names(source_home / f"{config_profile}.config.toml")
+        )
+    return tuple(sorted(names))
+
+
 async def _launch_codex_native_tui(
     session_id: str,
     resource_registry: SessionResourceRegistry,
@@ -5193,6 +5228,7 @@ async def _auto_create_codex_terminal(
         multidex_model_for_selection,
         multidex_model_selected,
         multidex_provider_config_overrides,
+        multidex_provider_env_keys,
         multidex_registration_bearer_token,
         multidex_runtime_provider_id,
     )
@@ -5220,17 +5256,20 @@ async def _auto_create_codex_terminal(
                     "experimental_bearer_token in config.toml"
                 )
         if selected_local_model:
+            # Retarget the launch onto the local provider while keeping every
+            # provider table the non-local launch resolved, so a later web-UI
+            # switch to an official model can name ``omnigent_provider`` and
+            # still pass the app-server's config validation. See
+            # ``_local_model_config_overrides`` for the failure this prevents.
             _codex_launch = dataclasses.replace(
                 _codex_launch,
-                config_overrides=[
-                    "model_provider="
-                    f"{json.dumps(multidex_runtime_provider_id(_selected_local_registration.provider))}",
-                    f"model={json.dumps(selected_model)}",
-                    # MultiDex consumes native raw reasoning deltas. Its
-                    # OpenAI-compatible endpoint has no separate summary
-                    # stream, so do not request one in parallel.
-                    f"model_reasoning_summary={json.dumps('none')}",
-                ],
+                config_overrides=_local_model_config_overrides(
+                    _codex_launch.config_overrides,
+                    provider=multidex_runtime_provider_id(
+                        _selected_local_registration.provider
+                    ),
+                    model=selected_model,
+                ),
                 model=selected_model,
                 profile=None,
                 config_profile=None,
@@ -5736,6 +5775,27 @@ async def _auto_create_codex_terminal(
         # local provider explicitly has requires_openai_auth = false.
         config_profile=_codex_launch.config_profile,
         isolated_env_keys=(),
+        # Forward the bearer each configured provider declares, or the
+        # app-server starts with the model selected but no credential and
+        # every turn fails on ``Missing environment variable``.
+        #
+        # Two sources, because they cover different providers: the user's
+        # Codex config (``localdex``, OpenRouter…) and the MultiDex
+        # registration. MultiDex's gateway tables live in its own config, and
+        # Codex only accepts ``env_key`` for those built-ins, so their names
+        # never appear in the session config's source file.
+        provider_env_keys=tuple(
+            sorted(
+                {
+                    *_codex_provider_env_keys(_codex_launch.config_profile),
+                    *(
+                        multidex_provider_env_keys(_multidex_config)
+                        if _multidex_config is not None
+                        else ()
+                    ),
+                }
+            )
+        ),
         # MultiDex is one additive provider in a full Codex runtime. Keep the
         # shared official login available so an in-session model switch to an
         # OpenAI model also switches credentials and endpoint correctly.
@@ -7554,6 +7614,54 @@ async def _codex_session_needs_runner_terminal(
     if payload is None:
         return False
     return True
+
+
+def _local_model_config_overrides(
+    existing: Sequence[str],
+    *,
+    provider: str,
+    model: str,
+) -> list[str]:
+    """Retarget a Codex launch onto a MultiDex local provider, keeping tables.
+
+    A session that starts on a local model must still define every provider
+    the *non-local* launch resolved, because the web picker can switch that
+    same session to an official model at any time. Omnigent applies such a
+    switch with ``thread/settings/update`` naming the official provider
+    (``omnigent_provider``), and the Codex app-server validates that name
+    against the ``model_providers`` tables present in this session's private
+    config. Replacing the whole override list therefore made every
+    local -> official switch fail with ``-32600`` ("invalid thread settings
+    override: ... is not in the allowed set a configured model provider")
+    and left the session stuck on its original model.
+
+    Only the *selection* keys are replaced here: ``model_provider``,
+    ``model`` and ``model_reasoning_summary``. Provider table definitions
+    (both dotted ``model_providers.<name>=`` entries and literal
+    ``[model_providers.<name>]`` headers) are carried through verbatim.
+
+    :param existing: The config overrides the non-local launch resolved.
+    :param provider: MultiDex runtime provider id to select, e.g.
+        ``"multidex"``.
+    :param model: Local model id to pin, e.g.
+        ``"deepseek/deepseek-v4.1-flash-1017"``.
+    :returns: Overrides selecting *provider* / *model* with every provider
+        table from *existing* retained.
+    """
+    preserved = [
+        override
+        for override in existing
+        if override.lstrip().startswith(("model_providers.", "[model_providers."))
+    ]
+    return [
+        f"model_provider={json.dumps(provider)}",
+        f"model={json.dumps(model)}",
+        # MultiDex consumes native raw reasoning deltas. Its
+        # OpenAI-compatible endpoint has no separate summary stream, so do
+        # not request one in parallel.
+        f"model_reasoning_summary={json.dumps('none')}",
+        *preserved,
+    ]
 
 
 def _codex_native_model_from_spec(agent_spec: AgentSpec | ResolvedSpec | None) -> str | None:

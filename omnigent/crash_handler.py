@@ -63,7 +63,7 @@ class _CrashConfig(TypedDict):
 
 _CONFIG: _CrashConfig = {
     "app_name": "omnigent",
-    "repo": "omnigent-ai/omnigent",
+    "repo": "ModelCloud/omnigent",
     "version": "unknown",
     "crashes_dir": None,
     "keep_reports": 10,

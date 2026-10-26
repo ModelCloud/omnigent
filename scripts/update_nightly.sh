@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-REPO="${OMNIGENT_REPO:-https://github.com/omnigent-ai/omnigent}"
+REPO="${OMNIGENT_REPO:-https://github.com/ModelCloud/omnigent}"
 # Match install.sh: pinning the interpreter keeps uv reusing the existing
 # tool environment instead of recreating it (which removes the working
 # install before the new wheel is built, so a build failure leaves none).

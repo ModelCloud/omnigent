@@ -10,6 +10,7 @@ from omnigent.harnesses.multidex_native.config import (
     load_multidex_config,
     multidex_model_for_selection,
     multidex_provider_config_overrides,
+    multidex_provider_env_keys,
     multidex_registration_bearer_token,
     multidex_runtime_provider_id,
     with_multidex_model_picker_row,
@@ -51,7 +52,11 @@ def test_lithos_provider_registers_three_variants_with_one_model_label(
     assert "lithos" in native
     assert "name" not in native["lithos"]
     assert native["lithos"]["base_url"] == "https://api.lithosai.cloud/v1"
-    assert "env_key" not in native["lithos"]
+    # codex 0.164 rejects ``experimental_bearer_token`` on a built-in provider
+    # and then discards the *entire* config, so hooks/MCP never load. The
+    # only credential channel it accepts is ``env_key``.
+    assert "experimental_bearer_token" not in native["lithos"]
+    assert native["lithos"]["env_key"] == "LITHOS_API_KEY"
     assert set(native["lithos"]) <= MULTIDEX_BUILTIN_PROVIDER_OVERRIDE_FIELDS
 
 
@@ -86,8 +91,8 @@ def test_openrouter_registration_keeps_native_routing_and_picker_metadata(
         "model_providers"
     ]["openrouter"]
     assert set(provider_config) <= MULTIDEX_BUILTIN_PROVIDER_OVERRIDE_FIELDS
-    assert "env_key" not in provider_config
-    assert provider_config["experimental_bearer_token"] == "or-test-token"
+    assert "experimental_bearer_token" not in provider_config
+    assert provider_config["env_key"] == "OPENROUTER_API_KEY"
     assert provider_config["base_url"] == "https://openrouter.ai/api/v1"
     assert provider_config["provider"] == {
         "only": ["wafer/mxfp4"],
@@ -373,7 +378,16 @@ requires_openai_auth = false
     assert "env_key" not in provider_config
 
 
-def test_builtin_provider_bearer_token_drops_default_env_key(tmp_path: Path) -> None:
+def test_builtin_provider_translates_literal_token_to_env_key(tmp_path: Path) -> None:
+    """A built-in provider's literal token becomes its ``env_key`` name.
+
+    MultiDex registers ``lithos``/``openrouter`` with
+    ``experimental_bearer_token``, but codex-cli 0.164 rejects that field on a
+    built-in provider and then discards the whole config file — which silently
+    disabled hooks and MCP. Only ``env_key`` is accepted, so the literal must
+    be re-expressed as the name of the variable that carries it, and that
+    variable must be forwarded to the Codex process.
+    """
     providers = tmp_path / "config.toml"
     providers.write_text(
         """
@@ -391,9 +405,12 @@ experimental_bearer_token = "lith-config-token"
     native = tomllib.loads(multidex_provider_config_overrides(registration)[0])["model_providers"][
         "lithos"
     ]
-    assert native["experimental_bearer_token"] == "lith-config-token"
-    assert "env_key" not in native
+    assert "experimental_bearer_token" not in native
+    assert native["env_key"] == "LITHOS_API_KEY"
     assert set(native) <= MULTIDEX_BUILTIN_PROVIDER_OVERRIDE_FIELDS
+
+    # The name is useless unless the value actually reaches the child env.
+    assert multidex_provider_env_keys(registration) == ("LITHOS_API_KEY",)
 
 
 def test_provider_env_key_is_rejected(tmp_path: Path) -> None:
