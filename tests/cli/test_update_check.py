@@ -1865,6 +1865,9 @@ def test_refresh_update_cache_writes_latest_and_preserves_notified(
     monkeypatch.setattr("omnigent.update_check._get_distribution", lambda: dist)
     monkeypatch.setattr("omnigent.update_check._find_repo_root", lambda: None)
     monkeypatch.setattr("omnigent.update_check.fetch_latest_version", lambda: "0.2.0")
+    # This test covers the index fallback; the artifact channel is the default
+    # and would otherwise answer first.
+    monkeypatch.setattr("omnigent.update_check.fetch_latest_artifact_release", lambda: None)
 
     from omnigent.update_check import refresh_update_cache
 
@@ -2446,6 +2449,8 @@ def test_cli_upgrade_dry_run_uv_tool_with_extras(
     )
     monkeypatch.setattr("omnigent.update_check.fetch_latest_version", lambda **_: "0.2.0")
     monkeypatch.setattr("omnigent.update_check._is_newer", lambda latest, current: True)
+    # Cover the index path; the artifact channel is the default.
+    monkeypatch.setattr("omnigent.update_check.fetch_latest_artifact_release", lambda: None)
 
     runner = CliRunner()
     result = runner.invoke(cli, ["upgrade", "--dry-run"])
@@ -2465,6 +2470,8 @@ def test_cli_upgrade_check_still_allows_pip(
     monkeypatch.setattr("omnigent.update_check._find_repo_root", lambda: None)
     monkeypatch.setattr("omnigent.update_check.fetch_latest_version", lambda **_: "0.2.0")
     monkeypatch.setattr("omnigent.update_check._is_newer", lambda latest, current: True)
+    # Cover the index path; the artifact channel is the default.
+    monkeypatch.setattr("omnigent.update_check.fetch_latest_artifact_release", lambda: None)
 
     runner = CliRunner()
     result = runner.invoke(cli, ["upgrade", "--check"])
