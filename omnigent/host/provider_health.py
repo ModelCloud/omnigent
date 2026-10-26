@@ -95,6 +95,29 @@ BUILTIN_PROVIDER_BASE_URLS = {
 _SHARED_CACHE: dict[str, tuple[float, bool]] = {}
 
 
+# Relative serving speed per provider/variant combo; local routing is the 1.0
+# baseline. Lithos exposes three native variants whose pricing maps onto
+# speed; providers without variants carry the flat baseline. Stamp it on the
+# row so the picker can flag fast lanes at both the provider and variant step.
+PROVIDER_SPEEDS = {"openrouter": 1.25}
+LITHOS_VARIANT_SPEEDS = {"regular": 1.25, "fast": 1.5, "ultra": 2.0}
+
+
+def annotate_provider_speed(rows: list[dict[str, object]]) -> None:
+    """Set ``speed`` (relative endpoint speed, 1.0 = local baseline) on each row."""
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        provider = str(row.get("providerId") or "openai")
+        variant = row.get("variant")
+        if provider == "lithos":
+            row["speed"] = LITHOS_VARIANT_SPEEDS.get(
+                str(variant), PROVIDER_SPEEDS.get(provider, 1.0)
+            )
+        else:
+            row["speed"] = PROVIDER_SPEEDS.get(provider, 1.0)
+
+
 def _provider_endpoints(referenced: set[str]) -> dict[str, tuple[str, str | None]]:
     """Resolve each referenced provider id to ``(base_url, bearer_token)``.
 

@@ -114,6 +114,21 @@ async def test_probe_rechecks_after_ttl_expiry(monkeypatch):
     assert calls == ["https://api.openai.com/v1/models", "https://api.openai.com/v1/models"]
 
 
+def test_annotate_provider_speed_stamps_relative_speed_per_combo():
+    from omnigent.host.provider_health import annotate_provider_speed
+
+    rows: list[dict[str, object]] = [
+        {"id": "local", "providerId": "multidex", "variant": "regular"},
+        {"id": "or", "providerId": "openrouter", "variant": "regular"},
+        {"id": "l-reg", "providerId": "lithos", "variant": "regular"},
+        {"id": "l-fast", "providerId": "lithos", "variant": "fast"},
+        {"id": "l-ultra", "providerId": "lithos", "variant": "ultra"},
+        {"id": "gpt"},  # implicit openai
+    ]
+    annotate_provider_speed(rows)
+    assert [r["speed"] for r in rows] == [1.0, 1.25, 1.25, 1.5, 2.0, 1.0]
+
+
 @pytest.mark.asyncio
 async def test_annotate_sets_provider_health_per_row(monkeypatch):
     async def fake_probe(providers, *, cache=None):
