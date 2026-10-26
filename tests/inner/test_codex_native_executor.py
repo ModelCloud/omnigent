@@ -67,7 +67,15 @@ def test_multidex_turn_refreshes_runtime_context_capability(
         local_model="DS v4.1 Flash 1017",
         provider="multidex",
         base_url="http://127.0.0.1:2120/v1",
-        env_key="BEARER_TOKEN",
+        models=(
+            multidex_config.MultiDexModelRegistration(
+                model="DS v4.1 Flash 1017",
+                provider="multidex",
+                display_name="DS v4.1 Flash 1017",
+                base_url="http://127.0.0.1:2120/v1",
+                provider_config={"experimental_bearer_token": "test-token"},
+            ),
+        ),
     )
     writes: list[tuple[Path, int]] = []
 
@@ -86,7 +94,6 @@ def test_multidex_turn_refreshes_runtime_context_capability(
         writes.append((home, capabilities.context_window))
 
     monkeypatch.setattr(multidex_config, "load_multidex_config", lambda **_kwargs: registration)
-    monkeypatch.setenv(registration.env_key, "test-token")
     monkeypatch.setattr(multidex_config, "fetch_multidex_runtime_capabilities", _capabilities)
     monkeypatch.setattr(multidex_config, "write_multidex_runtime_capabilities", _write)
     state = CodexNativeBridgeState(
@@ -117,7 +124,15 @@ def test_multidex_runtime_capability_snapshot_is_session_private(tmp_path: Path)
         local_model="DS v4.1 Flash 1017",
         provider="multidex",
         base_url="http://127.0.0.1:2120/v1",
-        env_key="BEARER_TOKEN",
+        models=(
+            multidex_config.MultiDexModelRegistration(
+                model="DS v4.1 Flash 1017",
+                provider="multidex",
+                display_name="DS v4.1 Flash 1017",
+                base_url="http://127.0.0.1:2120/v1",
+                provider_config={"experimental_bearer_token": "test-token"},
+            ),
+        ),
     )
     multidex_config.write_multidex_runtime_capabilities(
         tmp_path,
@@ -149,7 +164,15 @@ def test_multidex_discovery_failure_discards_a_stale_larger_limit(
         local_model="DS v4.1 Flash 1017",
         provider="multidex",
         base_url="http://127.0.0.1:2120/v1",
-        env_key="BEARER_TOKEN",
+        models=(
+            multidex_config.MultiDexModelRegistration(
+                model="DS v4.1 Flash 1017",
+                provider="multidex",
+                display_name="DS v4.1 Flash 1017",
+                base_url="http://127.0.0.1:2120/v1",
+                provider_config={"experimental_bearer_token": "test-token"},
+            ),
+        ),
     )
     multidex_config.write_multidex_runtime_capabilities(
         tmp_path,
@@ -165,7 +188,6 @@ def test_multidex_discovery_failure_discards_a_stale_larger_limit(
         raise RuntimeError("endpoint unavailable")
 
     monkeypatch.setattr(multidex_config, "load_multidex_config", lambda **_kwargs: registration)
-    monkeypatch.setenv(registration.env_key, "test-token")
     monkeypatch.setattr(multidex_config, "fetch_multidex_runtime_capabilities", _unavailable)
     state = CodexNativeBridgeState(
         session_id="session_123",
@@ -207,7 +229,15 @@ def test_multidex_runtime_preserves_live_provider_without_model_selection(
         local_model="DS v4.1 Flash 1017",
         provider="multidex",
         base_url="http://127.0.0.1:2120/v1",
-        env_key="BEARER_TOKEN",
+        models=(
+            multidex_config.MultiDexModelRegistration(
+                model="DS v4.1 Flash 1017",
+                provider="multidex",
+                display_name="DS v4.1 Flash 1017",
+                base_url="http://127.0.0.1:2120/v1",
+                provider_config={"experimental_bearer_token": "test-token"},
+            ),
+        ),
     )
 
     async def _capabilities(
@@ -218,7 +248,6 @@ def test_multidex_runtime_preserves_live_provider_without_model_selection(
         )
 
     monkeypatch.setattr(multidex_config, "load_multidex_config", lambda **_kwargs: registration)
-    monkeypatch.setenv(registration.env_key, "test-token")
     monkeypatch.setattr(multidex_config, "fetch_multidex_runtime_capabilities", _capabilities)
     monkeypatch.setattr(
         multidex_config, "write_multidex_runtime_capabilities", lambda *_args: None
@@ -251,7 +280,15 @@ def test_multidex_turn_routes_official_model_to_openai(
         local_model="DS v4.1 Flash 1017",
         provider="multidex",
         base_url="http://127.0.0.1:2120/v1",
-        env_key="BEARER_TOKEN",
+        models=(
+            multidex_config.MultiDexModelRegistration(
+                model="DS v4.1 Flash 1017",
+                provider="multidex",
+                display_name="DS v4.1 Flash 1017",
+                base_url="http://127.0.0.1:2120/v1",
+                provider_config={"experimental_bearer_token": "test-token"},
+            ),
+        ),
     )
     monkeypatch.setattr(multidex_config, "load_multidex_config", lambda **_kwargs: registration)
     home = tmp_path / "codex-home"
@@ -285,7 +322,15 @@ def test_multidex_switch_restores_the_resolved_non_local_provider(
         local_model="DS v4.1 Flash 1017",
         provider="multidex",
         base_url="http://127.0.0.1:2120/v1",
-        env_key="BEARER_TOKEN",
+        models=(
+            multidex_config.MultiDexModelRegistration(
+                model="DS v4.1 Flash 1017",
+                provider="multidex",
+                display_name="DS v4.1 Flash 1017",
+                base_url="http://127.0.0.1:2120/v1",
+                provider_config={"experimental_bearer_token": "test-token"},
+            ),
+        ),
     )
     monkeypatch.setattr(multidex_config, "load_multidex_config", lambda **_kwargs: registration)
     state = CodexNativeBridgeState(
@@ -313,27 +358,24 @@ def test_named_multidex_provider_routes_its_model_without_capability_probe(
         local_model="vendor/model-a",
         provider="provider_a",
         base_url="https://a.example/v1",
-        env_key="PROVIDER_A_TOKEN",
         models=(
             multidex_config.MultiDexModelRegistration(
                 model="vendor/model-a",
                 provider="provider_a",
                 display_name="Model A",
                 base_url="https://a.example/v1",
-                env_key="PROVIDER_A_TOKEN",
+                provider_config={"experimental_bearer_token": "token-a"},
             ),
             multidex_config.MultiDexModelRegistration(
                 model="vendor/model-b",
                 provider="provider_b",
                 display_name="Model B",
                 base_url="https://b.example/v1",
-                env_key="PROVIDER_B_TOKEN",
+                provider_config={"experimental_bearer_token": "token-b"},
             ),
         ),
     )
     monkeypatch.setattr(multidex_config, "load_multidex_config", lambda **_kwargs: registration)
-    monkeypatch.setenv("PROVIDER_B_TOKEN", "selected-token")
-    monkeypatch.delenv("PROVIDER_A_TOKEN", raising=False)
 
     state = CodexNativeBridgeState(
         session_id="session_123",

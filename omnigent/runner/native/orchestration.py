@@ -5192,8 +5192,8 @@ async def _auto_create_codex_terminal(
         load_multidex_config,
         multidex_model_for_selection,
         multidex_model_selected,
-        multidex_models,
         multidex_provider_config_overrides,
+        multidex_registration_bearer_token,
         multidex_runtime_provider_id,
     )
 
@@ -5213,10 +5213,11 @@ async def _auto_create_codex_terminal(
         )
         selected_local_model = _selected_local_registration is not None
         if selected_local_model:
-            if not os.environ.get(_selected_local_registration.env_key):
+            if multidex_registration_bearer_token(_selected_local_registration) is None:
                 raise ValueError(
-                    "MultiDex bearer environment variable "
-                    f"{_selected_local_registration.env_key!r} is not set"
+                    "MultiDex provider "
+                    f"{_selected_local_registration.provider!r} has no credential: set "
+                    "experimental_bearer_token in config.toml"
                 )
         if selected_local_model:
             _codex_launch = dataclasses.replace(
@@ -5734,13 +5735,6 @@ async def _auto_create_codex_terminal(
         # and can incorrectly require a ChatGPT login even when the selected
         # local provider explicitly has requires_openai_auth = false.
         config_profile=_codex_launch.config_profile,
-        # Keep MultiDex providers available for in-session switching while
-        # preserving Codex's normal credentials and cloud auth lifecycle.
-        provider_env_keys=(
-            tuple(dict.fromkeys(item.env_key for item in multidex_models(_multidex_config)))
-            if _multidex_config is not None
-            else ()
-        ),
         isolated_env_keys=(),
         # MultiDex is one additive provider in a full Codex runtime. Keep the
         # shared official login available so an in-session model switch to an

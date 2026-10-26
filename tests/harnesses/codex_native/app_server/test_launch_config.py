@@ -994,10 +994,10 @@ async def test_codex_native_launch_config_reads_reasoning_effort(
     assert config.reasoning_effort == expected
 
 
-def test_declared_local_provider_key_keeps_standard_codex_auth_environment(
+def test_provider_credentials_never_reach_the_launch_environment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A custom provider key is additive and does not trigger authless isolation."""
+    """Provider credentials come from config.toml only: nothing forwards them."""
     monkeypatch.setenv("BEARER_TOKEN", "local-provider-secret")
     monkeypatch.setenv("OPENAI_ORG_ID", "official-openai-org")
     monkeypatch.delenv("CODEX_DISABLE_CLOUD_CONFIG", raising=False)
@@ -1013,34 +1013,29 @@ def test_declared_local_provider_key_keeps_standard_codex_auth_environment(
         bridge_dir=tmp_path / "bridge",
         codex_path=sys.executable,
         config_source=source_home,
-        provider_env_keys=("BEARER_TOKEN",),
         bridge_openai_auth=True,
     )
 
     assert server.isolated_env_keys == ()
-    assert server.provider_env_keys == ("BEARER_TOKEN",)
-    assert server.env["BEARER_TOKEN"] == "local-provider-secret"
+    assert "BEARER_TOKEN" not in server.env
     assert server.env["OPENAI_ORG_ID"] == "official-openai-org"
     assert "CODEX_DISABLE_CLOUD_CONFIG" not in server.env
     terminal_env = codex_terminal_env(server)
-    assert terminal_env["BEARER_TOKEN"] == "local-provider-secret"
+    assert "BEARER_TOKEN" not in terminal_env
     assert terminal_env["OPENAI_ORG_ID"] == "official-openai-org"
 
 
-def test_user_provider_key_reaches_app_server_and_terminal(
+def test_user_provider_env_key_never_reaches_app_server_or_terminal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """An env_key in the shared Codex config cannot authenticate the provider."""
     source_home = tmp_path / "source-home"
     source_home.mkdir()
     (source_home / "config.toml").write_text(
-        "[model_providers.openrouter]\n"
-        'base_url = "https://openrouter.ai/api/v1"\n'
-        'env_key = "OPENROUTER_API_KEY"\n'
-        "[model_providers.ignored]\n"
-        'env_key = "INVALID-KEY"\n',
+        '[model_providers.lab]\nbase_url = "https://models.example/v1"\nenv_key = "LAB_API_KEY"\n',
         encoding="utf-8",
     )
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test-only-secret")
+    monkeypatch.setenv("LAB_API_KEY", "test-only-secret")
     monkeypatch.setenv("UNDECLARED_SECRET", "must-not-pass")
 
     server = build_codex_native_server(
@@ -1054,9 +1049,8 @@ def test_user_provider_key_reaches_app_server_and_terminal(
         config_source=source_home,
     )
 
-    assert server.provider_env_keys == ("OPENROUTER_API_KEY",)
-    assert server.env["OPENROUTER_API_KEY"] == "test-only-secret"
-    assert codex_terminal_env(server)["OPENROUTER_API_KEY"] == "test-only-secret"
+    assert "LAB_API_KEY" not in server.env
+    assert "LAB_API_KEY" not in codex_terminal_env(server)
     assert "UNDECLARED_SECRET" not in server.env
 
 

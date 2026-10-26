@@ -1649,7 +1649,15 @@ async def test_codex_native_model_options_enriches_stale_multidex_row(
         local_model=multidex_config.MULTIDEX_MODEL,
         provider="multidex",
         base_url="http://10.0.13.33:2120/v1",
-        env_key="MULTIDEX_TEST_BEARER",
+        models=(
+            multidex_config.MultiDexModelRegistration(
+                model=multidex_config.MULTIDEX_MODEL,
+                provider="multidex",
+                display_name=multidex_config.MULTIDEX_MODEL,
+                base_url="http://10.0.13.33:2120/v1",
+                provider_config={"experimental_bearer_token": "test-bearer"},
+            ),
+        ),
     )
     monkeypatch.setattr(multidex_config, "load_multidex_config", lambda **_kwargs: registration)
 

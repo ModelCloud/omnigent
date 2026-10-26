@@ -46,7 +46,15 @@ MULTIDEX_RUNTIME_CAPABILITIES_FILE = "multidex-runtime-capabilities.json"
 # MultiDex rejects any other non-default field on its built-in gateway providers.
 # ``wire_api`` and ``requires_openai_auth`` are emitted only with their default values.
 MULTIDEX_BUILTIN_PROVIDER_OVERRIDE_FIELDS = frozenset(
-    {"provider", "base_url", "auth", "http_headers", "env_key", "wire_api", "requires_openai_auth"}
+    {
+        "provider",
+        "base_url",
+        "auth",
+        "http_headers",
+        "experimental_bearer_token",
+        "wire_api",
+        "requires_openai_auth",
+    }
 )
 
 
@@ -213,7 +221,6 @@ class MultiDexModelRegistration:
     provider: str
     display_name: str
     base_url: str
-    env_key: str
     discover_capabilities: bool = False
     provider_config: dict[str, object] = field(default_factory=dict)
     model_family: str | None = None
@@ -228,7 +235,6 @@ class MultiDexConfig:
     local_model: str
     provider: str
     base_url: str
-    env_key: str
     models: tuple[MultiDexModelRegistration, ...] = ()
 
 
@@ -245,7 +251,6 @@ def multidex_models(config: MultiDexConfig) -> tuple[MultiDexModelRegistration, 
                 MULTIDEX_MODEL if config.local_model == MULTIDEX_MODEL else config.local_model
             ),
             base_url=getattr(config, "base_url", ""),
-            env_key=config.env_key,
             discover_capabilities=config.local_model == MULTIDEX_MODEL,
         ),
     )
@@ -260,6 +265,14 @@ def multidex_runtime_provider_id(provider: str) -> str:
     slug = re.sub(r"[^A-Za-z0-9_-]+", "-", provider).strip("-_")[:24] or "provider"
     digest = hashlib.sha256(provider.encode("utf-8")).hexdigest()[:10]
     return f"omnigent-multidex-{slug}-{digest}"
+
+
+def multidex_registration_bearer_token(
+    registration: MultiDexModelRegistration,
+) -> str | None:
+    """Return the provider's literal config token, when one is declared."""
+    token = registration.provider_config.get("experimental_bearer_token")
+    return token if isinstance(token, str) and token.strip() else None
 
 
 def multidex_provider_config_overrides(config: MultiDexConfig) -> tuple[str, ...]:
@@ -280,11 +293,11 @@ def multidex_provider_config_overrides(config: MultiDexConfig) -> tuple[str, ...
         provider_config.update(
             {
                 "base_url": model.base_url,
-                "env_key": model.env_key,
                 "wire_api": "responses",
                 "requires_openai_auth": False,
             }
         )
+        provider_config.pop("env_key", None)
         if model.provider in {"openrouter", "lithos"}:
             # Native built-ins accept routing/auth overrides, not renamed or retuned providers.
             provider_config = {
@@ -373,7 +386,6 @@ def load_multidex_config(
         if provider_name == "openrouter" and (provider is None or isinstance(provider, dict)):
             provider = {
                 "base_url": "https://openrouter.ai/api/v1",
-                "env_key": "OPENROUTER_API_KEY",
                 "wire_api": "responses",
                 "requires_openai_auth": False,
                 **(provider or {}),
@@ -381,13 +393,18 @@ def load_multidex_config(
         if provider_name == "lithos" and (provider is None or isinstance(provider, dict)):
             provider = {
                 "base_url": "https://api.lithosai.cloud/v1",
-                "env_key": "LITHOS_API_KEY",
                 "wire_api": "responses",
                 "requires_openai_auth": False,
                 **(provider or {}),
             }
         if not isinstance(provider, dict):
             raise ValueError(f"MultiDex model {model_id!r} references an unknown provider")
+        if "env_key" in provider:
+            raise ValueError(
+                f"MultiDex provider {provider_name!r} does not support env_key: set "
+                "experimental_bearer_token in config.toml so credentials never "
+                "travel through the process environment"
+            )
         forbidden_provider_fields = {
             "api_key",
             "api_key_command",
@@ -403,9 +420,10 @@ def load_multidex_config(
         }
         if forbidden_provider_fields.intersection(key.lower() for key in provider):
             raise ValueError(
-                f"MultiDex provider {provider_name!r} must use env_key, not inline credentials"
+                f"MultiDex provider {provider_name!r} must use "
+                "experimental_bearer_token, not inline credentials"
             )
-        base_url, env_key = provider.get("base_url"), provider.get("env_key")
+        base_url = provider.get("base_url")
         if not isinstance(base_url, str):
             raise ValueError(f"MultiDex provider {provider_name!r} base_url must be HTTP(S)")
         parsed = urlparse(base_url)
@@ -422,11 +440,17 @@ def load_multidex_config(
             r"[A-Za-z0-9_-]+", provider_name
         ):
             raise ValueError(f"MultiDex model {model_id!r} has an invalid provider name")
-        if not isinstance(env_key, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", env_key):
-            raise ValueError(f"MultiDex provider {provider_name!r} env_key is invalid")
-        if env_key.startswith(("OPENAI_", "DATABRICKS_")):
+        bearer_token = provider.get("experimental_bearer_token")
+        if bearer_token is not None and (
+            not isinstance(bearer_token, str) or not bearer_token.strip()
+        ):
             raise ValueError(
-                f"MultiDex provider {provider_name!r} must use a provider-specific env_key"
+                f"MultiDex provider {provider_name!r} experimental_bearer_token must be a "
+                "non-empty string"
+            )
+        if bearer_token is None:
+            raise ValueError(
+                f"MultiDex provider {provider_name!r} must set experimental_bearer_token"
             )
         if provider.get("wire_api") != "responses":
             raise ValueError(
@@ -436,15 +460,17 @@ def load_multidex_config(
             raise ValueError(
                 f"MultiDex provider {provider_name!r} must set requires_openai_auth = false"
             )
-        if require_token and os.environ.get(env_key) is None:
-            raise ValueError(f"MultiDex bearer environment variable {env_key!r} is not set")
+        if require_token and bearer_token is None:
+            raise ValueError(
+                f"MultiDex provider {provider_name!r} has no credential: set "
+                "experimental_bearer_token in config.toml"
+            )
         registered.append(
             MultiDexModelRegistration(
                 model=model_id,
                 provider=provider_name,
                 display_name=str(model.get("display_name") or model_id),
                 base_url=base_url.rstrip("/"),
-                env_key=env_key,
                 discover_capabilities=model.get("discover_capabilities") is True,
                 provider_config=dict(provider),
                 model_family=str(model["model_family"]) if model.get("model_family") else None,
@@ -460,7 +486,6 @@ def load_multidex_config(
         local_model=local.model,
         provider=local.provider,
         base_url=local.base_url,
-        env_key=local.env_key,
         models=tuple(registered),
     )
 
@@ -488,7 +513,6 @@ def multidex_model_for_selection(
             if config.local_model == MULTIDEX_MODEL
             else config.local_model,
             base_url=config.base_url,
-            env_key=config.env_key,
             discover_capabilities=config.local_model == MULTIDEX_MODEL,
         )
     return None
@@ -505,9 +529,15 @@ async def fetch_multidex_runtime_capabilities(
     MultiDex launcher; this request deliberately sends only its configured
     bearer token and ignores ambient proxy/credential environment settings.
     """
-    token = os.environ.get(config.env_key)
+    local = next(
+        (item for item in multidex_models(config) if item.model == config.local_model), None
+    )
+    token = multidex_registration_bearer_token(local) if local is not None else None
     if not token:
-        raise ValueError(f"MultiDex bearer environment variable {config.env_key!r} is not set")
+        raise ValueError(
+            "MultiDex local provider has no credential: set experimental_bearer_token "
+            "in config.toml"
+        )
     model_url = f"{config.base_url}/models/{quote(config.local_model, safe='')}"
     try:
         async with httpx.AsyncClient(timeout=5.0, trust_env=False) as client:

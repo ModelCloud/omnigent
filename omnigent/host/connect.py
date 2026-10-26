@@ -934,48 +934,11 @@ def _build_runner_env(
         config_env_vars = provider_credential_env_vars(load_config())
     except (OSError, _OmnigentError):
         config_env_vars = frozenset()
-    # MultiDex is an additive provider under the native Codex harness. Its
-    # bearer keys are deliberately named by the MultiDex registrations rather
-    # than by a global credential convention, so they are not part of
-    # ``HARNESS_CREDENTIAL_ENV_VARS``. Forward only those declared keys to a
-    # MultiDex runner; the runner strips ambient OpenAI/Databricks credentials.
-    multidex_env_vars: frozenset[str] = frozenset()
-    if harness in {"codex-native", "multidex-native"}:
-        # OpenRouter is built into MultiDex and needs no optional registry entry.
-        multidex_env_vars = frozenset({"OPENROUTER_API_KEY"})
-        try:
-            from omnigent.harnesses.multidex_native.config import (
-                load_multidex_config,
-                multidex_models,
-            )
-
-            multidex_env_vars |= frozenset(
-                item.env_key for item in multidex_models(load_multidex_config(require_token=False))
-            )
-        except (OSError, ValueError):
-            # A missing or stale optional MultiDex registration must not make
-            # ordinary Codex runner creation fail.
-            pass
-        # The app-server also honors ``env_key`` names declared in the shared
-        # Codex provider config (~/.codex/config.toml). Forward them or a
-        # declared credential reaches the runner's allowlist with no value
-        # behind it.
-        try:
-            from omnigent.harnesses.codex_native.app_server import (
-                _configured_provider_env_keys,
-            )
-            from omnigent.inner.codex_executor import _codex_home_config_source_from_env
-
-            multidex_env_vars |= frozenset(
-                _configured_provider_env_keys(_codex_home_config_source_from_env())
-            )
-        except ImportError:
-            pass
     if inference_config is not None:
         config_env_vars |= provider_credential_env_vars(
             inference_config, include_dollar_key_refs=True
         )
-    forwarded = HARNESS_CREDENTIAL_ENV_VARS | extra_names | config_env_vars | multidex_env_vars
+    forwarded = HARNESS_CREDENTIAL_ENV_VARS | extra_names | config_env_vars
     env = {
         key: value
         for key, value in base_env.items()
@@ -3611,6 +3574,7 @@ class HostProcess:
                 from omnigent.harnesses.multidex_native.config import (
                     load_multidex_config,
                     multidex_models,
+                    multidex_registration_bearer_token,
                     with_multidex_model_picker_row,
                 )
 
@@ -3622,7 +3586,11 @@ class HostProcess:
                     _logger.warning("MultiDex provider registration is invalid", exc_info=True)
                     multidex = None
                 available_local_models = (
-                    [item for item in multidex_models(multidex) if os.environ.get(item.env_key)]
+                    [
+                        item
+                        for item in multidex_models(multidex)
+                        if multidex_registration_bearer_token(item) is not None
+                    ]
                     if multidex is not None
                     else []
                 )

@@ -844,3 +844,54 @@ async def test_codex_config_read_preserves_unrelated_errors() -> None:
     with pytest.raises(CodexAppServerResponseError):
         await app_server._read_codex_probe_default(client)
     client.request.assert_awaited_once()
+
+
+def test_credential_free_config_overrides_strips_provider_secrets() -> None:
+    from omnigent.harnesses.codex_native.app_server import (
+        _credential_free_config_overrides,
+    )
+
+    provider_table = """
+[model_providers.lab]
+base_url = "https://models.example/v1"
+experimental_bearer_token = "config-token"
+env_key = "LAB_TOKEN"
+wire_api = "responses"
+[model_providers.lab.http_headers]
+X-Api-Key = "header-token"
+"""
+    sanitized = _credential_free_config_overrides(
+        [
+            'model_provider="openai"',
+            provider_table,
+            "not-valid-toml-{{{",
+        ]
+    )
+
+    assert 'model_provider="openai"' in sanitized
+    assert "not-valid-toml-{{{" in sanitized
+    # Surviving fields come back as `-c`-parseable dotted key=value lines.
+    merged: dict[str, object] = {}
+    for line in sanitized:
+        fragment = tomllib.loads(line) if line.startswith("model_providers") else {}
+        for name, provider in fragment.get("model_providers", {}).items():
+            merged.setdefault(name, {}).update(provider)
+    table = merged["lab"]
+    assert table["env_key"] == "LAB_TOKEN"
+    assert table["base_url"] == "https://models.example/v1"
+    assert "experimental_bearer_token" not in table
+    assert "http_headers" not in table
+    assert not any("config-token" in line for line in sanitized)
+    assert not any("header-token" in line for line in sanitized)
+
+
+def test_credential_free_config_overrides_passes_through_clean_overrides() -> None:
+    from omnigent.harnesses.codex_native.app_server import (
+        _credential_free_config_overrides,
+    )
+
+    overrides = [
+        'model_provider="openai"',
+        '[model_providers.lab]\nbase_url = "https://models.example/v1"\nenv_key = "LAB_TOKEN"',
+    ]
+    assert _credential_free_config_overrides(overrides) == overrides
