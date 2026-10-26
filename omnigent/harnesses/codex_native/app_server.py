@@ -2437,6 +2437,12 @@ class CodexNativeAppServer:
             _pin_codex_config_model_provider(self.codex_home, provider)
         if self.pinned_model:
             _pin_codex_config_model(self.codex_home, self.pinned_model)
+            # A resumed session reuses its existing private home, so the
+            # copy-time normalization never ran for it. Without this a
+            # pre-rename ``model`` keeps failing that session's resume.
+            from omnigent.inner.codex_executor import _normalize_copied_codex_model
+
+            _normalize_copied_codex_model(self.codex_home / "config.toml")
             if model_migration_target is not None:
                 _acknowledge_codex_model_migration(
                     self.codex_home,

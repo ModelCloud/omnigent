@@ -176,3 +176,21 @@ def test_provider_env_keys_apply_to_plain_codex_native(tmp_path: Path, monkeypat
     )
     # No profile: only the shared config's provider applies.
     assert orchestration._codex_provider_env_keys(None) == ("OPENROUTER_API_KEY",)
+
+
+def test_resume_normalizes_existing_private_home(tmp_path: Path) -> None:
+    """Resume reuses an existing private home, so copy-time normalization
+    never runs for it. The session start path must normalize in place or a
+    pre-rename model keeps failing every resume of that session.
+    """
+    from omnigent.inner.codex_executor import _normalize_copied_codex_model
+
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    config = home / "config.toml"
+    config.write_text(
+        'model = "QB/DSV4.1-Flash"\nmodel_provider = "localdex"\n', encoding="utf-8"
+    )
+    # Mirrors what start() does for an existing (resumed) private home.
+    _normalize_copied_codex_model(home / "config.toml")
+    assert config.read_text(encoding="utf-8").startswith('model = "DS v4.1 Flash 1017"')
