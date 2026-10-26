@@ -54,7 +54,7 @@ export function ThinkingPane({ conversationId }: ThinkingPaneProps) {
     <aside
       data-testid="thinking-pane"
       aria-label="Thinking pane"
-      className="flex w-[21rem] shrink-0 flex-col border-l border-border bg-card/40 max-sm:absolute max-sm:inset-y-0 max-sm:right-0 max-sm:z-40 max-sm:w-[85vw] max-sm:bg-background max-sm:shadow-xl"
+      className="flex w-[21rem] shrink-0 flex-col border-l border-border bg-card/40 pt-14 md:pt-12 max-sm:absolute max-sm:inset-y-0 max-sm:right-0 max-sm:z-40 max-sm:w-[85vw] max-sm:bg-background max-sm:shadow-xl"
     >
       <div className="flex items-center gap-1.5 border-b border-border px-3 py-2">
         <SparklesIcon className="size-3.5 shrink-0 text-muted-foreground" />
