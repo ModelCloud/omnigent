@@ -987,6 +987,12 @@ def build_native_controls(
             except (FileNotFoundError, ValueError):
                 multidex = None
             rows = with_multidex_model_picker_row(rows, multidex)
+        try:
+            from omnigent.host.provider_health import annotate_provider_health
+
+            await annotate_provider_health(rows)
+        except Exception:
+            _logger.warning("Provider health probe failed for session=%s", conv_id, exc_info=True)
         return mark_launch_default(rows, active_model)
 
     async def _write_back_codex_catalog(session_id: str, rows: list[_JsonObject]) -> None:

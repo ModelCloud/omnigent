@@ -116,6 +116,38 @@ it("selects a provider's regular model atomically and only shows its available s
   expect(screen.queryByRole("combobox", { name: "Provider" })).not.toBeInTheDocument();
 });
 
+it("prefixes provider options with an online/offline status dot", async () => {
+  const healthy = options.map((row) =>
+    row.providerId === "lithos"
+      ? { ...row, providerHealth: "online" as const }
+      : row.providerId === "multidex"
+        ? { ...row, providerHealth: "offline" as const }
+        : row,
+  );
+  render(
+    <NativeModelSelectors
+      options={healthy}
+      selectedModel="local-1017"
+      effort={null}
+      onModelChange={vi.fn()}
+      onEffortChange={vi.fn()}
+    />,
+  );
+  fireEvent.keyDown(screen.getByRole("combobox", { name: "Provider" }), { key: "ArrowDown" });
+  const dots = Object.fromEntries(
+    screen
+      .getAllByRole("option")
+      .map((option) => [
+        option.textContent?.replace(/, (online|offline)$/, ""),
+        option.querySelector(".rounded-full")?.className ?? "",
+      ]),
+  );
+  expect(dots["Lithos"]).toContain("bg-success");
+  expect(dots["Local"]).toContain("bg-muted-foreground/50");
+  expect(dots["OpenRouter"]).not.toContain("bg-success");
+  expect(dots["OpenRouter"]).not.toContain("bg-muted-foreground");
+});
+
 it.each(options.filter((row) => row.modelFamily === "ds").map((row) => row.id))(
   "keeps explicit Off distinct from Default for %s",
   async (id) => {

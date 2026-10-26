@@ -3519,6 +3519,15 @@ class HostProcess:
         routable = [row["id"] for row in rows if isinstance(row.get("id"), str) and row["id"]]
         return ModelOptionsResult(models=rows, routable_models=routable)
 
+    async def _annotate_provider_health(self, rows: list[dict[str, object]]) -> None:
+        """Set ``providerHealth`` on each picker row from a cached endpoint ping."""
+        from omnigent.host.provider_health import annotate_provider_health
+
+        try:
+            await annotate_provider_health(rows)
+        except Exception:
+            _logger.warning("Provider health probe failed", exc_info=True)
+
     async def _probed_claude_model_options(self) -> ModelOptionsResult | None:
         """
         Store-backed harness-truth Claude listing, or ``None`` on failure.
@@ -3607,6 +3616,7 @@ class HostProcess:
                 else:
                     rows = with_multidex_model_picker_row(probed.models, None)
                     routable = probed.routable_models
+                await self._annotate_provider_health(rows)
                 return HostModelOptionsResultFrame(
                     request_id=frame.request_id,
                     status="ok",

@@ -7,6 +7,7 @@ import {
 } from "@/components/ui/select";
 import { findNativeModelOption } from "@/lib/codexNativeModels";
 import { familyId, providerId, resolveModelSelection, variantId } from "@/lib/modelSelection";
+import { cn } from "@/lib/utils";
 import type { NativeModelOption } from "@/lib/types";
 
 /** Dependent choices; every selection maps to one runner-advertised row. */
@@ -60,11 +61,15 @@ export function NativeModelSelectors({
     xhigh: "Extra high",
     max: "Max",
   };
+  const healthByProvider: Record<string, "online" | "offline"> = Object.fromEntries(
+    familyRows.flatMap((r) => (r.providerHealth ? [[providerId(r), r.providerHealth]] : [])),
+  );
   function field(
     label: string,
     value: string | undefined,
     entries: readonly (readonly [string, string])[],
     change: (v: string) => void,
+    health?: Record<string, "online" | "offline">,
   ) {
     if (entries.length <= 1) return null;
     return (
@@ -77,7 +82,19 @@ export function NativeModelSelectors({
           <SelectContent>
             {entries.map(([id, text]) => (
               <SelectItem key={id} value={id}>
-                {text}
+                <span className="flex min-w-0 items-center gap-1.5">
+                  {health?.[id] && (
+                    <span
+                      aria-hidden
+                      className={cn(
+                        "size-2 shrink-0 rounded-full",
+                        health[id] === "online" ? "bg-success" : "bg-muted-foreground/50",
+                      )}
+                    />
+                  )}
+                  <span className="truncate">{text}</span>
+                  {health?.[id] && <span className="sr-only">, {health[id]}</span>}
+                </span>
               </SelectItem>
             ))}
           </SelectContent>
@@ -98,6 +115,7 @@ export function NativeModelSelectors({
         provider,
         providers.map((v) => [v, labels[v] ?? v]),
         (v) => family && choose(family, v),
+        healthByProvider,
       )}
       {field(
         "Speed",
