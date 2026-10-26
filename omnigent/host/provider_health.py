@@ -99,7 +99,8 @@ _SHARED_CACHE: dict[str, tuple[float, bool]] = {}
 # baseline. Lithos exposes three native variants whose pricing maps onto
 # speed; providers without variants carry the flat baseline. Stamp it on the
 # row so the picker can flag fast lanes at both the provider and variant step.
-LITHOS_VARIANT_SPEEDS = {"regular": 1.0, "fast": 1.5, "ultra": 2.0}
+PROVIDER_SPEEDS = {"openrouter": 1.25}
+LITHOS_VARIANT_SPEEDS = {"regular": 1.25, "fast": 1.5, "ultra": 2.0}
 
 
 def annotate_provider_speed(rows: list[dict[str, object]]) -> None:
@@ -110,9 +111,11 @@ def annotate_provider_speed(rows: list[dict[str, object]]) -> None:
         provider = str(row.get("providerId") or "openai")
         variant = row.get("variant")
         if provider == "lithos":
-            row["speed"] = LITHOS_VARIANT_SPEEDS.get(str(variant), 1.0)
+            row["speed"] = LITHOS_VARIANT_SPEEDS.get(
+                str(variant), PROVIDER_SPEEDS.get(provider, 1.0)
+            )
         else:
-            row["speed"] = 1.0
+            row["speed"] = PROVIDER_SPEEDS.get(provider, 1.0)
 
 
 def _provider_endpoints(referenced: set[str]) -> dict[str, tuple[str, str | None]]:

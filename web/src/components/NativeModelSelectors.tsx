@@ -22,7 +22,7 @@ function SpeedBolts({ speed }: { speed: string }) {
       ? `linear-gradient(to top, black ${(1 - fraction) * 100}%, rgba(0,0,0,0.2) ${(1 - fraction) * 100}%)`
       : undefined;
   return (
-    <span aria-hidden>
+    <span aria-hidden className="text-amber-600 dark:text-amber-500">
       {"⚡".repeat(whole)}
       {faded && <span style={{ maskImage: faded, WebkitMaskImage: faded }}>⚡</span>}
     </span>
@@ -138,9 +138,8 @@ export function NativeModelSelectors({
                   )}
                   <span className="truncate">{text}</span>
                   {speed?.[id] && (
-                    <span className="shrink-0 text-muted-foreground">
+                    <span className="shrink-0">
                       <SpeedBolts speed={speed[id]} />
-                      {speed[id]}
                       <span className="sr-only">, speed {speed[id]}</span>
                     </span>
                   )}

@@ -151,8 +151,8 @@ it("prefixes provider options with an online/offline status dot", async () => {
 it("shows the relative speed on provider and variant options", async () => {
   const timed = options.map((row) =>
     row.providerId === "lithos"
-      ? { ...row, speed: row.variant === "ultra" ? 2.0 : row.variant === "fast" ? 1.5 : 1.0 }
-      : { ...row, speed: 1.0 },
+      ? { ...row, speed: row.variant === "ultra" ? 2.0 : row.variant === "fast" ? 1.5 : 1.25 }
+      : { ...row, speed: row.providerId === "openrouter" ? 1.25 : 1.0 },
   );
   render(
     <NativeModelSelectors
@@ -167,8 +167,9 @@ it("shows the relative speed on provider and variant options", async () => {
   const providerTexts = screen.getAllByRole("option").map((option) => option.textContent);
   expect(providerTexts).toEqual(
     expect.arrayContaining([
-      expect.stringContaining("⚡⚡1.0–2.0"), // Lithos spans its three variants
-      expect.stringContaining("⚡1.0"), // Local / OpenRouter flat baseline
+      expect.stringContaining("Lithos⚡⚡, speed 1.25–2.0"), // bolts from max variant
+      expect.stringContaining("OpenRouter⚡⚡, speed 1.25"),
+      expect.stringContaining("Local⚡, speed 1.0"), // flat baseline
     ]),
   );
   fireEvent.keyDown(screen.getByRole("listbox"), { key: "Escape" });
@@ -176,9 +177,9 @@ it("shows the relative speed on provider and variant options", async () => {
   const variantTexts = screen.getAllByRole("option").map((option) => option.textContent);
   expect(variantTexts).toEqual(
     expect.arrayContaining([
-      expect.stringContaining("Regular⚡1.0"),
-      expect.stringContaining("Fast⚡⚡1.5"), // second bolt is masked half-faded
-      expect.stringContaining("Ultra⚡⚡2.0"),
+      expect.stringContaining("Regular⚡⚡, speed 1.25"),
+      expect.stringContaining("Fast⚡⚡, speed 1.5"), // second bolt is masked half-faded
+      expect.stringContaining("Ultra⚡⚡, speed 2.0"),
     ]),
   );
 });

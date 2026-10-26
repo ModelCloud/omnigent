@@ -126,7 +126,7 @@ def test_annotate_provider_speed_stamps_relative_speed_per_combo():
         {"id": "gpt"},  # implicit openai
     ]
     annotate_provider_speed(rows)
-    assert [r["speed"] for r in rows] == [1.0, 1.0, 1.0, 1.5, 2.0, 1.0]
+    assert [r["speed"] for r in rows] == [1.0, 1.25, 1.25, 1.5, 2.0, 1.0]
 
 
 @pytest.mark.asyncio
