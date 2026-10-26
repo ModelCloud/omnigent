@@ -4809,6 +4809,41 @@ def _codex_exit_watch_decision(
     return instance, None
 
 
+def _codex_provider_env_keys(config_profile: str | None) -> tuple[str, ...]:
+    """Collect the provider bearer names a native Codex session must receive.
+
+    The app-server and TUI run with a filtered environment, so a provider
+    declared in ``config.toml`` (or in a selected ``<profile>.config.toml``)
+    would otherwise name a credential that never reaches the child. Codex
+    then reports ``Missing environment variable: <PROVIDER>_API_KEY`` on every
+    turn even though the host service has it set.
+
+    This applies to every native launch, not just MultiDex: a plain
+    codex-native host whose ``config.toml`` declares an OpenRouter/Lithos
+    provider hits the same failure. The names come from the user's own config
+    file — an explicit routing contract, not ambient host secrets — so
+    honoring them does not widen the filter beyond what that file asks for.
+    Names the config does not declare stay filtered.
+
+    Both sources matter: providers may live in the shared ``config.toml``, in
+    a selected ``<profile>.config.toml``, or in both.
+
+    :param config_profile: Selected Codex configuration profile, e.g.
+        ``"local-openai"``; ``None`` for the shared config only.
+    :returns: Sorted env var names to forward, empty when nothing applies.
+    """
+    from omnigent.harnesses.codex_native.app_server import codex_config_env_key_names
+    from omnigent.inner.codex_executor import _codex_home_config_source_from_env
+
+    source_home = _codex_home_config_source_from_env()
+    names: set[str] = set(codex_config_env_key_names(source_home / "config.toml"))
+    if config_profile:
+        names.update(
+            codex_config_env_key_names(source_home / f"{config_profile}.config.toml")
+        )
+    return tuple(sorted(names))
+
+
 async def _launch_codex_native_tui(
     session_id: str,
     resource_registry: SessionResourceRegistry,
@@ -5736,6 +5771,10 @@ async def _auto_create_codex_terminal(
         # local provider explicitly has requires_openai_auth = false.
         config_profile=_codex_launch.config_profile,
         isolated_env_keys=(),
+        # Forward the bearer each configured provider declares, or the
+        # app-server starts with the model selected but no credential and
+        # every turn fails on ``Missing environment variable``.
+        provider_env_keys=_codex_provider_env_keys(_codex_launch.config_profile),
         # MultiDex is one additive provider in a full Codex runtime. Keep the
         # shared official login available so an in-session model switch to an
         # OpenAI model also switches credentials and endpoint correctly.
