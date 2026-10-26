@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import pytest
@@ -10,17 +11,28 @@ from click.testing import CliRunner
 from omnigent.cli import cli
 from omnigent.host.local_server import LocalServerInfo
 from omnigent.update_check import (
+    _NIGHTLY_REPO_URL,
+    _artifact_repo_slug,
+    _build_artifact_upgrade_suggestion,
     _build_nightly_upgrade_suggestion,
     _build_upgrade_suggestion,
+    _CacheEntry,
     _InstalledWheelInfo,
     _newest_nightly_version,
+    _parse_artifact_releases,
+    _parse_artifact_tag,
     _upgrade_failure_message,
     _uv_python_pin,
+    _write_cache,
+    maybe_show_update_notice,
 )
 
 # uv upgrade commands pin the interpreter omnigent is running under, so
 # expectations derive the flag instead of hardcoding a python version.
 _UV_PY = _uv_python_pin()
+# Nightly installs are git tags on the configured nightly repo; derive the URL
+# so a retarget only has to change the constant.
+_NIGHTLY = f"git+{_NIGHTLY_REPO_URL}"
 
 
 def _uv_registry_info() -> _InstalledWheelInfo:
@@ -62,6 +74,11 @@ def _wheel_install(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(importlib.metadata, "version", lambda _name: "0.1.0")
     monkeypatch.setattr("omnigent.update_check._find_repo_root", lambda: None)
     monkeypatch.setattr("omnigent.update_check._read_installed_wheel_info", _uv_registry_info)
+    # The default upgrade channel is this fork's prebuilt wheel releases, which
+    # would hit the network from every test and mask the registry path these
+    # tests were written for. Stub it as unreachable so the index fallback runs;
+    # the artifact-channel tests opt back in explicitly.
+    monkeypatch.setattr("omnigent.update_check.fetch_latest_artifact_release", lambda: None)
     # Pretend a uv tool receipt exists so the install is not mistaken for uv pip.
     monkeypatch.setattr(
         "omnigent.update_check._uv_tool_receipt_path", lambda: Path("/dev/null/uv-receipt.toml")
@@ -573,7 +590,7 @@ def test_newest_nightly_version_none_when_no_nightlies() -> None:
 def test_nightly_suggestion_shapes_per_installer() -> None:
     """Every installer maps to a git spec pinned to the nightly tag."""
     version = "0.9.0.dev20260804"
-    spec = f"git+https://github.com/omnigent-ai/omnigent@v{version}"
+    spec = f"{_NIGHTLY}@v{version}"
 
     def info_for(installer: str | None) -> _InstalledWheelInfo:
         return _InstalledWheelInfo(
@@ -640,10 +657,7 @@ def test_upgrade_nightly_installs_pinned_tag(
     result = CliRunner().invoke(cli, ["upgrade", "--nightly"])
 
     assert result.exit_code == 0, result.output
-    assert ran == [
-        f"uv tool install --reinstall{_UV_PY} "
-        "git+https://github.com/omnigent-ai/omnigent@v0.2.0.dev20260804"
-    ]
+    assert ran == [f"uv tool install --reinstall{_UV_PY} {_NIGHTLY}@v0.2.0.dev20260804"]
     assert "Upgraded to nightly v0.2.0.dev20260804" in result.output
 
 
@@ -698,7 +712,7 @@ def test_nightly_suggestion_preserves_and_unions_extras() -> None:
     assert suggestion.runnable
     assert suggestion.command == (
         f"uv tool install --reinstall{_UV_PY} "
-        "git+https://github.com/omnigent-ai/omnigent@v0.9.0.dev20260804#egg=omnigent[all,server]"
+        f"{_NIGHTLY}@v0.9.0.dev20260804#egg=omnigent[all,server]"
     )
 
 
@@ -729,7 +743,7 @@ def test_upgrade_nightly_refuses_registry_pip(
 
     assert result.exit_code == 0, result.output
     assert "install the nightly manually" in result.output
-    assert "git+https://github.com/omnigent-ai/omnigent@v0.2.0.dev20260804" in result.output
+    assert f"{_NIGHTLY}@v0.2.0.dev20260804" in result.output
 
 
 def test_upgrade_nightly_dry_run_prints_without_running(
@@ -750,7 +764,7 @@ def test_upgrade_nightly_dry_run_prints_without_running(
     assert result.exit_code == 0, result.output
     assert (
         f"Would run: uv tool install --reinstall{_UV_PY} "
-        "git+https://github.com/omnigent-ai/omnigent@v0.2.0.dev20260804" in result.output
+        f"{_NIGHTLY}@v0.2.0.dev20260804" in result.output
     )
 
 
@@ -790,7 +804,7 @@ def test_nightly_uv_never_uses_destructive_force() -> None:
             assert "--force" not in command, command
             assert command.startswith(f"uv tool install --reinstall{_UV_PY} ")
             # Always the nightly tag, never the fork's recorded URL.
-            assert f"git+https://github.com/omnigent-ai/omnigent@v{version}" in command
+            assert f"{_NIGHTLY}@v{version}" in command
 
 
 def test_nightly_pipx_spells_out_the_tag_instead_of_reinstall() -> None:
@@ -813,9 +827,7 @@ def test_nightly_pipx_spells_out_the_tag_instead_of_reinstall() -> None:
         )
 
     nightly = _build_nightly_upgrade_suggestion(pipx_info(None), "0.9.0.dev20260804")
-    assert nightly.command == (
-        "pipx install --force git+https://github.com/omnigent-ai/omnigent@v0.9.0.dev20260804"
-    )
+    assert nightly.command == (f"pipx install --force {_NIGHTLY}@v0.9.0.dev20260804")
     # An ordinary extras-less VCS refresh still uses the cheap re-pull.
     same_source = _build_upgrade_suggestion(pipx_info("git+https://host/omnigent.git"))
     assert same_source.command == "pipx reinstall omnigent"
@@ -877,3 +889,290 @@ def test_upgrade_nightly_failure_surfaces_recovery_when_install_is_gone(
     assert "your previous install is intact" not in result.output
     assert "no longer installed" in result.output
     assert "install.sh" in result.output
+
+
+# ------------------------------------------------------------------
+# Artifact channel (prebuilt wheels published as GitHub releases)
+# ------------------------------------------------------------------
+
+
+def _artifact_payload(
+    *tags: str,
+    assets: dict[str, list[str]] | None = None,
+    draft: bool = False,
+    prerelease: bool = False,
+) -> list[dict[str, object]]:
+    """Build a GitHub ``/releases`` payload for the given artifact tags.
+
+    Each tag gets the conventional three wheels plus the two manifest files
+    unless ``assets`` overrides the wheel names for that tag.
+    """
+    default_wheels = [
+        "omnigent-0.20.0.dev0-py3-none-any.whl",
+        "omnigent_client-0.20.0.dev0-py3-none-any.whl",
+        "omnigent_ui_sdk-0.20.0.dev0-py3-none-any.whl",
+    ]
+    releases: list[dict[str, object]] = []
+    for index, tag in enumerate(tags):
+        names = (assets or {}).get(tag, default_wheels)
+        release_assets = [
+            {
+                "name": name,
+                "browser_download_url": f"https://example.invalid/{tag}/{name}",
+            }
+            for name in names
+        ]
+        release_assets.append(
+            {
+                "name": "SHA256SUMS",
+                "browser_download_url": f"https://example.invalid/{tag}/SHA256SUMS",
+            }
+        )
+        releases.append(
+            {
+                "tag_name": tag,
+                "draft": draft,
+                "prerelease": prerelease,
+                # Newer entries first, matching GitHub's ordering.
+                "published_at": f"2026-10-{26 - index:02d}T00:00:00Z",
+                "assets": release_assets,
+            }
+        )
+    return releases
+
+
+def test_parse_artifact_tag_splits_version_and_sha() -> None:
+    """The short sha is the last hyphen segment; the version keeps its own hyphens."""
+    assert _parse_artifact_tag("omnigent-build-0.20.0.dev0-6aaa67f8f0") == (
+        "0.20.0.dev0",
+        "6aaa67f8f0",
+    )
+    # Local-metadata versions contain hyphens of their own.
+    assert _parse_artifact_tag("omnigent-build-0.20.0.dev0+abc-def1-1234567890") == (
+        "0.20.0.dev0+abc-def1",
+        "1234567890",
+    )
+
+
+def test_parse_artifact_tag_rejects_non_build_tags() -> None:
+    """Release tags, nightlies, and malformed names are not artifact builds."""
+    assert _parse_artifact_tag("v0.20.0.dev20261026") is None
+    assert _parse_artifact_tag("omnigent-build-") is None
+    assert _parse_artifact_tag("omnigent-build-0.20.0.dev0") is None
+
+
+def test_parse_artifact_releases_picks_newest_usable_build() -> None:
+    """Highest version wins and the main wheel is ordered first."""
+    payload = _artifact_payload(
+        "omnigent-build-0.20.0.dev0-aaaaaaaaaa",
+        "omnigent-build-0.19.0.dev0-bbbbbbbbbb",
+    )
+
+    releases = _parse_artifact_releases(payload)
+
+    assert [release.tag for release in releases] == [
+        "omnigent-build-0.20.0.dev0-aaaaaaaaaa",
+        "omnigent-build-0.19.0.dev0-bbbbbbbbbb",
+    ]
+    newest = releases[0]
+    assert newest.usable
+    assert newest.wheel_urls[0][0] == "omnigent-0.20.0.dev0-py3-none-any.whl"
+    assert newest.spec().startswith("omnigent @ https://example.invalid/")
+
+
+def test_parse_artifact_releases_skips_drafts_and_prereleases() -> None:
+    """Draft and prerelease entries are never offered as an upgrade target."""
+    payload = [
+        *_artifact_payload("omnigent-build-0.20.0.dev0-dddddddddd", draft=True),
+        *_artifact_payload("omnigent-build-0.20.0.dev0-eeeeeeeeee", prerelease=True),
+        *_artifact_payload("omnigent-build-0.19.0.dev0-ffffffffff"),
+    ]
+
+    releases = _parse_artifact_releases(payload)
+
+    assert [release.short_sha for release in releases] == ["ffffffffff"]
+
+
+def test_artifact_release_without_main_wheel_is_unusable() -> None:
+    """A still-running build (siblings only) must not be selected."""
+    payload = _artifact_payload(
+        "omnigent-build-0.20.0.dev0-aaaaaaaaaa",
+        assets={
+            "omnigent-build-0.20.0.dev0-aaaaaaaaaa": [
+                "omnigent_client-0.20.0.dev0-py3-none-any.whl",
+                "omnigent_ui_sdk-0.20.0.dev0-py3-none-any.whl",
+            ]
+        },
+    )
+
+    releases = _parse_artifact_releases(payload)
+
+    assert len(releases) == 1
+    assert not releases[0].usable
+    with pytest.raises(ValueError, match="no omnigent wheel"):
+        releases[0].spec()
+
+
+def test_artifact_sibling_specs_use_normalized_dist_names() -> None:
+    """``omnigent_client`` becomes the importable ``omnigent-client`` spec."""
+    release = _parse_artifact_releases(_artifact_payload("omnigent-build-0.20.0.dev0-aaaaaaaaaa"))[
+        0
+    ]
+
+    siblings = release.sibling_specs()
+
+    assert [spec.split(" @ ")[0] for spec in siblings] == [
+        "omnigent-client",
+        "omnigent-ui-sdk",
+    ]
+
+
+def test_artifact_suggestion_uses_reinstall_never_force() -> None:
+    """uv gets ``--reinstall`` plus one ``--with`` per sibling wheel."""
+    release = _parse_artifact_releases(_artifact_payload("omnigent-build-0.20.0.dev0-aaaaaaaaaa"))[
+        0
+    ]
+
+    suggestion = _build_artifact_upgrade_suggestion(_uv_registry_info(), release)
+
+    assert suggestion.runnable
+    assert "--reinstall" in suggestion.command
+    assert "--force " not in suggestion.command
+    assert suggestion.command.count("--with '") == 2
+    assert _UV_PY in suggestion.command
+
+
+def test_artifact_suggestion_preserves_extras() -> None:
+    """Extras recorded by the installer survive into the new wheel spec.
+
+    They must sit inside the requirement name — ``omnigent[databricks] @ url`` —
+    because a URL requirement with a trailing ``[extras]`` is not valid PEP 508
+    and uv rejects it.
+    """
+    release = _parse_artifact_releases(_artifact_payload("omnigent-build-0.20.0.dev0-aaaaaaaaaa"))[
+        0
+    ]
+    info = _uv_registry_info()
+    info = _InstalledWheelInfo(**{**info.__dict__, "extras": ("databricks",)})
+
+    suggestion = _build_artifact_upgrade_suggestion(info, release)
+
+    assert "omnigent[databricks] @ https://" in suggestion.command
+    assert ".whl[databricks]" not in suggestion.command
+
+
+def test_artifact_repo_slug_accepts_url_and_env_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The default is our fork; a URL or bare slug override both work."""
+    monkeypatch.delenv("OMNIGENT_ARTIFACT_REPO", raising=False)
+    assert _artifact_repo_slug() == "ModelCloud/omnigent"
+
+    monkeypatch.setenv("OMNIGENT_ARTIFACT_REPO", "https://github.com/acme/omnigent.git/")
+    assert _artifact_repo_slug() == "acme/omnigent"
+
+    monkeypatch.setenv("OMNIGENT_ARTIFACT_REPO", "acme/omnigent")
+    assert _artifact_repo_slug() == "acme/omnigent"
+
+
+def test_upgrade_defaults_to_artifact_channel(
+    monkeypatch: pytest.MonkeyPatch, _wheel_install: None
+) -> None:
+    """Without flags, upgrade resolves against our release channel, not PyPI."""
+    release = _parse_artifact_releases(_artifact_payload("omnigent-build-0.20.0.dev0-aaaaaaaaaa"))[
+        0
+    ]
+    monkeypatch.setattr("omnigent.update_check.fetch_latest_artifact_release", lambda: release)
+
+    def _must_not_query_index(*_a: object, **_k: object) -> str:
+        raise AssertionError("index was queried even though the artifact channel answered")
+
+    monkeypatch.setattr("omnigent.update_check.fetch_latest_version", _must_not_query_index)
+
+    result = CliRunner().invoke(cli, ["upgrade", "--check"])
+
+    # --check exits non-zero when an upgrade exists.
+    assert result.exit_code == 1, result.output
+    assert "aaaaaaaaaa" in result.output
+
+
+def test_upgrade_falls_back_to_index_when_channel_is_unreachable(
+    monkeypatch: pytest.MonkeyPatch, _wheel_install: None
+) -> None:
+    """An unreachable release API degrades to the index instead of failing."""
+    monkeypatch.setattr("omnigent.update_check.fetch_latest_artifact_release", lambda: None)
+    monkeypatch.setattr("omnigent.update_check.fetch_latest_version", lambda **_k: "0.21.0")
+
+    result = CliRunner().invoke(cli, ["upgrade", "--check", "--index-only"])
+
+    assert result.exit_code == 1, result.output
+    assert "0.21.0" in result.output
+
+
+def test_upgrade_index_only_skips_the_artifact_channel(
+    monkeypatch: pytest.MonkeyPatch, _wheel_install: None
+) -> None:
+    """``--index-only`` restores the upstream registry behavior."""
+
+    def _must_not_query_channel() -> object:
+        raise AssertionError("artifact channel was queried despite --index-only")
+
+    monkeypatch.setattr(
+        "omnigent.update_check.fetch_latest_artifact_release", _must_not_query_channel
+    )
+    monkeypatch.setattr("omnigent.update_check.fetch_latest_version", lambda **_k: "0.21.0")
+
+    result = CliRunner().invoke(cli, ["upgrade", "--check", "--index-only"])
+
+    assert result.exit_code == 1, result.output
+
+
+def test_artifact_notice_fires_once_per_build(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The passive notice keys on the commit, so a rebuild of the same version notifies."""
+    monkeypatch.setattr("omnigent.update_check._CACHE_FILE", tmp_path / "cache.json")
+    monkeypatch.delenv("OMNIGENT_NO_UPDATE_CHECK", raising=False)
+    # We are running inside the worktree, so the dev-clone path would win.
+    monkeypatch.setattr("omnigent.update_check._find_repo_root", lambda: None)
+
+    printed: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(
+        "omnigent.update_check._print_artifact_notice",
+        lambda cur, latest, sha: printed.append((cur, latest, sha)),
+    )
+
+    info = _InstalledWheelInfo(
+        install_time_epoch=0.0,
+        installer="uv",
+        vcs_url=None,
+        commit_sha="aaaaaaaaaa1111",
+        is_editable=False,
+        package_version="0.20.0.dev0",
+        detected_installer="uv",
+    )
+    monkeypatch.setattr("omnigent.update_check._read_installed_wheel_info", lambda: info)
+    # Never spawn a real background refresh in the test.
+    monkeypatch.setattr("omnigent.update_check._spawn_background_refresh", lambda: None)
+
+    _write_cache(
+        _CacheEntry(
+            last_check_epoch=time.time(),
+            commits_behind=0,
+            kind="artifact",
+            latest_version="0.20.0.dev0",
+            latest_commit="bbbbbbbbbb",
+        )
+    )
+    maybe_show_update_notice()
+    assert printed == [("0.20.0.dev0", "0.20.0.dev0", "bbbbbbbbbb")]
+
+    # Second invocation: already stamped, so no repeat.
+    maybe_show_update_notice()
+    assert len(printed) == 1
+
+    # Already on the advertised build: no notice at all.
+    printed.clear()
+    info.commit_sha = "bbbbbbbbbb2222"
+    maybe_show_update_notice()
+    assert printed == []
