@@ -8,6 +8,7 @@ normal stream completion — never during ``aclose`` / ``GeneratorExit``.
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
 import pytest
@@ -95,6 +96,38 @@ async def test_server_shutdown_ends_stream_without_done_for_browser_reconnect() 
     session_stream.shutdown_all()
     assert [frame async for frame in gen] == []
     assert SESSION_ID not in session_stream._subscribers
+
+
+async def test_completion_rates_stay_sparse_on_the_sse_wire() -> None:
+    gen = _stream_live_events(
+        _ConnectedRequest(),  # type: ignore[arg-type]
+        SESSION_ID,
+    )
+    try:
+        assert "session.heartbeat" in await asyncio.wait_for(gen.__anext__(), timeout=2.0)
+        for rates in ({"reasoning": 120, "output": 30}, {"output": 45}, {}):
+            session_stream.publish(
+                SESSION_ID,
+                {
+                    "type": "session.usage",
+                    "conversation_id": SESSION_ID,
+                    "response_id": "codex_test_turn",
+                    "context_tokens": 100,
+                    "completion_tps": rates,
+                },
+            )
+            frame = await asyncio.wait_for(gen.__anext__(), timeout=2.0)
+            payload = json.loads(
+                next(
+                    line.removeprefix("data: ")
+                    for line in frame.splitlines()
+                    if line.startswith("data: ")
+                )
+            )
+            assert payload["completion_tps"] == rates
+            assert payload["response_id"] == "codex_test_turn"
+    finally:
+        await gen.aclose()
 
 
 async def test_normal_completion_emits_done_and_cleans_up(

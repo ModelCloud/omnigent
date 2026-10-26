@@ -3354,6 +3354,11 @@ class CompletionTokenRates(BaseModel):
     reasoning: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     output: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
+    @model_serializer(mode="wrap")
+    def _omit_unavailable_rates(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """Keep atomic snapshots sparse through SSE validation and serialization."""
+        return {key: value for key, value in handler(self).items() if value is not None}
+
 
 class SessionUsageEvent(_SSEEventBase):
     """
