@@ -1321,6 +1321,7 @@ def _populate_codex_home_config(
                 authless_profile_text = tomlkit.dumps(profile_document)
             config_path.write_text(authless_profile_text, encoding="utf-8")
             os.chmod(config_path, 0o600)
+            _normalize_copied_codex_model(config_path)
         # Rollouts preserve resume continuity without sharing provider credentials.
         source_sessions = source_dir / "sessions"
         target_sessions = target_dir / "sessions"
@@ -1420,9 +1421,11 @@ def _populate_codex_home_config(
                 if key in source_config:
                     minimal_document[key] = source_config[key]
             dest_path.write_text(tomlkit.dumps(minimal_document))
+            _normalize_copied_codex_model(dest_path)
             continue
         shutil.copy2(source_file, dest_path)
         if filename == "config.toml":
+            _normalize_copied_codex_model(dest_path)
             _normalize_copied_codex_effort(dest_path, supported_efforts=supported_efforts)
             if extend_model_catalog:
                 # Routed turns and spawns can land on an arm codex's bundled
@@ -1438,6 +1441,9 @@ def _populate_codex_home_config(
         profile_target = target_dir / profile_file.name
         if profile_file.is_file() and not (profile_target.exists() or profile_target.is_symlink()):
             shutil.copy2(profile_file, profile_target)
+            # The profile carries its own top-level ``model``; a pre-rename
+            # spelling there selects the retired id for the whole session.
+            _normalize_copied_codex_model(profile_target)
         # ``codex app-server`` validates ``config.toml`` before it layers a
         # named profile. Its explicit ``model_provider=…`` launch override
         # therefore fails unless the provider table is already available in
@@ -2374,6 +2380,65 @@ def _normalize_copied_codex_effort(
             config_path.write_text("".join(lines), encoding="utf-8")
         except OSError:
             logger.warning("could not normalize model_reasoning_effort in %s", config_path)
+
+
+_MODEL_KEY_RE = re.compile(r"""^(\s*model\s*=\s*)(["\'])(.*?)\2(\s*)$""")
+
+
+def _normalize_copied_codex_model(config_path: Path) -> None:
+    """Rewrite a retired top-level ``model`` in the private ``config.toml`` copy.
+
+    Omnigent renamed its local model to ``DS v4.1 Flash 1017``; the old
+    ``QB/DSV4.1-Flash`` spelling is rejected by every route that sees it
+    (official endpoint: "not supported when using Codex with a ChatGPT
+    account"; local endpoint: "Model metadata not found"). A ``config.toml``
+    written before the rename keeps that name as its top-level ``model``, and
+    this executor copies the file into each session's private ``CODEX_HOME``,
+    so one stale line would otherwise fail every new session and every resume.
+
+    Only a top-level ``model`` key is touched — provider tables, ``profiles.*``
+    entries, and any key below the first table header are left alone, and the
+    user's real ``~/.codex/config.toml`` is never modified. Unknown names pass
+    through unchanged so a genuinely custom model keeps working.
+
+    :param config_path: The copied ``config.toml`` inside the per-session
+        ``CODEX_HOME``. Unreadable/unwritable files are skipped (best effort;
+        the copy already succeeded, so this only degrades to prior behavior).
+    """
+    from omnigent.models.legacy_model_aliases import canonical_model_id
+
+    try:
+        text = config_path.read_text(encoding="utf-8")
+    except OSError:
+        return
+    lines = text.splitlines(keepends=True)
+    changed = False
+    array_depth = 0
+    for index, line in enumerate(lines):
+        content = line.rstrip("\r\n")
+        if array_depth == 0:
+            if content.lstrip().startswith("["):
+                break
+            match = _MODEL_KEY_RE.match(content)
+            if match is not None:
+                canonical = canonical_model_id(match.group(3))
+                if canonical is not None and canonical != match.group(3):
+                    line_ending = line[len(content) :]
+                    quote_char = match.group(2)
+                    lines[index] = (
+                        f"{match.group(1)}{quote_char}{canonical}{quote_char}"
+                        f"{match.group(4)}{line_ending}"
+                    )
+                    changed = True
+                continue
+        array_depth += content.count("[") - content.count("]")
+        if array_depth < 0:
+            array_depth = 0
+    if changed:
+        try:
+            config_path.write_text("".join(lines), encoding="utf-8")
+        except OSError:
+            logger.warning("could not normalize model id in %s", config_path)
 
 
 def _databricks_codex_base_url(host: str) -> str:

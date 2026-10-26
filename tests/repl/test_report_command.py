@@ -61,13 +61,13 @@ def _decode_url(url: str) -> dict[str, str]:
 
 
 def test_build_github_issue_url_base_structure() -> None:
-    """URL targets the omnigent-ai/omnigent issues/new endpoint.
+    """URL targets the ModelCloud/omnigent issues/new endpoint.
 
     Failure: the URL would open the wrong repo or be unparseable,
     meaning users file issues in the wrong place.
     """
     url = _build_github_issue_url("sess_abc", "my-agent", "")
-    assert url.startswith("https://github.com/omnigent-ai/omnigent/issues/new")
+    assert url.startswith("https://github.com/ModelCloud/omnigent/issues/new")
 
 
 def test_build_github_issue_url_title_and_labels() -> None:

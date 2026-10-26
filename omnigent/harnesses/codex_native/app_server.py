@@ -2206,6 +2206,11 @@ class CodexNativeAppServer:
     # Authless OpenAI-compatible providers receive only these declared bearer
     # variables, never ambient OpenAI or Databricks credentials.
     isolated_env_keys: tuple[str, ...] = ()
+    # Provider ``env_key`` names declared by this session's config. Kept
+    # separate from ``isolated_env_keys`` on purpose: that flag also strips
+    # ambient OPENAI_/DATABRICKS_ credentials and disables cloud config, which
+    # would break MultiDex's official-model switching.
+    provider_env_keys: tuple[str, ...] = ()
     # MultiDex is additive: its local bearer provider and Codex's built-in
     # OpenAI provider coexist in one runtime.  Preserve the user's shared
     # auth.json so a live thread can switch from the local model to an
@@ -2432,6 +2437,12 @@ class CodexNativeAppServer:
             _pin_codex_config_model_provider(self.codex_home, provider)
         if self.pinned_model:
             _pin_codex_config_model(self.codex_home, self.pinned_model)
+            # A resumed session reuses its existing private home, so the
+            # copy-time normalization never ran for it. Without this a
+            # pre-rename ``model`` keeps failing that session's resume.
+            from omnigent.inner.codex_executor import _normalize_copied_codex_model
+
+            _normalize_copied_codex_model(self.codex_home / "config.toml")
             if model_migration_target is not None:
                 _acknowledge_codex_model_migration(
                     self.codex_home,
@@ -3726,6 +3737,7 @@ def build_codex_native_server(
     model_catalog_rows: list[_JsonObject] | None = None,
     config_source: Path | None = None,
     isolated_env_keys: tuple[str, ...] = (),
+    provider_env_keys: tuple[str, ...] = (),
     bridge_openai_auth: bool = False,
     process_registry_path: Path | None = None,
     process_tag_prefix: str = "codex-native",
@@ -3831,7 +3843,15 @@ def build_codex_native_server(
         authless_profile_env = tuple(sorted(set(isolated_env_keys)))
     # Provider credentials live only in the private CODEX_HOME config.toml:
     # nothing here forwards provider env_key values into the process.
-    env = _clean_codex_env((*authless_profile_env,))
+    # Provider ``env_key`` declarations are an explicit routing contract, not
+    # ambient host secrets: the selected config names the credential Codex
+    # must read. Without them the app-server starts with the model selected
+    # but no token, and every turn fails with
+    # ``Missing environment variable: <PROVIDER>_API_KEY``.
+    declared_env_keys = tuple(
+        dict.fromkeys((*authless_profile_env, *provider_env_keys))
+    )
+    env = _clean_codex_env(declared_env_keys)
     if authless_profile_env:
         # ``codex-modelcloud`` is deliberately an authless, OpenAI-compatible
         # runtime.  Do not let an ambient OpenAI or Databricks credential make
@@ -3897,6 +3917,7 @@ def build_codex_native_server(
         config_profile=effective_config_profile,
         config_source=config_source,
         isolated_env_keys=authless_profile_env,
+        provider_env_keys=provider_env_keys,
         bridge_openai_auth=bridge_openai_auth,
         process_registry_path=process_registry_path,
         process_tag_prefix=process_tag_prefix,
@@ -4015,6 +4036,49 @@ def _authless_codex_profile_env_passthrough(config_profile: str | None) -> tuple
     names: set[str] = set()
     for provider in providers.values():
         if not isinstance(provider, dict) or provider.get("requires_openai_auth") is not False:
+            continue
+        env_key = provider.get("env_key")
+        if isinstance(env_key, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", env_key):
+            names.add(env_key)
+    return tuple(sorted(names))
+
+
+def codex_config_env_key_names(config_path: Path) -> tuple[str, ...]:
+    """Return provider ``env_key`` names declared by one Codex config file.
+
+    Codex child processes receive a filtered environment
+    (:func:`~omnigent.inner.codex_executor._clean_codex_env`) so ambient host
+    secrets never reach them. A provider's ``env_key`` is different: it is
+    the explicit name that file tells Codex to read its bearer from, so the
+    variable is part of the routing contract rather than an ambient secret.
+
+    Without this, a MultiDex/OpenRouter/Lithos provider defined in the
+    session's config selects a model whose credential never arrived in the
+    process, and the turn fails with
+    ``Missing environment variable: OPENROUTER_API_KEY`` even though the host
+    service has it set.
+
+    Only names that are valid environment identifiers are returned; a
+    ``base_url`` or ``auth`` block is not a credential and contributes
+    nothing.
+
+    :param config_path: A Codex ``config.toml`` or ``<profile>.config.toml``.
+    :returns: Sorted, de-duplicated env var names declared by its providers,
+        e.g. ``("OPENROUTER_API_KEY",)``. Empty when the file is missing,
+        unparseable, or declares no providers.
+    """
+    import tomllib
+
+    try:
+        document = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return ()
+    providers = document.get("model_providers")
+    if not isinstance(providers, dict):
+        return ()
+    names: set[str] = set()
+    for provider in providers.values():
+        if not isinstance(provider, dict):
             continue
         env_key = provider.get("env_key")
         if isinstance(env_key, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", env_key):
@@ -5160,6 +5224,11 @@ def codex_terminal_env(app_server: CodexNativeAppServer) -> dict[str, str]:
     profile_credentials = set(getattr(app_server, "isolated_env_keys", ())) or set(
         _authless_codex_profile_env_passthrough(getattr(app_server, "config_profile", None))
     )
+    # Provider env_key declarations apply regardless of the authless-profile
+    # path: a MultiDex/OpenRouter provider coexists with official login, and
+    # its bearer must still reach the terminal or an in-TUI model switch to
+    # that provider fails on a missing variable.
+    profile_credentials |= set(getattr(app_server, "provider_env_keys", ()))
     authless_profile = bool(profile_credentials)
     allowed_exact = {
         "CODEX_HOME",

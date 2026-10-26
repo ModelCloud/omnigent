@@ -50,6 +50,7 @@ from omnigent.harnesses.codex_native.bridge import (
     read_codex_config_model,
     read_codex_home_config_model,
     read_codex_home_config_model_provider,
+    read_codex_home_config_provider_names,
     read_mcp_startup,
     read_unmirrored_codex_settings,
     update_active_turn_id,
@@ -672,6 +673,37 @@ async def _multidex_runtime_settings_overrides(
                     "modelProvider"
                 ) or read_codex_home_config_model_provider(Path(state.codex_home))
                 provider = state.default_model_provider or current_provider
+                # Codex rejects a ``modelProvider`` this session's private
+                # config does not define (``-32600 ... is not in the allowed
+                # set a configured model provider``). ``default_model_provider``
+                # is remembered at launch and can name a provider that only
+                # existed then — e.g. ``omnigent_provider``, written for a
+                # session whose non-local launch registered it but which later
+                # came up on a local model and kept only the MultiDex tables.
+                # Replaying that stale name failed every local -> official
+                # switch. Drop it and fall back to Codex's built-in login.
+                from omnigent.onboarding.codex_auth_readiness import (
+                    CODEX_BUILTIN_PROVIDERS,
+                )
+
+                defined_providers = read_codex_home_config_provider_names(
+                    Path(state.codex_home)
+                )
+                # Built-in providers (``openai`` and the self-authenticating
+                # gateways) never appear as ``[model_providers]`` tables, so
+                # only a *custom* name can be the stale one being rejected.
+                if (
+                    provider is not None
+                    and defined_providers
+                    and provider not in defined_providers
+                    and provider not in CODEX_BUILTIN_PROVIDERS
+                ):
+                    _logger.info(
+                        "Codex provider %r is not defined in this session's config; "
+                        "falling back to the built-in provider",
+                        provider,
+                    )
+                    provider = None
                 local_provider_names = {
                     name
                     for item in multidex.models

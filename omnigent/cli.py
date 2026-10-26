@@ -2244,7 +2244,7 @@ def main() -> None:
     # dispatch, imports — are all caught. See omnigent/crash_handler.py.
     from omnigent.crash_handler import install_crash_handler
 
-    install_crash_handler(app_name="omnigent", repo="omnigent-ai/omnigent")
+    install_crash_handler(app_name="omnigent", repo="ModelCloud/omnigent")
 
     # Operators can force all use through a wrapper (e.g. `isaac omni`) by
     # setting OMNIGENT_REQUIRE_WRAPPER; the wrapper sets OMNIGENT_WRAPPER_BYPASS
@@ -6249,7 +6249,7 @@ def upgrade(
             "--nightly and --target-version are mutually exclusive: --nightly "
             "always tracks the newest nightly tag. To install a specific "
             "nightly, run your installer against that tag directly, e.g. "
-            "`uv tool install --force git+https://github.com/omnigent-ai/omnigent@v0.8.0.dev20260801`."
+            "`uv tool install --force git+https://github.com/ModelCloud/omnigent@v0.8.0.dev20260801`."
         )
 
     # Source checkout / editable install — there's no released wheel to
