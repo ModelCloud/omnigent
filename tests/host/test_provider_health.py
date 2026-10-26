@@ -142,9 +142,7 @@ async def test_annotate_sets_provider_health_per_row(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_annotate_leaves_rows_untouched_when_nothing_resolvable(monkeypatch):
-    monkeypatch.setattr(
-        "omnigent.host.provider_health._provider_endpoints", lambda referenced: {}
-    )
+    monkeypatch.setattr("omnigent.host.provider_health._provider_endpoints", lambda referenced: {})
     rows: list[dict[str, object]] = [{"id": "custom", "providerId": "custom"}]
     await annotate_provider_health(rows)
     assert "providerHealth" not in rows[0]
