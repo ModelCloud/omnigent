@@ -383,6 +383,23 @@ _PROVIDER_OVERRIDE_CREDENTIAL_FIELDS = frozenset(
 )
 
 
+def _toml_leaf_literal(value: object) -> str:
+    """Serialize a scalar or array as a TOML value literal."""
+    return tomlkit.dumps({"v": value}).split("=", 1)[1].strip()
+
+
+def _dotted_provider_overrides(prefix: str, table: dict[str, object]) -> list[str]:
+    """Flatten a provider table into ``-c``-parseable ``key = value`` args."""
+    out: list[str] = []
+    for key, value in table.items():
+        dotted = f"{prefix}.{key}"
+        if isinstance(value, dict):
+            out.extend(_dotted_provider_overrides(dotted, value))
+        else:
+            out.append(f"{dotted} = {_toml_leaf_literal(value)}")
+    return out
+
+
 def _credential_free_config_overrides(config_overrides: Sequence[str]) -> list[str]:
     """Strip static credentials from ``model_providers`` override tables.
 
@@ -392,6 +409,10 @@ def _credential_free_config_overrides(config_overrides: Sequence[str]) -> list[s
     app-server avoids this by materializing provider tables into its private
     config.toml instead; the probe needs no credentials because it only
     enumerates models, so they can simply be removed.
+
+    ``-c`` accepts TOML ``key = value`` pairs, not documents, so surviving
+    fields are re-emitted as dotted-key overrides rather than re-serialized
+    whole tables.
     """
     import tomllib
 
@@ -421,7 +442,11 @@ def _credential_free_config_overrides(config_overrides: Sequence[str]) -> list[s
         if cleaned == providers:
             sanitized.append(override)
             continue
-        sanitized.append(tomlkit.dumps({"model_providers": cleaned}))
+        for name, table in cleaned.items():
+            if isinstance(table, dict):
+                sanitized.extend(_dotted_provider_overrides(f"model_providers.{name}", table))
+            else:
+                sanitized.append(f"model_providers.{name} = {_toml_leaf_literal(table)}")
     return sanitized
 
 

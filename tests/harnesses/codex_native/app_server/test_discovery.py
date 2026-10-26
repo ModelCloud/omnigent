@@ -870,14 +870,19 @@ X-Api-Key = "header-token"
 
     assert 'model_provider="openai"' in sanitized
     assert "not-valid-toml-{{{" in sanitized
-    providers = tomllib.loads(sanitized[1])["model_providers"]
-    table = providers["lab"]
+    # Surviving fields come back as `-c`-parseable dotted key=value lines.
+    merged: dict[str, object] = {}
+    for line in sanitized:
+        fragment = tomllib.loads(line) if line.startswith("model_providers") else {}
+        for name, provider in fragment.get("model_providers", {}).items():
+            merged.setdefault(name, {}).update(provider)
+    table = merged["lab"]
     assert table["env_key"] == "LAB_TOKEN"
     assert table["base_url"] == "https://models.example/v1"
     assert "experimental_bearer_token" not in table
     assert "http_headers" not in table
-    assert "config-token" not in sanitized[1]
-    assert "header-token" not in sanitized[1]
+    assert not any("config-token" in line for line in sanitized)
+    assert not any("header-token" in line for line in sanitized)
 
 
 def test_credential_free_config_overrides_passes_through_clean_overrides() -> None:
