@@ -256,16 +256,15 @@ wire_api = "responses"
 """
 
 
-def test_codex_auth_unavailable_reason_config_env_key_available(
+def test_codex_auth_unavailable_reason_config_env_key_needs_auth(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A config-selected provider with a populated ``env_key`` is available.
+    """A populated ``env_key`` can no longer authenticate a config provider.
 
-    The reported bug: the launch leaves Codex's own provider selection alone, so
-    Codex routes through the custom ``[model_providers.X]`` table and never reads
-    ``auth.json`` — gating on the (legitimately absent) ``auth.json`` reported
-    ``needs-auth`` and told the user to run ``codex login``, which would add a
-    second credential that bypasses the gateway.
+    Provider credentials come only from ``config.toml``; nothing forwards the
+    named variable into the Codex launch environment, so even a populated
+    ``env_key`` reports ``needs-auth`` — the fix is
+    ``experimental_bearer_token``, not an exported variable.
     """
     auth_path = tmp_path / "codex-home" / "auth.json"  # never created
     _point_codex_auth_check_at(
@@ -273,7 +272,7 @@ def test_codex_auth_unavailable_reason_config_env_key_available(
     )
     monkeypatch.setenv("OPENAI_EXAMPLE_GATEWAY_TOKEN", "gw-token")
 
-    assert codex_native._codex_auth_unavailable_reason() is None
+    assert codex_native._codex_auth_unavailable_reason() == "needs-auth"
 
 
 @pytest.mark.parametrize("value", [None, "", "   "])

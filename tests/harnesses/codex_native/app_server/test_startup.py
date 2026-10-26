@@ -76,7 +76,6 @@ async def test_start_reuses_initialized_readiness_client_for_hook_trust(
     )
 
     server.bridge_openai_auth = True
-    server.provider_env_keys = ("BEARER_TOKEN",)
 
     await server.start()
     try:

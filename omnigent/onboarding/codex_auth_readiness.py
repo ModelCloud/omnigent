@@ -2,7 +2,8 @@
 
 The readiness verdict mirrors Codex's ``auth.credentials`` check: a provider
 that requires OpenAI auth uses ``auth.json``; a provider with ``env_key`` is
-ready only when that variable is populated; and any other non-OpenAI provider
+never ready because provider credentials come only from config.toml (the
+launch environment forwards none of them); and any other non-OpenAI provider
 handles auth itself. This deliberately remains a local, structural check. It
 may be wrong about token validity, but it is cheap enough for the host's
 periodic readiness refresh and never probes the network.
@@ -15,7 +16,6 @@ would authenticate the selected provider.
 
 from __future__ import annotations
 
-import os
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
@@ -85,13 +85,21 @@ def effective_custom_provider_table(
 def effective_self_sufficient_builtin_provider(config: dict[str, object]) -> str | None:
     """Return the selected built-in provider id when Codex needs no login for it.
 
-    Every built-in provider except ``openai`` (Bedrock, Ollama, LM Studio, OpenRouter)
-    authenticates itself, mirroring :func:`codex_config_effective_auth`.
+    Every built-in provider except ``openai`` (Bedrock, Ollama, LM Studio,
+    OpenRouter, Lithos) authenticates itself, mirroring
+    :func:`codex_config_effective_auth`. The gateway providers need a
+    configured credential: with no ``experimental_bearer_token`` (or other
+    self-contained auth) in their table they serve no authenticated requests.
     """
     provider_id = effective_codex_model_provider(config)
-    if provider_id in CODEX_BUILTIN_PROVIDERS and provider_id != "openai":
-        return provider_id
-    return None
+    if provider_id not in CODEX_BUILTIN_PROVIDERS or provider_id == "openai":
+        return None
+    if provider_id in {"openrouter", "lithos"}:
+        providers = config.get("model_providers")
+        table = providers.get(provider_id) if isinstance(providers, dict) else None
+        if not isinstance(table, dict) or not provider_table_has_self_contained_auth(table):
+            return None
+    return provider_id
 
 
 def provider_table_has_self_contained_auth(table: dict[str, object]) -> bool:
@@ -135,21 +143,21 @@ def codex_config_effective_auth(
 
     * unset / built-in ``openai`` / ``requires_openai_auth = true`` →
       ``"codex-login"`` (inspect ``auth.json``);
-    * non-OpenAI provider declaring ``env_key`` → ``"provider-ready"`` only
-      when the variable is non-empty, otherwise ``"provider-auth-missing"``;
+    * non-OpenAI provider declaring ``env_key`` → ``"provider-auth-missing"``:
+      credential env vars are never forwarded to the Codex launch
+      environment, so the variable cannot be populated there;
     * any other non-OpenAI provider → ``"provider-ready"`` because Codex
       considers provider-specific auth sufficient or unnecessary.
 
     Built-in provider definitions in ``[model_providers]`` are ignored here,
-    matching Codex's catalog merge, except OpenRouter's overridable ``env_key``
-    and Bedrock's endpoint/auth overrides. For example, Ollama needs no
+    matching Codex's catalog merge, except OpenRouter/Lithos credential
+    overrides and Bedrock's endpoint/auth overrides. For example, Ollama needs no
     credential; Bedrock may still fail later if its AWS credential chain is
     unavailable, which is intentionally outside this local status check.
 
     ``requires_openai_auth`` intentionally wins over ``env_key`` when both are
     set, matching Codex's readiness diagnostic for that contradictory config.
 
-    The caller should pass the environment the launch will actually receive.
     Host-wide readiness has no agent spec, so it cannot include a particular
     spec's ``sandbox.env_passthrough`` additions; such a custom session may work
     while the host-level picker conservatively reports ``needs-auth``.
@@ -172,12 +180,12 @@ def codex_config_effective_auth(
     configured_table = providers.get(provider_id) if isinstance(providers, dict) else None
     table = configured_table if isinstance(configured_table, dict) else None
     if provider_id in {"openrouter", "lithos"}:
-        table = {
-            "env_key": "LITHOS_API_KEY" if provider_id == "lithos" else "OPENROUTER_API_KEY",
-            **(table or {}),
-        }
+        table = dict(table or {})
         if provider_table_has_self_contained_auth(table):
             return "provider-ready"
+        # The gateway built-ins always need a credential, and only config.toml
+        # auth counts: nothing forwards env_key values into the launch env.
+        return "provider-auth-missing"
     if table is None:
         # A selected custom provider without a table is invalid. Do not let an
         # unrelated auth.json credential mask the broken selection.
@@ -186,10 +194,12 @@ def codex_config_effective_auth(
     if table.get("requires_openai_auth") is True:
         return "codex-login"
 
+    if provider_table_has_self_contained_auth(table):
+        return "provider-ready"
     env_key = table.get("env_key")
-    if not isinstance(env_key, str) or not env_key.strip():
-        return "provider-ready"
-    value = (os.environ if env is None else env).get(env_key.strip())
-    if isinstance(value, str) and value.strip():
-        return "provider-ready"
-    return "provider-auth-missing"
+    if isinstance(env_key, str) and env_key.strip():
+        # Credential env vars are never forwarded to the Codex launch
+        # environment; only config.toml credentials (bearer token, auth
+        # command, auth headers) authenticate providers.
+        return "provider-auth-missing"
+    return "provider-ready"

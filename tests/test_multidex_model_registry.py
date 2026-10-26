@@ -10,6 +10,7 @@ from omnigent.harnesses.multidex_native.config import (
     load_multidex_config,
     multidex_model_for_selection,
     multidex_provider_config_overrides,
+    multidex_registration_bearer_token,
     multidex_runtime_provider_id,
     with_multidex_model_picker_row,
 )
@@ -21,7 +22,7 @@ def test_lithos_provider_registers_three_variants_with_one_model_label(
 ) -> None:
     providers = tmp_path / "config.toml"
     providers.write_text(
-        '[model_providers.lithos]\nenv_key = "LITHOS_API_KEY"\n'
+        '[model_providers.lithos]\nexperimental_bearer_token = "lith-test-token"\n'
         "request_max_retries = 0\nstream_max_retries = 0\nstream_idle_timeout_ms = 900000\n",
         encoding="utf-8",
     )
@@ -50,16 +51,17 @@ def test_lithos_provider_registers_three_variants_with_one_model_label(
     assert "lithos" in native
     assert "name" not in native["lithos"]
     assert native["lithos"]["base_url"] == "https://api.lithosai.cloud/v1"
-    assert native["lithos"]["env_key"] == "LITHOS_API_KEY"
+    assert "env_key" not in native["lithos"]
     assert set(native["lithos"]) <= MULTIDEX_BUILTIN_PROVIDER_OVERRIDE_FIELDS
 
 
 @pytest.mark.parametrize(
     "provider_fields",
     [
-        "",
-        'base_url = "https://openrouter.ai/api/v1"\nenv_key = "OPENROUTER_API_KEY"\n'
+        'experimental_bearer_token = "or-test-token"\n',
+        'base_url = "https://openrouter.ai/api/v1"\nexperimental_bearer_token = "or-test-token"\n'
         'wire_api = "responses"\nrequires_openai_auth = false\nname = "OpenRouter"\n',
+        'experimental_bearer_token = "or-test-token"\n'
         "request_max_retries = 0\nstream_max_retries = 0\nstream_idle_timeout_ms = 900000\n",
     ],
 )
@@ -84,7 +86,8 @@ def test_openrouter_registration_keeps_native_routing_and_picker_metadata(
         "model_providers"
     ]["openrouter"]
     assert set(provider_config) <= MULTIDEX_BUILTIN_PROVIDER_OVERRIDE_FIELDS
-    assert provider_config["env_key"] == "OPENROUTER_API_KEY"
+    assert "env_key" not in provider_config
+    assert provider_config["experimental_bearer_token"] == "or-test-token"
     assert provider_config["base_url"] == "https://openrouter.ai/api/v1"
     assert provider_config["provider"] == {
         "only": ["wafer/mxfp4"],
@@ -129,13 +132,13 @@ def test_named_multidex_models_map_to_their_explicit_provider(tmp_path: Path) ->
         """
 [model_providers.dsv]
 base_url = "http://127.0.0.1:9000/v1"
-env_key = "DSV_TOKEN"
+experimental_bearer_token = "dsv-test-token"
 wire_api = "responses"
 requires_openai_auth = false
 
 [model_providers.lab]
 base_url = "https://models.example/v1"
-env_key = "LAB_TOKEN"
+experimental_bearer_token = "lab-test-token"
 wire_api = "responses"
 requires_openai_auth = false
 """,
@@ -160,12 +163,12 @@ display_name = "Lab Coder"
 
     dsv = multidex_model_for_selection(registration, "DS v4.1 Flash 1017")
     assert dsv is not None
-    assert (dsv.provider, dsv.env_key, dsv.base_url, dsv.discover_capabilities) == (
+    assert (dsv.provider, dsv.base_url, dsv.discover_capabilities) == (
         "dsv",
-        "DSV_TOKEN",
         "http://127.0.0.1:9000/v1",
         True,
     )
+    assert multidex_registration_bearer_token(dsv) == "dsv-test-token"
     assert multidex_model_for_selection(registration, "lab/coder-32b").provider == "lab"
     assert multidex_model_for_selection(registration, "gpt-6-sol") is None
 
@@ -175,7 +178,8 @@ display_name = "Lab Coder"
     assert dsv_runtime_id != "openai"
     assert multidex_runtime_provider_id("multidex") == "multidex"
     assert provider_config[dsv_runtime_id]["base_url"] == "http://127.0.0.1:9000/v1"
-    assert provider_config[dsv_runtime_id]["env_key"] == "DSV_TOKEN"
+    assert provider_config[dsv_runtime_id]["experimental_bearer_token"] == "dsv-test-token"
+    assert "env_key" not in provider_config[dsv_runtime_id]
     assert provider_config[dsv_runtime_id]["requires_openai_auth"] is False
     assert "test-secret-value" not in repr(provider_config[dsv_runtime_id])
 
@@ -195,7 +199,7 @@ def test_multidex_row_overrides_an_upstream_default(tmp_path: Path) -> None:
         """
 [model_providers.multidex]
 base_url = "http://127.0.0.1:9000/v1"
-env_key = "MULTIDEX_API_KEY"
+experimental_bearer_token = "mdx-test-token"
 wire_api = "responses"
 requires_openai_auth = false
 """,
@@ -228,7 +232,7 @@ def test_multidex_provider_materialization_preserves_codex_provider_routes(tmp_p
 [model_providers.openai]
 name = "Local OpenAI-compatible endpoint"
 base_url = "https://local.example/v1"
-env_key = "LOCAL_TOKEN"
+experimental_bearer_token = "local-test-token"
 wire_api = "responses"
 requires_openai_auth = false
 """,
@@ -266,7 +270,8 @@ base_url = "https://gateway.example/v1"
     assert providers_after["openai"]["base_url"] == "https://api.openai.com/v1"
     assert providers_after["gateway"]["base_url"] == "https://gateway.example/v1"
     assert providers_after[runtime_id]["base_url"] == "https://local.example/v1"
-    assert providers_after[runtime_id]["env_key"] == "LOCAL_TOKEN"
+    assert providers_after[runtime_id]["experimental_bearer_token"] == "local-test-token"
+    assert "env_key" not in providers_after[runtime_id]
 
 
 def test_multidex_model_registry_rejects_non_responses_and_authful_providers(
@@ -277,7 +282,7 @@ def test_multidex_model_registry_rejects_non_responses_and_authful_providers(
         """
 [model_providers.bad]
 base_url = "https://models.example/v1"
-env_key = "MODEL_TOKEN"
+experimental_bearer_token = "model-test-token"
 wire_api = "chat"
 requires_openai_auth = false
 """,
@@ -294,13 +299,35 @@ requires_openai_auth = false
         raise AssertionError("invalid custom provider was accepted")
 
 
+def test_provider_without_any_credential_is_rejected(tmp_path: Path) -> None:
+    providers = tmp_path / "config.toml"
+    providers.write_text(
+        """
+[model_providers.lab]
+base_url = "https://models.example/v1"
+wire_api = "responses"
+requires_openai_auth = false
+""",
+        encoding="utf-8",
+    )
+    models = tmp_path / "models.toml"
+    models.write_text('[models."vendor/model"]\nprovider = "lab"\n', encoding="utf-8")
+
+    try:
+        load_multidex_config(providers, models_path=models, require_token=False)
+    except ValueError as exc:
+        assert "experimental_bearer_token" in str(exc)
+    else:
+        raise AssertionError("credential-less provider was accepted")
+
+
 def test_multidex_model_registry_rejects_inline_provider_secrets(tmp_path: Path) -> None:
     providers = tmp_path / "config.toml"
     providers.write_text(
         """
 [model_providers.bad]
 base_url = "https://models.example/v1"
-env_key = "MODEL_TOKEN"
+experimental_bearer_token = "model-test-token"
 api_key = "must-stay-out-of-config"
 wire_api = "responses"
 requires_openai_auth = false
@@ -313,6 +340,94 @@ requires_openai_auth = false
     try:
         load_multidex_config(providers, models_path=models, require_token=False)
     except ValueError as exc:
-        assert "must use env_key, not inline credentials" in str(exc)
+        assert "experimental_bearer_token, not inline credentials" in str(exc)
     else:
         raise AssertionError("inline MultiDex provider credentials were accepted")
+
+
+def test_multidex_provider_bearer_token_replaces_env_key(tmp_path: Path) -> None:
+    providers = tmp_path / "config.toml"
+    providers.write_text(
+        """
+[model_providers.lab]
+base_url = "https://models.example/v1"
+experimental_bearer_token = "config-token"
+wire_api = "responses"
+requires_openai_auth = false
+""",
+        encoding="utf-8",
+    )
+    models = tmp_path / "models.toml"
+    models.write_text('[models."vendor/model"]\nprovider = "lab"\n', encoding="utf-8")
+
+    registration = load_multidex_config(providers, models_path=models, require_token=True)
+
+    selected = multidex_model_for_selection(registration, "vendor/model")
+    assert selected is not None
+    assert multidex_registration_bearer_token(selected) == "config-token"
+
+    provider_config = tomllib.loads(multidex_provider_config_overrides(registration)[0])[
+        "model_providers"
+    ][multidex_runtime_provider_id("lab")]
+    assert provider_config["experimental_bearer_token"] == "config-token"
+    assert "env_key" not in provider_config
+
+
+def test_builtin_provider_bearer_token_drops_default_env_key(tmp_path: Path) -> None:
+    providers = tmp_path / "config.toml"
+    providers.write_text(
+        """
+[model_providers.lithos]
+experimental_bearer_token = "lith-config-token"
+""",
+        encoding="utf-8",
+    )
+    models = tmp_path / "models.toml"
+    registration = load_multidex_config(providers, models_path=models, require_token=True)
+
+    lithos = next(item for item in registration.models if item.provider == "lithos")
+    assert multidex_registration_bearer_token(lithos) == "lith-config-token"
+
+    native = tomllib.loads(multidex_provider_config_overrides(registration)[0])["model_providers"][
+        "lithos"
+    ]
+    assert native["experimental_bearer_token"] == "lith-config-token"
+    assert "env_key" not in native
+    assert set(native) <= MULTIDEX_BUILTIN_PROVIDER_OVERRIDE_FIELDS
+
+
+def test_provider_env_key_is_rejected(tmp_path: Path) -> None:
+    providers = tmp_path / "config.toml"
+    providers.write_text(
+        """
+[model_providers.lab]
+base_url = "https://models.example/v1"
+env_key = "LAB_TOKEN"
+wire_api = "responses"
+requires_openai_auth = false
+""",
+        encoding="utf-8",
+    )
+    models = tmp_path / "models.toml"
+    models.write_text('[models."vendor/model"]\nprovider = "lab"\n', encoding="utf-8")
+
+    try:
+        load_multidex_config(providers, models_path=models, require_token=False)
+    except ValueError as exc:
+        assert "does not support env_key" in str(exc)
+        assert "experimental_bearer_token" in str(exc)
+    else:
+        raise AssertionError("env_key provider credential was accepted")
+
+
+def test_builtin_provider_without_token_is_rejected(tmp_path: Path) -> None:
+    providers = tmp_path / "config.toml"
+    providers.write_text("[model_providers.lithos]\n", encoding="utf-8")
+    models = tmp_path / "models.toml"
+
+    try:
+        load_multidex_config(providers, models_path=models, require_token=True)
+    except ValueError as exc:
+        assert "experimental_bearer_token" in str(exc)
+    else:
+        raise AssertionError("credential-less lithos provider was accepted")

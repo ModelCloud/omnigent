@@ -534,11 +534,18 @@ async def test_multidex_install_preserves_nonlocal_codex_launch(
     harness = codex_launch_harness
     binary = tmp_path / "multidex"
     binary.touch()
+    registration = multidex_config.MultiDexModelRegistration(
+        model=multidex_config.MULTIDEX_MODEL,
+        provider="multidex",
+        display_name=multidex_config.MULTIDEX_MODEL,
+        base_url="http://127.0.0.1:2120",
+        provider_config={"experimental_bearer_token": "test-multidex-token"},
+    )
     local = multidex_config.MultiDexConfig(
         local_model=multidex_config.MULTIDEX_MODEL,
         provider="multidex",
         base_url="http://127.0.0.1:2120",
-        env_key="BEARER_TOKEN",
+        models=(registration,),
     )
     monkeypatch.setattr(multidex_config, "MULTIDEX_BINARY", binary)
     monkeypatch.setattr(multidex_config, "load_multidex_config", lambda **_kwargs: local)
@@ -574,29 +581,34 @@ async def test_multidex_install_preserves_nonlocal_codex_launch(
     # The registered MultiDex key is available for an in-session model switch;
     # ordinary Codex routing remains on the resolved gateway provider.
     assert build["isolated_env_keys"] == ()
-    assert build["provider_env_keys"] == ("BEARER_TOKEN",)
 
 
 @pytest.mark.asyncio
 async def test_multidex_model_passes_only_declared_bearer_key(
     codex_launch_harness: _LaunchHarness, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The local provider receives its declared key without disabling Codex auth."""
+    """The local provider's config.toml credential leaves Codex auth untouched."""
     from omnigent.harnesses.multidex_native import config as multidex_config
 
     harness = codex_launch_harness
     binary = tmp_path / "multidex"
     binary.touch()
+    registration = multidex_config.MultiDexModelRegistration(
+        model=multidex_config.MULTIDEX_MODEL,
+        provider="multidex",
+        display_name=multidex_config.MULTIDEX_MODEL,
+        base_url="http://127.0.0.1:2120",
+        provider_config={"experimental_bearer_token": "test-multidex-token"},
+    )
     local = multidex_config.MultiDexConfig(
         local_model=multidex_config.MULTIDEX_MODEL,
         provider="multidex",
         base_url="http://127.0.0.1:2120",
-        env_key="BEARER_TOKEN",
+        models=(registration,),
     )
     monkeypatch.setattr(multidex_config, "MULTIDEX_BINARY", binary)
     monkeypatch.setattr(multidex_config, "MULTIDEX_CONFIG_ROOT", tmp_path / "multidex-home")
     monkeypatch.setattr(multidex_config, "load_multidex_config", lambda **_kwargs: local)
-    monkeypatch.setenv("BEARER_TOKEN", "test-multidex-token")
     harness.app_server.client_identity = "test-codex"
     harness.snapshot["model_override"] = local.local_model
 
@@ -604,7 +616,6 @@ async def test_multidex_model_passes_only_declared_bearer_key(
 
     build = harness.builds[0]
     assert build["isolated_env_keys"] == ()
-    assert build["provider_env_keys"] == ("BEARER_TOKEN",)
     assert build["bridge_openai_auth"] is True
     assert any("[model_providers.multidex]" in value for value in build["extra_config_overrides"])
     assert 'model_provider="multidex"' in build["extra_config_overrides"]
