@@ -236,6 +236,15 @@ def _config_toml_provider_endpoint(
         return None, None
     base_url = table.get("base_url")
     token = table.get("experimental_bearer_token")
+    if not isinstance(token, str) or not token:
+        # Built-in gateway providers (``openrouter``, ``lithos``) accept only
+        # ``env_key``, never a literal token, so resolve the name the table
+        # declares from the host environment the probe already runs under.
+        import os
+
+        env_key = table.get("env_key")
+        candidate = os.environ.get(env_key) if isinstance(env_key, str) else None
+        token = candidate if candidate else None
     return (
         base_url if isinstance(base_url, str) else None,
         token if isinstance(token, str) else None,

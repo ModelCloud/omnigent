@@ -5228,6 +5228,7 @@ async def _auto_create_codex_terminal(
         multidex_model_for_selection,
         multidex_model_selected,
         multidex_provider_config_overrides,
+        multidex_provider_env_keys,
         multidex_registration_bearer_token,
         multidex_runtime_provider_id,
     )
@@ -5774,7 +5775,24 @@ async def _auto_create_codex_terminal(
         # Forward the bearer each configured provider declares, or the
         # app-server starts with the model selected but no credential and
         # every turn fails on ``Missing environment variable``.
-        provider_env_keys=_codex_provider_env_keys(_codex_launch.config_profile),
+        #
+        # Two sources, because they cover different providers: the user's
+        # Codex config (``localdex``, OpenRouter…) and the MultiDex
+        # registration. MultiDex's gateway tables live in its own config, and
+        # Codex only accepts ``env_key`` for those built-ins, so their names
+        # never appear in the session config's source file.
+        provider_env_keys=tuple(
+            sorted(
+                {
+                    *_codex_provider_env_keys(_codex_launch.config_profile),
+                    *(
+                        multidex_provider_env_keys(_multidex_config)
+                        if _multidex_config is not None
+                        else ()
+                    ),
+                }
+            )
+        ),
         # MultiDex is one additive provider in a full Codex runtime. Keep the
         # shared official login available so an in-session model switch to an
         # OpenAI model also switches credentials and endpoint correctly.

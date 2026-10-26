@@ -716,6 +716,14 @@ def read_codex_config_provider_endpoint(
     if not isinstance(base_url, str) or not base_url:
         return None
     token = table.get("experimental_bearer_token")
+    if not isinstance(token, str) or not token:
+        # Built-in gateway providers (``openrouter``, ``lithos``) reject a
+        # literal ``experimental_bearer_token``, so their session table names
+        # the credential with ``env_key`` instead. Resolve it from this
+        # process's environment — the same value Codex reads for its own
+        # request — so the latency/health probes stay authenticated.
+        env_key = table.get("env_key")
+        token = os.environ.get(env_key) if isinstance(env_key, str) else None
     return provider, base_url, token if isinstance(token, str) and token else None
 
 
