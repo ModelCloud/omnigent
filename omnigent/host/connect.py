@@ -950,7 +950,9 @@ def _build_runner_env(
             )
 
             multidex_env_vars |= frozenset(
-                item.env_key for item in multidex_models(load_multidex_config(require_token=False))
+                item.env_key
+                for item in multidex_models(load_multidex_config(require_token=False))
+                if item.env_key
             )
         except (OSError, ValueError):
             # A missing or stale optional MultiDex registration must not make
@@ -3611,6 +3613,7 @@ class HostProcess:
                 from omnigent.harnesses.multidex_native.config import (
                     load_multidex_config,
                     multidex_models,
+                    multidex_registration_credential,
                     with_multidex_model_picker_row,
                 )
 
@@ -3622,7 +3625,11 @@ class HostProcess:
                     _logger.warning("MultiDex provider registration is invalid", exc_info=True)
                     multidex = None
                 available_local_models = (
-                    [item for item in multidex_models(multidex) if os.environ.get(item.env_key)]
+                    [
+                        item
+                        for item in multidex_models(multidex)
+                        if multidex_registration_credential(item) is not None
+                    ]
                     if multidex is not None
                     else []
                 )

@@ -5194,6 +5194,7 @@ async def _auto_create_codex_terminal(
         multidex_model_selected,
         multidex_models,
         multidex_provider_config_overrides,
+        multidex_registration_credential,
         multidex_runtime_provider_id,
     )
 
@@ -5213,10 +5214,13 @@ async def _auto_create_codex_terminal(
         )
         selected_local_model = _selected_local_registration is not None
         if selected_local_model:
-            if not os.environ.get(_selected_local_registration.env_key):
+            if multidex_registration_credential(_selected_local_registration) is None:
                 raise ValueError(
                     "MultiDex bearer environment variable "
                     f"{_selected_local_registration.env_key!r} is not set"
+                    if _selected_local_registration.env_key
+                    else "MultiDex provider "
+                    f"{_selected_local_registration.provider!r} has no bearer credential"
                 )
         if selected_local_model:
             _codex_launch = dataclasses.replace(
@@ -5737,7 +5741,11 @@ async def _auto_create_codex_terminal(
         # Keep MultiDex providers available for in-session switching while
         # preserving Codex's normal credentials and cloud auth lifecycle.
         provider_env_keys=(
-            tuple(dict.fromkeys(item.env_key for item in multidex_models(_multidex_config)))
+            tuple(
+                dict.fromkeys(
+                    item.env_key for item in multidex_models(_multidex_config) if item.env_key
+                )
+            )
             if _multidex_config is not None
             else ()
         ),

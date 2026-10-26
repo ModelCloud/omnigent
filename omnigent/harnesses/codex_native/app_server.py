@@ -378,6 +378,53 @@ def _model_provider_override(config_overrides: Sequence[str]) -> str | None:
     return None
 
 
+_PROVIDER_OVERRIDE_CREDENTIAL_FIELDS = frozenset(
+    {"experimental_bearer_token", "auth", "aws", "http_headers", "query_params"}
+)
+
+
+def _credential_free_config_overrides(config_overrides: Sequence[str]) -> list[str]:
+    """Strip static credentials from ``model_providers`` override tables.
+
+    The short-lived model-discovery app-server receives ``-c`` overrides on
+    its command line, so any credential value there is exposed in
+    ``/proc/<pid>/cmdline`` for the process's lifetime. The running
+    app-server avoids this by materializing provider tables into its private
+    config.toml instead; the probe needs no credentials because it only
+    enumerates models, so they can simply be removed.
+    """
+    import tomllib
+
+    sanitized: list[str] = []
+    for override in config_overrides:
+        try:
+            fragment = tomllib.loads(override)
+        except tomllib.TOMLDecodeError:
+            sanitized.append(override)
+            continue
+        providers = fragment.get("model_providers")
+        if not isinstance(providers, dict) or not providers:
+            sanitized.append(override)
+            continue
+        cleaned = {
+            name: (
+                {
+                    key: value
+                    for key, value in table.items()
+                    if key not in _PROVIDER_OVERRIDE_CREDENTIAL_FIELDS
+                }
+                if isinstance(table, dict)
+                else table
+            )
+            for name, table in providers.items()
+        }
+        if cleaned == providers:
+            sanitized.append(override)
+            continue
+        sanitized.append(tomlkit.dumps({"model_providers": cleaned}))
+    return sanitized
+
+
 def _pin_codex_config_model_provider(codex_home: Path, provider: str) -> None:
     """Write the explicit launch provider into the private session config.
 
@@ -1798,7 +1845,7 @@ async def probe_codex_model_options(
         listen_url=listen_url,
         env=env,
         cwd=codex_home,
-        config_overrides=config_overrides,
+        config_overrides=_credential_free_config_overrides(config_overrides),
     )
     client: CodexAppServerClient | None = None
     try:

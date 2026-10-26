@@ -10,6 +10,7 @@ from omnigent.harnesses.multidex_native.config import (
     load_multidex_config,
     multidex_model_for_selection,
     multidex_provider_config_overrides,
+    multidex_registration_credential,
     multidex_runtime_provider_id,
     with_multidex_model_picker_row,
 )
@@ -294,6 +295,28 @@ requires_openai_auth = false
         raise AssertionError("invalid custom provider was accepted")
 
 
+def test_provider_without_any_credential_is_rejected(tmp_path: Path) -> None:
+    providers = tmp_path / "config.toml"
+    providers.write_text(
+        """
+[model_providers.lab]
+base_url = "https://models.example/v1"
+wire_api = "responses"
+requires_openai_auth = false
+""",
+        encoding="utf-8",
+    )
+    models = tmp_path / "models.toml"
+    models.write_text('[models."vendor/model"]\nprovider = "lab"\n', encoding="utf-8")
+
+    try:
+        load_multidex_config(providers, models_path=models, require_token=False)
+    except ValueError as exc:
+        assert "env_key or" in str(exc)
+    else:
+        raise AssertionError("credential-less provider was accepted")
+
+
 def test_multidex_model_registry_rejects_inline_provider_secrets(tmp_path: Path) -> None:
     providers = tmp_path / "config.toml"
     providers.write_text(
@@ -313,6 +336,82 @@ requires_openai_auth = false
     try:
         load_multidex_config(providers, models_path=models, require_token=False)
     except ValueError as exc:
-        assert "must use env_key, not inline credentials" in str(exc)
+        assert "experimental_bearer_token, not inline credentials" in str(exc)
     else:
         raise AssertionError("inline MultiDex provider credentials were accepted")
+
+
+def test_multidex_provider_bearer_token_replaces_env_key(tmp_path: Path) -> None:
+    providers = tmp_path / "config.toml"
+    providers.write_text(
+        """
+[model_providers.lab]
+base_url = "https://models.example/v1"
+experimental_bearer_token = "config-token"
+wire_api = "responses"
+requires_openai_auth = false
+""",
+        encoding="utf-8",
+    )
+    models = tmp_path / "models.toml"
+    models.write_text('[models."vendor/model"]\nprovider = "lab"\n', encoding="utf-8")
+
+    registration = load_multidex_config(providers, models_path=models, require_token=True)
+
+    selected = multidex_model_for_selection(registration, "vendor/model")
+    assert selected is not None
+    assert selected.env_key is None
+    assert multidex_registration_credential(selected) == "config-token"
+
+    provider_config = tomllib.loads(multidex_provider_config_overrides(registration)[0])[
+        "model_providers"
+    ][multidex_runtime_provider_id("lab")]
+    assert provider_config["experimental_bearer_token"] == "config-token"
+    assert "env_key" not in provider_config
+
+
+def test_builtin_provider_bearer_token_drops_default_env_key(tmp_path: Path) -> None:
+    providers = tmp_path / "config.toml"
+    providers.write_text(
+        """
+[model_providers.lithos]
+experimental_bearer_token = "lith-config-token"
+""",
+        encoding="utf-8",
+    )
+    models = tmp_path / "models.toml"
+    registration = load_multidex_config(providers, models_path=models, require_token=True)
+
+    lithos = next(item for item in registration.models if item.provider == "lithos")
+    assert lithos.env_key is None
+    assert multidex_registration_credential(lithos) == "lith-config-token"
+
+    native = tomllib.loads(multidex_provider_config_overrides(registration)[0])["model_providers"][
+        "lithos"
+    ]
+    assert native["experimental_bearer_token"] == "lith-config-token"
+    assert "env_key" not in native
+    assert set(native) <= MULTIDEX_BUILTIN_PROVIDER_OVERRIDE_FIELDS
+
+
+def test_provider_requiring_a_credential_rejects_envless_env_key(tmp_path: Path) -> None:
+    providers = tmp_path / "config.toml"
+    providers.write_text(
+        """
+[model_providers.lab]
+base_url = "https://models.example/v1"
+env_key = "LAB_TOKEN"
+wire_api = "responses"
+requires_openai_auth = false
+""",
+        encoding="utf-8",
+    )
+    models = tmp_path / "models.toml"
+    models.write_text('[models."vendor/model"]\nprovider = "lab"\n', encoding="utf-8")
+
+    try:
+        load_multidex_config(providers, models_path=models, require_token=True)
+    except ValueError as exc:
+        assert "LAB_TOKEN" in str(exc)
+    else:
+        raise AssertionError("unset env_key credential was accepted")

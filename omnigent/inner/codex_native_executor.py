@@ -611,6 +611,7 @@ async def _multidex_runtime_settings_overrides(
         fetch_multidex_runtime_capabilities,
         load_multidex_config,
         multidex_model_for_selection,
+        multidex_registration_credential,
         multidex_runtime_provider_id,
         write_multidex_runtime_capabilities,
     )
@@ -638,9 +639,11 @@ async def _multidex_runtime_settings_overrides(
     if multidex is not None:
         registration = multidex_model_for_selection(multidex, target_model)
         if registration is not None:
-            if not os.environ.get(registration.env_key):
+            if multidex_registration_credential(registration) is None:
                 raise RuntimeError(
                     f"MultiDex bearer environment variable {registration.env_key!r} is not set"
+                    if registration.env_key
+                    else f"MultiDex provider {registration.provider!r} has no bearer credential"
                 )
             if has_model_selection:
                 overrides["modelProvider"] = multidex_runtime_provider_id(registration.provider)
