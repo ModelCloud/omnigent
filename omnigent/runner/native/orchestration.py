@@ -23,7 +23,7 @@ import urllib.parse
 import uuid
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, MutableMapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple, Protocol
+from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, Sequence
 
 from omnigent.util.http_retry import jittered_retry_delay
 from omnigent.util.json_types import JsonObject as _JsonObject
@@ -5256,17 +5256,20 @@ async def _auto_create_codex_terminal(
                     "experimental_bearer_token in config.toml"
                 )
         if selected_local_model:
+            # Retarget the launch onto the local provider while keeping every
+            # provider table the non-local launch resolved, so a later web-UI
+            # switch to an official model can name ``omnigent_provider`` and
+            # still pass the app-server's config validation. See
+            # ``_local_model_config_overrides`` for the failure this prevents.
             _codex_launch = dataclasses.replace(
                 _codex_launch,
-                config_overrides=[
-                    "model_provider="
-                    f"{json.dumps(multidex_runtime_provider_id(_selected_local_registration.provider))}",
-                    f"model={json.dumps(selected_model)}",
-                    # MultiDex consumes native raw reasoning deltas. Its
-                    # OpenAI-compatible endpoint has no separate summary
-                    # stream, so do not request one in parallel.
-                    f"model_reasoning_summary={json.dumps('none')}",
-                ],
+                config_overrides=_local_model_config_overrides(
+                    _codex_launch.config_overrides,
+                    provider=multidex_runtime_provider_id(
+                        _selected_local_registration.provider
+                    ),
+                    model=selected_model,
+                ),
                 model=selected_model,
                 profile=None,
                 config_profile=None,
@@ -7611,6 +7614,54 @@ async def _codex_session_needs_runner_terminal(
     if payload is None:
         return False
     return True
+
+
+def _local_model_config_overrides(
+    existing: Sequence[str],
+    *,
+    provider: str,
+    model: str,
+) -> list[str]:
+    """Retarget a Codex launch onto a MultiDex local provider, keeping tables.
+
+    A session that starts on a local model must still define every provider
+    the *non-local* launch resolved, because the web picker can switch that
+    same session to an official model at any time. Omnigent applies such a
+    switch with ``thread/settings/update`` naming the official provider
+    (``omnigent_provider``), and the Codex app-server validates that name
+    against the ``model_providers`` tables present in this session's private
+    config. Replacing the whole override list therefore made every
+    local -> official switch fail with ``-32600`` ("invalid thread settings
+    override: ... is not in the allowed set a configured model provider")
+    and left the session stuck on its original model.
+
+    Only the *selection* keys are replaced here: ``model_provider``,
+    ``model`` and ``model_reasoning_summary``. Provider table definitions
+    (both dotted ``model_providers.<name>=`` entries and literal
+    ``[model_providers.<name>]`` headers) are carried through verbatim.
+
+    :param existing: The config overrides the non-local launch resolved.
+    :param provider: MultiDex runtime provider id to select, e.g.
+        ``"multidex"``.
+    :param model: Local model id to pin, e.g.
+        ``"deepseek/deepseek-v4.1-flash-1017"``.
+    :returns: Overrides selecting *provider* / *model* with every provider
+        table from *existing* retained.
+    """
+    preserved = [
+        override
+        for override in existing
+        if override.lstrip().startswith(("model_providers.", "[model_providers."))
+    ]
+    return [
+        f"model_provider={json.dumps(provider)}",
+        f"model={json.dumps(model)}",
+        # MultiDex consumes native raw reasoning deltas. Its
+        # OpenAI-compatible endpoint has no separate summary stream, so do
+        # not request one in parallel.
+        f"model_reasoning_summary={json.dumps('none')}",
+        *preserved,
+    ]
 
 
 def _codex_native_model_from_spec(agent_spec: AgentSpec | ResolvedSpec | None) -> str | None:

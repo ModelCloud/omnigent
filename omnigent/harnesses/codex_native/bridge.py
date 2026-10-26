@@ -685,6 +685,32 @@ def read_codex_home_config_model_provider(codex_home: Path) -> str | None:
     return provider if isinstance(provider, str) and provider else None
 
 
+def read_codex_home_config_provider_names(codex_home: Path) -> frozenset[str]:
+    """Return every ``[model_providers.<name>]`` key defined in a session config.
+
+    Codex validates the ``modelProvider`` of a ``thread/settings/update``
+    against the providers present in the config it loaded, and rejects an
+    unknown name with ``-32600`` ("... is not in the allowed set a configured
+    model provider"). Callers that replay a remembered provider name must
+    therefore check it against this set first: a session's remembered
+    ``default_model_provider`` can name a provider its private config no
+    longer defines (for example an ``omnigent_provider`` table that only the
+    non-local launch used to write).
+
+    :param codex_home: Session-private Codex home directory.
+    :returns: Defined provider names; empty when the config is unreadable or
+        declares none (a stock Codex home only has built-ins).
+    """
+    try:
+        data = tomllib.loads((codex_home / "config.toml").read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return frozenset()
+    providers = data.get("model_providers")
+    if not isinstance(providers, dict):
+        return frozenset()
+    return frozenset(name for name in providers if isinstance(name, str) and name)
+
+
 def read_codex_config_provider_endpoint(
     bridge_dir: Path,
 ) -> tuple[str, str, str | None] | None:
