@@ -751,7 +751,7 @@ async def test_rejected_native_switch_restores_saved_model(
 ):
     """An allowed selection must not persist when the live native runner rejects it."""
     bindings = env.catalog.runtime_config["inference"]["harnesses"]
-    bindings["codex-native"] = copy.deepcopy(bindings["codex"])
+    bindings["codex-native"] = bindings.pop("codex")
     agent = await create_test_agent(
         env.client,
         name="codex-native-ui",
