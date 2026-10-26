@@ -29,7 +29,6 @@ function select(
     text: "Considered the options.",
     isStreaming: false,
     duration: 2.5,
-    tps: undefined as number | undefined,
   },
 ) {
   useThinkingPaneStore.getState().open(conversationId, sectionKey);
@@ -57,15 +56,15 @@ describe("ThinkingPane", () => {
     expect(screen.getByText("Considered the options.")).toBeTruthy();
   });
 
-  it("appends the measured reasoning rate when present", () => {
+  it("does not present a completion rate as a selected block's rate", () => {
     select("conv-1", "reasoning:0", {
       text: "body",
       isStreaming: false,
       duration: 2.5,
-      tps: 48.04,
     });
     render(<ThinkingPane conversationId="conv-1" />);
-    expect(screen.getByText("Thought for 2.50s · 48.0 t/s")).toBeTruthy();
+    expect(screen.getByText("Thought for 2.50s")).toBeTruthy();
+    expect(screen.queryByText(/t\/s/)).toBeNull();
   });
 
   it("closes via the close button", () => {
@@ -89,7 +88,6 @@ describe("ThinkingPane", () => {
       text,
       isStreaming: false,
       duration: 2.5,
-      tps: undefined,
     });
     render(<ThinkingPane conversationId="conv-1" />);
     fireEvent.click(screen.getByRole("button", { name: "Copy reasoning trace" }));
@@ -108,7 +106,6 @@ describe("ThinkingPane", () => {
         text: "First thought.\nMore streamed text.",
         isStreaming: true,
         duration: 2.5,
-        tps: undefined,
       }),
     );
     fireEvent.click(screen.getByRole("button", { name: "Copy reasoning trace" }));
@@ -117,7 +114,6 @@ describe("ThinkingPane", () => {
         text: "Another section.",
         isStreaming: false,
         duration: 1,
-        tps: undefined,
       }),
     );
     fireEvent.click(screen.getByRole("button", { name: "Copy reasoning trace" }));
@@ -134,7 +130,6 @@ describe("ThinkingPane", () => {
         text,
         isStreaming: true,
         duration: 0,
-        tps: undefined,
       });
     }
     render(<ThinkingPane conversationId="conv-1" />);

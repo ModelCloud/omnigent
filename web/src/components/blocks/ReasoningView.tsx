@@ -17,11 +17,6 @@ interface ReasoningViewProps {
   text: string;
   isStreaming: boolean;
   duration: number | undefined;
-  /**
-   * Forwarder-measured reasoning generation rate (tokens/sec) for this
-   * turn, appended to the settled trigger label.
-   */
-  reasoningTps?: number;
   /** Conversation owning this section — scopes the pane selection. */
   conversationId?: string;
   /**
@@ -36,7 +31,6 @@ export function ReasoningView({
   text,
   isStreaming,
   duration,
-  reasoningTps,
   conversationId,
   sectionKey,
 }: ReasoningViewProps) {
@@ -60,7 +54,6 @@ export function ReasoningView({
             text,
             isStreaming,
             duration,
-            tps: reasoningTps,
           });
         }
       : undefined;
@@ -73,16 +66,14 @@ export function ReasoningView({
       text,
       isStreaming,
       duration,
-      tps: reasoningTps,
     });
-  }, [conversationId, sectionKey, text, isStreaming, duration, reasoningTps, publish]);
+  }, [conversationId, sectionKey, text, isStreaming, duration, publish]);
 
   return (
     <Reasoning
       isStreaming={isStreaming}
       duration={duration}
       expandable={expandable}
-      tps={reasoningTps}
       onInspect={onInspect}
     >
       <ReasoningTrigger />

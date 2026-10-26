@@ -12,7 +12,6 @@ import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Button } from "@/components/ui/button";
 import { showToast } from "@/components/ui/toast";
 import { copyText } from "@/lib/clipboard";
-import { formatTps } from "@/store/turnTps";
 import { useThinkingPaneStore } from "@/store/thinkingPane";
 
 interface ThinkingPaneProps {
@@ -41,16 +40,14 @@ export function ThinkingPane({ conversationId }: ThinkingPaneProps) {
   if (!isSelected) return null;
 
   const duration = section?.duration;
-  const tps = section?.tps;
-  const tpsSuffix = tps !== undefined ? ` · ${formatTps(tps)} t/s` : "";
   const label = section?.isStreaming ? (
     <Shimmer as="span" duration={1.5}>
       Thinking...
     </Shimmer>
   ) : duration !== undefined ? (
-    `Thought for ${duration.toFixed(2)}s${tpsSuffix}`
+    `Thought for ${duration.toFixed(2)}s`
   ) : (
-    `Thought for a few seconds${tpsSuffix}`
+    "Thought for a few seconds"
   );
 
   return (

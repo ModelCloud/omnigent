@@ -1098,30 +1098,50 @@ describe("session.usage (FLAT envelope)", () => {
     expect(out).toEqual([]);
   });
 
-  it("lifts the turn's generation rates pinned to its response id", () => {
-    // The codex-native forwarder measures delta-stream spans and divides
-    // the turn's token counts — queue/prompt/transfer stay outside.
+  it("lifts the latest completion estimate pinned to its response id", () => {
     const out = parse("session.usage", {
       type: "session.usage",
       conversation_id: "conv_abc",
       response_id: "codex_turn_abc",
-      turn_reasoning_tps: 5.0,
-      turn_output_tps: 20.0,
+      completion_tps: { reasoning: 5.0, output: 20.0 },
     });
     expect(out).toHaveLength(1);
     const ev = out[0] as SessionUsageEvent;
     expect(ev.responseId).toBe("codex_turn_abc");
-    expect(ev.turnReasoningTps).toBe(5.0);
-    expect(ev.turnOutputTps).toBe(20.0);
+    expect(ev.completionTps).toEqual({ reasoning: 5.0, output: 20.0 });
   });
 
-  it("rejects malformed rate fields", () => {
+  it.each([{ reasoning: "fast" }, { output: -1 }, { reasoning: true }, { unknown: 5 }, [], 5])(
+    "rejects malformed rate snapshots: %j",
+    (rates) => {
+      const out = parse("session.usage", {
+        type: "session.usage",
+        conversation_id: "conv_abc",
+        response_id: "codex_turn_abc",
+        completion_tps: rates,
+      });
+      expect(out).toEqual([]);
+    },
+  );
+
+  it("preserves an empty completion snapshot to clear stale rates", () => {
     const out = parse("session.usage", {
       type: "session.usage",
       conversation_id: "conv_abc",
-      turn_reasoning_tps: "fast",
+      response_id: "codex_turn_abc",
+      completion_tps: {},
     });
-    expect(out).toEqual([]);
+    expect((out[0] as SessionUsageEvent).completionTps).toEqual({});
+  });
+
+  it("rejects completion estimates without a response identity", () => {
+    expect(
+      parse("session.usage", {
+        type: "session.usage",
+        conversation_id: "conv_abc",
+        completion_tps: { reasoning: 25 },
+      }),
+    ).toEqual([]);
   });
 
   it("rejects negative context_tokens", () => {
