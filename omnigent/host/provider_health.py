@@ -14,14 +14,23 @@ import httpx
 
 # Pickers refetch the catalog on a poll loop; pings are bounded per provider so
 # repeated catalog answers never turn into repeated requests to a dead
-# endpoint. Results younger than this serve straight from cache.
-PROVIDER_HEALTH_TTL_S = 5.0
+# endpoint. Results younger than this serve straight from cache. The window
+# matches the runner's periodic latency probe so picker polls ride those
+# measurements instead of issuing their own requests.
+PROVIDER_HEALTH_TTL_S = 30.0
 
 _PROBE_TIMEOUT_S = 2.0
 
+# Round-trip samples kept per provider for the rolling average consumers
+# (e.g. turn-rate network compensation) read via ``provider_rtt``.
+_RTT_WINDOW = 8
 
-async def _probe_one(base_url: str, token: str | None) -> bool:
-    """Return True when ``GET {base_url}/models`` succeeds.
+# Cache value: ``(probed_at, online, (recent rtt samples...))``.
+_ProbeEntry = tuple[float, bool, tuple[float, ...]]
+
+
+async def _probe_one(base_url: str, token: str | None) -> tuple[bool, float | None]:
+    """Return ``(online, rtt_seconds)`` for ``GET {base_url}/models``.
 
     The probe always authenticates with the provider's configured bearer
     token when one exists, and then requires a 2xx — a 401/403 flags a wrong
@@ -29,25 +38,80 @@ async def _probe_one(base_url: str, token: str | None) -> bool:
     credential (e.g. ``openai``, authenticated via Codex login rather than a
     bearer) fall back to a reachability check: any HTTP response below 5xx
     means the gateway answers; 5xx and transport failures (DNS, refused,
-    TLS, timeout) count offline either way.
+    TLS, timeout) count offline either way. ``rtt_seconds`` is the full
+    measured request round-trip, or ``None`` when no response arrived.
     """
     headers = {"Authorization": f"Bearer {token}"} if token else None
+    started = time.monotonic()
     try:
         async with httpx.AsyncClient(timeout=_PROBE_TIMEOUT_S, follow_redirects=True) as client:
             response = await client.get(f"{base_url.rstrip('/')}/models", headers=headers)
+        rtt = time.monotonic() - started
     except httpx.HTTPError:
-        return False
+        return False, None
     except Exception:  # noqa: BLE001 - a probe must never break the catalog answer
-        return False
+        return False, None
     if token:
-        return 200 <= response.status_code < 300
-    return response.status_code < 500
+        return 200 <= response.status_code < 300, rtt
+    return response.status_code < 500, rtt
+
+
+def _record_probe(
+    cache: dict[str, _ProbeEntry],
+    provider_id: str,
+    probed_at: float,
+    online: bool,
+    rtt: float | None,
+) -> None:
+    """Store one probe result, appending its RTT to the rolling window."""
+    entry = cache.get(provider_id)
+    samples = list(entry[2]) if entry is not None else []
+    if rtt is not None:
+        samples.append(rtt)
+    cache[provider_id] = (probed_at, online, tuple(samples[-_RTT_WINDOW:]))
+
+
+def provider_rtt(
+    provider_id: str, *, cache: dict[str, _ProbeEntry] | None = None
+) -> tuple[float | None, float | None]:
+    """Return ``(latest_rtt, average_rtt)`` seconds recorded for *provider_id*.
+
+    The average covers the last :data:`_RTT_WINDOW` successful probes.
+    ``(None, None)`` when no response ever landed.
+    """
+    entry = (_SHARED_CACHE if cache is None else cache).get(provider_id)
+    if entry is None or not entry[2]:
+        return None, None
+    samples = entry[2]
+    return samples[-1], sum(samples) / len(samples)
+
+
+async def probe_provider_rtt(
+    provider_id: str,
+    base_url: str,
+    token: str | None,
+    *,
+    cache: dict[str, _ProbeEntry] | None = None,
+    now: float | None = None,
+) -> tuple[bool, float | None, float | None]:
+    """Probe one endpoint immediately, recording its RTT in the shared cache.
+
+    Periodic callers (the runner's 30s latency loop) and picker refetches
+    feed the same samples, so dots and latency data never run separate
+    probes. Returns ``(online, latest_rtt, average_rtt)``.
+    """
+    now = time.monotonic() if now is None else now
+    store = _SHARED_CACHE if cache is None else cache
+    online, rtt = await _probe_one(base_url, token)
+    _record_probe(store, provider_id, now, online, rtt)
+    latest, average = provider_rtt(provider_id, cache=store)
+    return online, latest, average
 
 
 async def probe_provider_health(
     providers: dict[str, tuple[str, str | None]],
     *,
-    cache: dict[str, tuple[float, bool]] | None = None,
+    cache: dict[str, _ProbeEntry] | None = None,
     now: float | None = None,
 ) -> dict[str, str]:
     """Map ``provider_id -> "online" | "offline"`` for each endpoint.
@@ -75,9 +139,9 @@ async def probe_provider_health(
         results = await asyncio.gather(
             *(_probe_one(url, token) for url, token in pending.values())
         )
-        for provider_id, up in zip(pending, results, strict=True):
+        for provider_id, (up, rtt) in zip(pending, results, strict=True):
             if cache is not None:
-                cache[provider_id] = (now, up)
+                _record_probe(cache, provider_id, now, up, rtt)
             health[provider_id] = "online" if up else "offline"
     return health
 
@@ -91,8 +155,10 @@ BUILTIN_PROVIDER_BASE_URLS = {
 }
 
 # Host and runner are separate processes; one TTL cache per process still
-# bounds pings since pickers poll within one daemon lifetime.
-_SHARED_CACHE: dict[str, tuple[float, bool]] = {}
+# bounds pings since pickers poll within one daemon lifetime. The runner's
+# 30s latency loop writes here too, so dots and round-trip data ride the
+# same probes.
+_SHARED_CACHE: dict[str, _ProbeEntry] = {}
 
 
 # Relative serving speed per provider/variant combo; local routing is the 1.0
@@ -179,7 +245,7 @@ def _config_toml_provider_endpoint(
 async def annotate_provider_health(
     rows: list[dict[str, object]],
     *,
-    cache: dict[str, tuple[float, bool]] | None = None,
+    cache: dict[str, _ProbeEntry] | None = None,
 ) -> None:
     """Set ``providerHealth`` on each picker row from a cached endpoint ping.
 

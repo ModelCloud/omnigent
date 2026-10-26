@@ -10,6 +10,7 @@ import { MERMAID_STREAMDOWN_PROPS } from "@/components/ai-elements/MermaidBlock"
 import { useResolvedThemeMode } from "@/components/theme/useResolvedThemeMode";
 
 import { normalizeExplicitMathDelimiters } from "./mathMarkdown";
+import { formatTps } from "@/store/turnTps";
 import { Shimmer } from "./shimmer";
 import { MarkdownErrorBoundary } from "./MarkdownErrorBoundary";
 import { mermaidOptionsForTheme } from "./MermaidError";
@@ -31,6 +32,8 @@ interface ReasoningContextValue {
    * with no chevron, and the content is not rendered at all.
    */
   expandable: boolean;
+  /** Measured reasoning generation rate (tokens/sec) for this turn. */
+  tps: number | undefined;
 }
 
 const ReasoningContext = createContext<ReasoningContextValue | null>(null);
@@ -53,6 +56,11 @@ export type ReasoningProps = ComponentProps<typeof Collapsible> & {
    * non-interactive header (see `ReasoningTrigger` / `ReasoningContent`).
    */
   expandable?: boolean;
+  /**
+   * Measured reasoning generation rate (tokens/sec) for this section's
+   * turn, appended to the settled trigger label (``Thought for Ns · NN t/s``).
+   */
+  tps?: number;
 };
 
 export const Reasoning = memo(
@@ -61,6 +69,7 @@ export const Reasoning = memo(
     isStreaming = false,
     duration,
     expandable = true,
+    tps,
     children,
     ...props
   }: ReasoningProps) => {
@@ -81,8 +90,8 @@ export const Reasoning = memo(
     }, []);
 
     const contextValue = useMemo(
-      () => ({ duration, isOpen, isStreaming, setIsOpen: handleOpenChange, expandable }),
-      [duration, isOpen, isStreaming, handleOpenChange, expandable],
+      () => ({ duration, isOpen, isStreaming, setIsOpen: handleOpenChange, expandable, tps }),
+      [duration, isOpen, isStreaming, handleOpenChange, expandable, tps],
     );
 
     return (
@@ -104,10 +113,10 @@ export const Reasoning = memo(
 );
 
 export type ReasoningTriggerProps = ComponentProps<typeof CollapsibleTrigger> & {
-  getThinkingMessage?: (isStreaming: boolean, duration?: number) => ReactNode;
+  getThinkingMessage?: (isStreaming: boolean, duration?: number, tps?: number) => ReactNode;
 };
 
-const defaultGetThinkingMessage = (isStreaming: boolean, duration?: number) => {
+const defaultGetThinkingMessage = (isStreaming: boolean, duration?: number, tps?: number) => {
   if (isStreaming) {
     // Glimmer the label while the thought is in flight, matching the
     // "Working…" status pill — the shimmer settles into static text once
@@ -118,10 +127,17 @@ const defaultGetThinkingMessage = (isStreaming: boolean, duration?: number) => {
       </Shimmer>
     );
   }
+  // The measured rate arrives on the turn's usage frame — append it when
+  // the forwarder observed the reasoning delta stream.
+  const tpsSuffix = tps !== undefined ? ` · ${formatTps(tps)} t/s` : "";
   if (duration === undefined) {
-    return <span>Thought for a few seconds</span>;
+    return <span>Thought for a few seconds{tpsSuffix}</span>;
   }
-  return <span>Thought for {duration.toFixed(2)}s</span>;
+  return (
+    <span>
+      Thought for {duration.toFixed(2)}s{tpsSuffix}
+    </span>
+  );
 };
 
 export const ReasoningTrigger = memo(
@@ -131,12 +147,14 @@ export const ReasoningTrigger = memo(
     getThinkingMessage = defaultGetThinkingMessage,
     ...props
   }: ReasoningTriggerProps) => {
-    const { isStreaming, isOpen, duration, expandable } = useReasoning();
+    const { isStreaming, isOpen, duration, expandable, tps } = useReasoning();
 
     const label = (
       <>
         <SparklesIcon className="size-3.5 shrink-0" />
-        <span className="min-w-0 flex-1 truncate">{getThinkingMessage(isStreaming, duration)}</span>
+        <span className="min-w-0 flex-1 truncate">
+          {getThinkingMessage(isStreaming, duration, tps)}
+        </span>
         {expandable && (
           <ChevronRightIcon
             className={cn(

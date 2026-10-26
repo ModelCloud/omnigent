@@ -9,9 +9,14 @@ interface ReasoningViewProps {
   text: string;
   isStreaming: boolean;
   duration: number | undefined;
+  /**
+   * Forwarder-measured reasoning generation rate (tokens/sec) for this
+   * turn, appended to the settled trigger label.
+   */
+  reasoningTps?: number;
 }
 
-export function ReasoningView({ text, isStreaming, duration }: ReasoningViewProps) {
+export function ReasoningView({ text, isStreaming, duration, reasoningTps }: ReasoningViewProps) {
   // A reasoning section is only worth expanding when it has something to
   // show. While streaming we keep it expandable even before the first
   // chunk lands (the "Thinking..." shimmer is live feedback, and content
@@ -19,7 +24,12 @@ export function ReasoningView({ text, isStreaming, duration }: ReasoningViewProp
   // with no chunks) renders as a flat header with no dead expand affordance.
   const expandable = isStreaming || text.trim().length > 0;
   return (
-    <Reasoning isStreaming={isStreaming} duration={duration} expandable={expandable}>
+    <Reasoning
+      isStreaming={isStreaming}
+      duration={duration}
+      expandable={expandable}
+      tps={reasoningTps}
+    >
       <ReasoningTrigger />
       <ReasoningContent>{text}</ReasoningContent>
     </Reasoning>

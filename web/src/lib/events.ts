@@ -564,6 +564,12 @@ export interface SessionStatusEvent {
  * - `usageByModel`: per-model breakdown of the subtree usage, keyed by
  *   raw harness model id; absent on a broadcast carrying no per-model
  *   change (the client keeps its cached map).
+ * - `responseId`: the turn's response id the rate fields belong to,
+ *   so the UI can pin them to that turn's reasoning/assistant blocks.
+ * - `turnReasoningTps` / `turnOutputTps`: measured generation rate in
+ *   tokens/sec for the turn's reasoning and visible output
+ *   (delta-stream spans — queue, prompt processing and transfer are
+ *   excluded). Absent when unmeasured.
  */
 export interface SessionUsageEvent {
   type: "session_usage";
@@ -572,6 +578,9 @@ export interface SessionUsageEvent {
   contextWindow?: number;
   totalCostUsd?: number;
   usageByModel?: Record<string, ModelUsage>;
+  responseId?: string;
+  turnReasoningTps?: number;
+  turnOutputTps?: number;
 }
 
 /**

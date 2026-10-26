@@ -635,11 +635,32 @@ export function parseEvent(rawType: string, data: Record<string, unknown>): Stre
     if (usageByModel === null) {
       return null;
     }
+    // Per-turn generation rates (tokens/sec) pinned to a response id.
+    const parseRate = (key: string): number | null | undefined => {
+      const v = raw[key];
+      if (v === undefined || v === null) return undefined;
+      if (typeof v !== "number" || !Number.isFinite(v) || v < 0) return null;
+      return v;
+    };
+    const turnReasoningTps = parseRate("turn_reasoning_tps");
+    const turnOutputTps = parseRate("turn_output_tps");
+    if (turnReasoningTps === null || turnOutputTps === null) {
+      return null;
+    }
+    const rawResponseId = raw.response_id;
+    let responseId: string | undefined;
+    if (rawResponseId !== undefined && rawResponseId !== null) {
+      if (typeof rawResponseId !== "string" || !rawResponseId) return null;
+      responseId = rawResponseId;
+    }
     if (
       contextTokens === undefined &&
       contextWindow === undefined &&
       totalCostUsd === undefined &&
-      usageByModel === undefined
+      usageByModel === undefined &&
+      responseId === undefined &&
+      turnReasoningTps === undefined &&
+      turnOutputTps === undefined
     ) {
       return null;
     }
@@ -650,6 +671,9 @@ export function parseEvent(rawType: string, data: Record<string, unknown>): Stre
       ...(contextWindow !== undefined ? { contextWindow } : {}),
       ...(totalCostUsd !== undefined ? { totalCostUsd } : {}),
       ...(usageByModel !== undefined ? { usageByModel } : {}),
+      ...(responseId !== undefined ? { responseId } : {}),
+      ...(turnReasoningTps !== undefined ? { turnReasoningTps } : {}),
+      ...(turnOutputTps !== undefined ? { turnOutputTps } : {}),
     } satisfies SessionUsageEvent;
   }
   if (eventType === "session.model") {

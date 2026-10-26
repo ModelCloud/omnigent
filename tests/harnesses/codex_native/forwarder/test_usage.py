@@ -60,3 +60,90 @@ async def test_usage_coalescer_unseeded_omits_model() -> None:
     assert len(client.posts) == 1
     _url, body = client.posts[0]
     assert "model" not in body["data"]
+
+
+# ── per-turn generation rates (tokens/sec) ──────────────────────────────
+
+
+def _usage_frame() -> dict[str, object]:
+    return {
+        "turnId": "turn_abc",
+        "tokenUsage": {
+            "total": {"inputTokens": 1000, "outputTokens": 200},
+            "last": {
+                "inputTokens": 900,
+                "outputTokens": 120,
+                "reasoningOutputTokens": 30,
+            },
+        },
+    }
+
+
+def test_turn_token_rate_fields_computes_generation_rates() -> None:
+    """Rates divide the turn's token counts by the measured delta spans.
+
+    Reasoning tokens are a subset of ``outputTokens``, so the visible-output
+    rate subtracts them; spans come from the first→last delta bounds.
+    """
+    state = fwd._CodexForwarderState()
+    state.turn_reasoning_first_at = 10.0
+    state.turn_reasoning_last_at = 16.0  # 30 reasoning tok / 6s = 5.0 t/s
+    state.turn_output_first_at = 20.0
+    state.turn_output_last_at = 29.0  # (120 - 30) tok / 9s = 10.0 t/s
+
+    fields = fwd._turn_token_rate_fields(_usage_frame(), state)
+
+    assert fields == {"turn_reasoning_tps": 5.0, "turn_output_tps": 10.0}
+
+
+def test_turn_token_rate_fields_omits_unmeasurable_channels() -> None:
+    """No rate without BOTH tokens and a positive measured span."""
+    state = fwd._CodexForwarderState()
+    # No deltas observed at all.
+    assert fwd._turn_token_rate_fields(_usage_frame(), state) == {}
+
+    state.turn_output_first_at = 20.0
+    state.turn_output_last_at = 20.0  # zero-width span (single instant delta)
+    assert fwd._turn_token_rate_fields(_usage_frame(), state) == {}
+
+
+def test_turn_token_rate_fields_subtracts_probed_rtt() -> None:
+    """The probed round-trip is removed from the measured delta span."""
+    state = fwd._CodexForwarderState()
+    state.turn_output_first_at = 20.0
+    state.turn_output_last_at = 29.0
+    state.provider_rtt_seconds = 3.0  # 90 tok / (9s - 3s) = 15.0 t/s
+
+    fields = fwd._turn_token_rate_fields(_usage_frame(), state)
+
+    assert fields["turn_output_tps"] == 15.0
+
+
+def test_turn_token_rate_fields_drops_span_fully_consumed_by_rtt() -> None:
+    """An RTT at least as wide as the span leaves nothing measurable."""
+    state = fwd._CodexForwarderState()
+    state.turn_output_first_at = 20.0
+    state.turn_output_last_at = 21.0
+    state.provider_rtt_seconds = 5.0
+
+    assert fwd._turn_token_rate_fields(_usage_frame(), state) == {}
+
+
+@pytest.mark.asyncio
+async def test_usage_post_carries_response_id_and_rates() -> None:
+    """The usage post pins rates to the turn's response id."""
+    client = _RecordingClient()
+    coalescer = fwd._SessionUsageCoalescer(client, "conv_1")
+    state = fwd._CodexForwarderState()
+    state.turn_output_first_at = 100.0
+    state.turn_output_last_at = 104.5  # 90 visible tok / 4.5s = 20 t/s
+
+    fwd._handle_usage_update(coalescer, _usage_frame(), state)
+    await coalescer.flush()
+
+    assert len(client.posts) == 1
+    _url, body = client.posts[0]
+    data = body["data"]
+    assert data["response_id"] == "codex_turn_abc"
+    assert data["turn_output_tps"] == 20.0
+    assert "turn_reasoning_tps" not in data  # no reasoning deltas observed

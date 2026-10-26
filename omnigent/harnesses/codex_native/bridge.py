@@ -685,6 +685,40 @@ def read_codex_home_config_model_provider(codex_home: Path) -> str | None:
     return provider if isinstance(provider, str) and provider else None
 
 
+def read_codex_config_provider_endpoint(
+    bridge_dir: Path,
+) -> tuple[str, str, str | None] | None:
+    """Return ``(provider, base_url, bearer_token)`` for the session's pinned provider.
+
+    Follows ``model_provider`` in the session's private ``config.toml`` to its
+    ``[model_providers.<name>]`` table and extracts ``base_url`` and
+    ``experimental_bearer_token`` — the credentials materialized for the
+    session, never the process env. Re-read per call so an in-TUI provider
+    switch picks up on the next probe.
+
+    :param bridge_dir: Native Codex bridge directory.
+    :returns: ``(provider_id, base_url, token_or_None)``, or ``None`` when
+        the config is unreadable or names no usable provider endpoint.
+    """
+    codex_home = codex_home_for_bridge_dir(bridge_dir)
+    try:
+        data = tomllib.loads((codex_home / "config.toml").read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return None
+    provider = data.get("model_provider")
+    if not isinstance(provider, str) or not provider:
+        return None
+    providers = data.get("model_providers")
+    table = providers.get(provider) if isinstance(providers, dict) else None
+    if not isinstance(table, dict):
+        return None
+    base_url = table.get("base_url")
+    if not isinstance(base_url, str) or not base_url:
+        return None
+    token = table.get("experimental_bearer_token")
+    return provider, base_url, token if isinstance(token, str) and token else None
+
+
 def read_codex_config_effort(bridge_dir: Path) -> str | None:
     """
     Read the active reasoning effort from this session's Codex ``config.toml``.

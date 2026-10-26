@@ -1098,6 +1098,32 @@ describe("session.usage (FLAT envelope)", () => {
     expect(out).toEqual([]);
   });
 
+  it("lifts the turn's generation rates pinned to its response id", () => {
+    // The codex-native forwarder measures delta-stream spans and divides
+    // the turn's token counts — queue/prompt/transfer stay outside.
+    const out = parse("session.usage", {
+      type: "session.usage",
+      conversation_id: "conv_abc",
+      response_id: "codex_turn_abc",
+      turn_reasoning_tps: 5.0,
+      turn_output_tps: 20.0,
+    });
+    expect(out).toHaveLength(1);
+    const ev = out[0] as SessionUsageEvent;
+    expect(ev.responseId).toBe("codex_turn_abc");
+    expect(ev.turnReasoningTps).toBe(5.0);
+    expect(ev.turnOutputTps).toBe(20.0);
+  });
+
+  it("rejects malformed rate fields", () => {
+    const out = parse("session.usage", {
+      type: "session.usage",
+      conversation_id: "conv_abc",
+      turn_reasoning_tps: "fast",
+    });
+    expect(out).toEqual([]);
+  });
+
   it("rejects negative context_tokens", () => {
     // The context ring computes `tokensUsed / contextWindow`; a negative
     // numerator would silently misreport context occupancy as 0%.
