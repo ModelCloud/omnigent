@@ -7871,14 +7871,10 @@ export function handleSessionEvent(event: StreamEvent, streamConversationId?: st
       if (event.usageByModel !== undefined) {
         patch.sessionUsageByModel = event.usageByModel;
       }
-      if (
-        event.responseId !== undefined &&
-        (event.turnReasoningTps !== undefined || event.turnOutputTps !== undefined)
-      ) {
-        useTurnTpsStore.getState().record(event.conversationId, event.responseId, {
-          reasoning: event.turnReasoningTps,
-          output: event.turnOutputTps,
-        });
+      if (event.responseId !== undefined && event.completionTps !== undefined) {
+        useTurnTpsStore
+          .getState()
+          .record(event.conversationId, event.responseId, event.completionTps);
       }
       if (event.totalCostUsd !== undefined || event.usageByModel !== undefined) {
         const entry =

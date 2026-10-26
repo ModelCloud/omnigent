@@ -109,8 +109,7 @@ interface BlockRendererProps {
   defaultExpanded?: boolean;
   /**
    * Session + response this bubble belongs to, used to look up the
-   * forwarder-measured turn rates (tokens/sec) rendered on the
-   * reasoning header and the worked fold.
+   * latest completion's estimated rates, rendered once outside work folds.
    */
   conversationId?: string;
   responseId?: string;
@@ -223,6 +222,21 @@ export function BlockRenderer({
       ? s.byKey[turnTpsKey(conversationId, responseId)]
       : undefined,
   );
+  const rateLabels = [
+    ...(turnTps?.reasoning !== undefined ? [`reasoning ~${formatTps(turnTps.reasoning)} t/s`] : []),
+    ...(turnTps?.output !== undefined ? [`output ~${formatTps(turnTps.output)} t/s`] : []),
+  ];
+  const rateSummary =
+    !continued && rateLabels.length > 0 ? (
+      <div
+        key="completion-tps"
+        data-testid="completion-tps"
+        className="text-ui text-muted-foreground"
+        title="API token counts divided by this completion's observed stream span, adjusted by the health-check RTT. Buffering can inflate this estimate; this is not a per-block or exact server generation rate."
+      >
+        Latest completion estimate: {rateLabels.join(" · ")}
+      </div>
+    ) : null;
   const { isOwnTurnLive, possiblyLive, isTurnLive } = turnLiveness({
     sessionStatus,
     turnLifecycle,
@@ -305,7 +319,6 @@ export function BlockRenderer({
           ...renderSequence(segment.items, {
             liveEdge: false,
             indexBase: segment.startIndex,
-            reasoningTps: turnTps?.reasoning,
             onRetryError,
             conversationId,
           }),
@@ -322,7 +335,6 @@ export function BlockRenderer({
             false,
             false,
             onRetryError,
-            turnTps?.reasoning,
             conversationId,
           ),
         );
@@ -333,30 +345,30 @@ export function BlockRenderer({
         <TurnWorkedFold
           key={`worked:${segment.startIndex}`}
           workedForS={workRunCount === 1 ? workedForS : undefined}
-          outputTps={turnTps?.output}
           animateCollapse={animateCollapse}
           defaultOpen={defaultExpanded}
         >
           {renderSequence(segment.items, {
             liveEdge: false,
             indexBase: segment.startIndex,
-            reasoningTps: turnTps?.reasoning,
             onRetryError,
             conversationId,
           })}
         </TurnWorkedFold>,
       );
     }
-    return rendered;
+    return [...rendered, rateSummary];
   }
 
-  return renderSequence(items, {
-    liveEdge: isTurnLive,
-    suppressReasoningDuration: showsWorking,
-    reasoningTps: turnTps?.reasoning,
-    onRetryError,
-    conversationId,
-  });
+  return [
+    ...renderSequence(items, {
+      liveEdge: isTurnLive,
+      suppressReasoningDuration: showsWorking,
+      onRetryError,
+      conversationId,
+    }),
+    rateSummary,
+  ];
 }
 
 /**
@@ -372,7 +384,6 @@ function renderSequence(
     liveEdge,
     suppressReasoningDuration = false,
     indexBase = 0,
-    reasoningTps,
     onRetryError,
     conversationId,
   }: TurnSequenceOptions,
@@ -440,7 +451,6 @@ function renderSequence(
         suppressReasoningDuration,
         followsText,
         onRetryError,
-        reasoningTps,
         conversationId,
       ),
     );
@@ -454,8 +464,6 @@ interface TurnSequenceOptions {
   liveEdge: boolean;
   suppressReasoningDuration?: boolean;
   indexBase?: number;
-  /** Measured reasoning rate for the turn, in tokens/sec. */
-  reasoningTps?: number;
   onRetryError?: BlockRendererProps["onRetryError"];
   /** Conversation these items belong to — scopes thinking-pane selections. */
   conversationId?: string;
@@ -558,23 +566,16 @@ function isProvisionalTrace(items: RenderItem[]): boolean {
  */
 function TurnWorkedFold({
   workedForS,
-  outputTps,
   animateCollapse,
   defaultOpen,
   children,
 }: {
   workedForS?: number;
-  /** Measured assistant-output rate for this turn, in tokens/sec. */
-  outputTps?: number;
   animateCollapse: boolean;
   defaultOpen: boolean;
   children: ReactNode;
 }) {
-  const tpsSuffix = outputTps !== undefined ? ` · ${formatTps(outputTps)} t/s` : "";
-  const label =
-    workedForS !== undefined
-      ? `Worked for ${formatWorkedFor(workedForS)}${tpsSuffix}`
-      : `Worked${tpsSuffix}`;
+  const label = workedForS !== undefined ? `Worked for ${formatWorkedFor(workedForS)}` : "Worked";
   const [open, setOpen] = useState(animateCollapse || defaultOpen);
   const userChangedOpenRef = useRef(false);
   useLayoutEffect(() => {
@@ -791,7 +792,6 @@ function renderItem(
   suppressReasoningDuration = false,
   followsText = false,
   onRetryError?: BlockRendererProps["onRetryError"],
-  reasoningTps?: number,
   conversationId?: string,
 ): ReactNode {
   const key = keyFor(item, index);
@@ -828,7 +828,6 @@ function renderItem(
           text={item.text}
           isStreaming={isReasoningStreaming}
           duration={suppressReasoningDuration ? undefined : item.duration}
-          reasoningTps={reasoningTps}
           conversationId={conversationId}
           sectionKey={key}
         />

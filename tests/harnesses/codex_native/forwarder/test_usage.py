@@ -62,7 +62,7 @@ async def test_usage_coalescer_unseeded_omits_model() -> None:
     assert "model" not in body["data"]
 
 
-# ── per-turn generation rates (tokens/sec) ──────────────────────────────
+# ── latest-completion estimates (tokens/sec) ───────────────────────────
 
 
 def _usage_frame() -> dict[str, object]:
@@ -79,8 +79,8 @@ def _usage_frame() -> dict[str, object]:
     }
 
 
-def test_turn_token_rate_fields_computes_generation_rates() -> None:
-    """Rates divide the turn's token counts by the measured delta spans.
+def test_completion_token_rate_fields_computes_estimates() -> None:
+    """Rates divide one completion's token counts by its delta spans.
 
     Reasoning tokens are a subset of ``outputTokens``, so the visible-output
     rate subtracts them; spans come from the first→last delta bounds.
@@ -91,42 +91,43 @@ def test_turn_token_rate_fields_computes_generation_rates() -> None:
     state.turn_output_first_at = 20.0
     state.turn_output_last_at = 29.0  # (120 - 30) tok / 9s = 10.0 t/s
 
-    fields = fwd._turn_token_rate_fields(_usage_frame(), state)
+    fields = fwd._completion_token_rate_fields(_usage_frame(), state)
 
-    assert fields == {"turn_reasoning_tps": 5.0, "turn_output_tps": 10.0}
+    assert fields == {"completion_tps": {"reasoning": 5.0, "output": 10.0}}
+    assert state.turn_reasoning_first_at is None
+    assert state.turn_output_last_at is None
 
 
-def test_turn_token_rate_fields_omits_unmeasurable_channels() -> None:
+@pytest.mark.parametrize("span", [None, 0.0])
+def test_completion_token_rate_fields_clears_unmeasurable_channels(span: float | None) -> None:
     """No rate without BOTH tokens and a positive measured span."""
     state = fwd._CodexForwarderState()
-    # No deltas observed at all.
-    assert fwd._turn_token_rate_fields(_usage_frame(), state) == {}
-
-    state.turn_output_first_at = 20.0
-    state.turn_output_last_at = 20.0  # zero-width span (single instant delta)
-    assert fwd._turn_token_rate_fields(_usage_frame(), state) == {}
+    if span is not None:
+        state.turn_output_first_at = 20.0
+        state.turn_output_last_at = 20.0 + span
+    assert fwd._completion_token_rate_fields(_usage_frame(), state) == {"completion_tps": {}}
 
 
-def test_turn_token_rate_fields_subtracts_probed_rtt() -> None:
+def test_completion_token_rate_fields_subtracts_probed_rtt() -> None:
     """The probed round-trip is removed from the measured delta span."""
     state = fwd._CodexForwarderState()
     state.turn_output_first_at = 20.0
     state.turn_output_last_at = 29.0
     state.provider_rtt_seconds = 3.0  # 90 tok / (9s - 3s) = 15.0 t/s
 
-    fields = fwd._turn_token_rate_fields(_usage_frame(), state)
+    fields = fwd._completion_token_rate_fields(_usage_frame(), state)
 
-    assert fields["turn_output_tps"] == 15.0
+    assert fields == {"completion_tps": {"output": 15.0}}
 
 
-def test_turn_token_rate_fields_drops_span_fully_consumed_by_rtt() -> None:
+def test_completion_token_rate_fields_drops_span_fully_consumed_by_rtt() -> None:
     """An RTT at least as wide as the span leaves nothing measurable."""
     state = fwd._CodexForwarderState()
     state.turn_output_first_at = 20.0
     state.turn_output_last_at = 21.0
     state.provider_rtt_seconds = 5.0
 
-    assert fwd._turn_token_rate_fields(_usage_frame(), state) == {}
+    assert fwd._completion_token_rate_fields(_usage_frame(), state) == {"completion_tps": {}}
 
 
 @pytest.mark.asyncio
@@ -145,5 +146,89 @@ async def test_usage_post_carries_response_id_and_rates() -> None:
     _url, body = client.posts[0]
     data = body["data"]
     assert data["response_id"] == "codex_turn_abc"
-    assert data["turn_output_tps"] == 20.0
-    assert "turn_reasoning_tps" not in data  # no reasoning deltas observed
+    assert data["completion_tps"] == {"output": 20.0}
+
+
+@pytest.mark.asyncio
+async def test_successive_completions_have_independent_rates_and_keep_response_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _RecordingClient()
+    coalescer = fwd._SessionUsageCoalescer(client, "conv_1")
+    state = fwd._CodexForwarderState()
+    times = iter([10.0, 16.0, 100.0, 103.0])
+    params = {"turnId": "turn_abc", "delta": "trace"}
+
+    for index in range(2):
+        with monkeypatch.context() as clock:
+            clock.setattr(fwd.time, "monotonic", lambda: next(times))
+            for _ in range(2):
+                fwd._note_completion_rate_delta(params, state, reasoning=True)
+        usage = _usage_frame()
+        if index:
+            usage["tokenUsage"]["total"]["outputTokens"] = 320
+        fwd._handle_usage_update(coalescer, usage, state)
+        await coalescer.flush()
+
+    assert [body["data"]["completion_tps"] for _, body in client.posts] == [
+        {"reasoning": 5.0},
+        {"reasoning": 10.0},
+    ]
+    assert all(body["data"]["response_id"] == "codex_turn_abc" for _, body in client.posts)
+
+
+def test_duplicate_usage_does_not_consume_the_next_completion_window() -> None:
+    state = fwd._CodexForwarderState()
+    fwd._completion_token_rate_fields(_usage_frame(), state)
+    state.turn_reasoning_first_at = 100.0
+    state.turn_reasoning_last_at = 103.0
+    assert fwd._completion_token_rate_fields(_usage_frame(), state) == {}
+    assert state.turn_reasoning_first_at == 100.0
+
+
+def test_new_turn_discards_previous_timing_and_rejects_old_usage() -> None:
+    state = fwd._CodexForwarderState()
+    state.turn_reasoning_first_at = 10.0
+    state.turn_output_last_at = 50.0
+    fwd._reset_completion_rate_window(state, "turn_new")
+    assert state.turn_reasoning_first_at is None
+    assert state.turn_output_last_at is None
+    assert fwd._completion_token_rate_fields(_usage_frame(), state) == {}
+
+
+@pytest.mark.asyncio
+async def test_equal_estimates_on_different_turns_keep_both_identities() -> None:
+    client = _RecordingClient()
+    coalescer = fwd._SessionUsageCoalescer(client, "conv_1")
+    state = fwd._CodexForwarderState()
+    for turn_id in ("turn_a", "turn_b"):
+        fwd._reset_completion_rate_window(state, turn_id)
+        state.turn_reasoning_first_at = 10.0
+        state.turn_reasoning_last_at = 16.0
+        usage = _usage_frame()
+        usage["turnId"] = turn_id
+        fwd._handle_usage_update(coalescer, usage, state)
+        await coalescer.flush()
+    assert [body["data"]["response_id"] for _, body in client.posts] == [
+        "codex_turn_a",
+        "codex_turn_b",
+    ]
+    assert all(body["data"]["completion_tps"] == {"reasoning": 5.0} for _, body in client.posts)
+
+
+def test_empty_or_unscoped_deltas_do_not_create_timing() -> None:
+    state = fwd._CodexForwarderState()
+    for params in ({"delta": "unscoped"}, {"turnId": "turn_abc", "delta": ""}):
+        fwd._note_completion_rate_delta(params, state, reasoning=True)
+    assert state.turn_reasoning_first_at is None
+
+
+def test_missing_completion_tokens_clears_rates_and_timing() -> None:
+    state = fwd._CodexForwarderState()
+    state.turn_reasoning_first_at = 10.0
+    state.turn_reasoning_last_at = 16.0
+    assert fwd._completion_token_rate_fields(
+        {"turnId": "turn_abc", "tokenUsage": {"total": {"outputTokens": 100}}},
+        state,
+    ) == {"completion_tps": {}}
+    assert state.turn_reasoning_first_at is None

@@ -13,7 +13,8 @@ the header menu), and each place is a separate entry point.
   conversation to split left/right or top/bottom with a hover preview. Up to four
   independent chats fit in two rows and two columns. Grids live at `/grid/<id>`
   and are saved only in this browser, scoped to server and user.
-- `pin`: pinned sessions move to their own section and back.
+- `pin`: pinned sessions move to their own section and back. Unpinning asks
+  Yes/No, with No focused by default; canceling keeps the session pinned.
 - `pin-undo`: unpinning shows an Undo toast that re-pins the session into its
   old Pinned slot. Dragging a pinned row into a folder unpins it without one.
 - `pin-reorder`: drag a pinned row onto another pinned row to change the Pinned
@@ -400,7 +401,10 @@ plain `uv run pytest`, which starts a private server for the test.
   `grid_sessions_display_ui` on the isolated server. Also check a collapsed sidebar manually.
 
 - **`pin`:**
-  `tests/e2e_ui/sessions/test_sidebar_pin_unpin.py::test_unpin_moves_session_back_to_recent`
+  `tests/e2e_ui/sessions/test_sidebar_pin_unpin.py::test_unpin_moves_session_back_to_recent`.
+  Cancel the confirmation first and verify the session stays pinned, then
+  accept it. Check the same default-No confirmation from the row/context menu,
+  header menu, and dragging a pinned session into a project or the flat list.
 - **`pin-undo`, sidebar row:**
   `tests/e2e_ui/sessions/test_sidebar_pin_unpin.py::test_undo_unpin_restores_pinned_slot`.
   The row menu (mobile) and header menu Unpin have web unit coverage only:

@@ -345,10 +345,7 @@ class _CodexChildStream:
                 return False
             self.active_turn_id = turn_id
             self.state.reasoning_stream_item_id = None
-            self.state.turn_reasoning_first_at = None
-            self.state.turn_reasoning_last_at = None
-            self.state.turn_output_first_at = None
-            self.state.turn_output_last_at = None
+            _reset_completion_rate_window(self.state, turn_id)
         elif method in {"turn/completed", "turn/failed"}:
             if turn_id is not None:
                 if turn_id in self.terminal_turn_ids or self.active_turn_id not in {None, turn_id}:
@@ -515,9 +512,9 @@ class _CodexForwarderState:
         repeatedly as edits land; only the newest diff is kept and it is
         flushed once at the terminal turn boundary (see
         :func:`_handle_turn_diff_updated` / :func:`_flush_turn_diff`).
-    :param turn_reasoning_first_at: ``monotonic`` timestamp of the turn's
+    :param turn_reasoning_first_at: ``monotonic`` timestamp of the completion's
         first reasoning delta (paired with ``turn_reasoning_last_at``).
-    :param turn_output_first_at: ``monotonic`` timestamp of the turn's
+    :param turn_output_first_at: ``monotonic`` timestamp of the completion's
         first assistant-message delta (paired with ``turn_output_last_at``).
     """
 
@@ -583,18 +580,15 @@ class _CodexForwarderState:
     # chunks (for example, ``TThe usehe``).  Preserve summary-only providers,
     # but ignore a summary when its raw counterpart has already arrived.
     raw_reasoning_item_ids: set[str] = field(default_factory=set)
-    # Monotonic bounds of this turn's reasoning- and assistant-output delta
-    # streams. The first→last delta span covers generation only (queue wait,
-    # prompt processing and network transfer sit outside it), which is what
-    # the tokens/sec display divides into the turn's token counts. Reset at
-    # each ``turn/started``.
+    # Bounds for ONE completion, consumed by its tokenUsage.last receipt.
+    # Arrival timing is only an estimate: upstream buffering is unknown.
     turn_reasoning_first_at: float | None = None
     turn_reasoning_last_at: float | None = None
     turn_output_first_at: float | None = None
     turn_output_last_at: float | None = None
-    # Latest + rolling-average provider round-trip (seconds) from the
-    # periodic health probe; latest is subtracted from delta spans so rates
-    # exclude network transfer.
+    completion_rate_turn_id: str | None = None
+    completion_usage_signature: tuple[str, int, int] | None = None
+    # Shared health-probe RTT adjusts the estimate, not exact server timing.
     provider_rtt_seconds: float | None = None
     provider_rtt_avg_seconds: float | None = None
     turn_diff_by_turn: dict[str, str] = field(default_factory=dict)
@@ -1811,15 +1805,15 @@ class _SessionUsageCoalescer:
         """
         self._client = client
         self._session_id = session_id
-        self._pending: dict[str, int | float | str] = {}
-        self._last_posted: dict[str, int | float | str] = {}
+        self._pending: _JsonObject = {}
+        self._last_posted: _JsonObject = {}
         self._model: str | None = model
 
     def record(
         self,
         params: _JsonObject,
         model: str | None = None,
-        extra: dict[str, float] | None = None,
+        extra: _JsonObject | None = None,
     ) -> None:
         """
         Record the latest usage values from one Codex notification.
@@ -1840,9 +1834,11 @@ class _SessionUsageCoalescer:
         data = _session_usage_data_from_params(params)
         if data is None:
             return
-        if extra:
-            data.update(extra)
+        if data.get("response_id") != self._pending.get("response_id"):
+            self._pending.pop("completion_tps", None)
         self._pending.update(data)
+        if extra:
+            self._pending.update(extra)
 
     async def flush(self) -> None:
         """
@@ -1870,6 +1866,11 @@ class _SessionUsageCoalescer:
                     data[key] = self._pending[key]
                 elif key in self._last_posted:
                     data[key] = self._last_posted[key]
+        # A changed sample must keep its response identity even mid-turn.
+        if data.keys() & {"completion_tps", "response_id"} and "completion_tps" in self._pending:
+            data["completion_tps"] = self._pending["completion_tps"]
+        if "completion_tps" in data and "response_id" in self._pending:
+            data["response_id"] = self._pending["response_id"]
         # Attach the model to every token-bearing post (not via the
         # changed-keys dedup, so it rides along even when only token
         # counts changed) — the server reprices cumulative tokens into
@@ -2401,7 +2402,7 @@ async def _provider_rtt_probe_loop(
     Times an authenticated ``GET {base_url}/models`` via the same probe
     machinery that drives the picker's health dots and keeps the latest +
     rolling-average RTT on ``forwarder_state`` so
-    :func:`_turn_token_rate_fields` can subtract measured network transfer
+    :func:`_completion_token_rate_fields` can adjust estimates using the probe RTT
     from each delta span. The endpoint re-resolves from config.toml every
     pass so an in-TUI ``/model`` provider switch applies on the next probe.
     A failed probe keeps the last measurement rather than zeroing it — a
@@ -4018,6 +4019,12 @@ async def _maybe_handle_turn_event(
             if delta_coalescer is not None:
                 await delta_coalescer.flush()
             await _handle_turn_started(client, session_id, bridge_dir, params)
+            if forwarder_state is not None:
+                turn = params.get("turn")
+                _reset_completion_rate_window(
+                    forwarder_state,
+                    _turn_id_from_payload(turn) or _turn_id_from_payload(params),
+                )
             if forwarder_state is not None and bridge_dir is not None:
                 # A new turn opens a fresh reasoning block: the next reasoning
                 # delta must emit ``response.reasoning.started`` again.
@@ -4144,11 +4151,7 @@ async def _maybe_handle_delta_event(
     if method == "item/agentMessage/delta":
         if delta_coalescer is None:
             raise RuntimeError("Codex assistant delta handling requires a text-delta coalescer")
-        if forwarder_state is not None:
-            now = time.monotonic()
-            if forwarder_state.turn_output_first_at is None:
-                forwarder_state.turn_output_first_at = now
-            forwarder_state.turn_output_last_at = now
+        _note_completion_rate_delta(params, forwarder_state, reasoning=False)
         await _handle_agent_message_delta(
             client,
             session_id,
@@ -4192,11 +4195,8 @@ async def _maybe_handle_delta_event(
     if method in {"item/reasoning/textDelta", "item/reasoning/summaryTextDelta"}:
         if delta_coalescer is None:
             raise RuntimeError("Codex reasoning delta handling requires a text-delta coalescer")
-        if forwarder_state is not None:
-            now = time.monotonic()
-            if forwarder_state.turn_reasoning_first_at is None:
-                forwarder_state.turn_reasoning_first_at = now
-            forwarder_state.turn_reasoning_last_at = now
+        if method == "item/reasoning/textDelta":
+            _note_completion_rate_delta(params, forwarder_state, reasoning=True)
         await _handle_reasoning_delta(
             params,
             delta_coalescer,
@@ -4380,7 +4380,7 @@ def _handle_usage_update(
     usage_coalescer.record(
         params,
         model=model,
-        extra=_turn_token_rate_fields(params, forwarder_state),
+        extra=_completion_token_rate_fields(params, forwarder_state),
     )
 
 
@@ -7913,35 +7913,77 @@ def _session_usage_data_from_params(
     return data
 
 
-def _turn_token_rate_fields(
+def _reset_completion_rate_window(
+    state: _CodexForwarderState,
+    turn_id: str | None,
+) -> None:
+    """Discard delta bounds at a completion or turn boundary."""
+    state.completion_rate_turn_id = turn_id
+    state.turn_reasoning_first_at = None
+    state.turn_reasoning_last_at = None
+    state.turn_output_first_at = None
+    state.turn_output_last_at = None
+
+
+def _note_completion_rate_delta(
+    params: _JsonObject,
+    state: _CodexForwarderState | None,
+    *,
+    reasoning: bool,
+) -> None:
+    """Time nonempty raw deltas belonging to the current turn."""
+    if state is None or not isinstance(params.get("delta"), str) or not params["delta"]:
+        return
+    turn_id = _turn_id_from_payload(params)
+    if turn_id is None or state.completion_rate_turn_id not in {None, turn_id}:
+        return
+    state.completion_rate_turn_id = turn_id
+    now = time.monotonic()
+    if reasoning:
+        if state.turn_reasoning_first_at is None:
+            state.turn_reasoning_first_at = now
+        state.turn_reasoning_last_at = now
+    else:
+        if state.turn_output_first_at is None:
+            state.turn_output_first_at = now
+        state.turn_output_last_at = now
+
+
+def _completion_token_rate_fields(
     params: _JsonObject,
     forwarder_state: _CodexForwarderState | None,
-) -> dict[str, float]:
+) -> _JsonObject:
     """
-    Derive the turn's generation rates (tokens/sec) for the UI display.
-
-    Token counts come from Codex's ``tokenUsage.last`` per-completion
-    breakdown; durations come from the forwarder's own delta-stream bounds
-    minus the latest probed provider round-trip, which cover generation only
-    — queue wait, prompt processing and network transfer sit outside the
-    measured span. Reasoning tokens are a subset of ``outputTokens``, so the
-    visible-output rate subtracts them.
+    Consume one completion's usage and delta bounds as an estimated rate.
 
     :param params: Codex ``thread/tokenUsage/updated`` params.
     :param forwarder_state: Forwarder state carrying delta timestamps.
-    :returns: ``turn_reasoning_tps`` / ``turn_output_tps`` entries, each
-        present only when both a token count and a positive delta span exist.
+    :returns: An atomic ``completion_tps`` snapshot. Unmeasurable channels
+        are absent, clearing the previous sample rather than reusing it.
+        Summary timings cannot measure the underlying reasoning tokens.
     """
-    fields: dict[str, float] = {}
     if forwarder_state is None:
-        return fields
+        return {}
     token_usage = params.get("tokenUsage")
-    last = token_usage.get("last") if isinstance(token_usage, dict) else None
+    if not isinstance(token_usage, dict):
+        return {}
+    turn_id = _turn_id_from_payload(params)
+    if turn_id is None or forwarder_state.completion_rate_turn_id not in {None, turn_id}:
+        return {}
+    total = token_usage.get("total")
+    if isinstance(total, dict):
+        total_input, total_output = total.get("inputTokens"), total.get("outputTokens")
+        if type(total_input) is int and type(total_output) is int:
+            signature = (turn_id, total_input, total_output)
+            if signature == forwarder_state.completion_usage_signature:
+                return {}
+            forwarder_state.completion_usage_signature = signature
+
+    last = token_usage.get("last")
     if not isinstance(last, dict):
-        return fields
-    # The measured span includes one network hop at each end (provider →
-    # codex → forwarder). Subtract the latest probed round-trip so the rate
-    # reflects generation only; spans that shrink to nothing are dropped.
+        _reset_completion_rate_window(forwarder_state, turn_id)
+        return {"completion_tps": {}}
+    fields: dict[str, float] = {}
     rtt = forwarder_state.provider_rtt_seconds
     overhead = rtt if isinstance(rtt, (int, float)) and rtt > 0 else 0.0
     reasoning_tokens = last.get("reasoningOutputTokens")
@@ -7953,17 +7995,17 @@ def _turn_token_rate_fields(
         else None
     )
     if (
-        isinstance(reasoning_tokens, int)
+        type(reasoning_tokens) is int
         and reasoning_tokens > 0
         and reasoning_span is not None
         and reasoning_span > 0
     ):
-        fields["turn_reasoning_tps"] = round(reasoning_tokens / reasoning_span, 1)
+        fields["reasoning"] = round(reasoning_tokens / reasoning_span, 1)
     output_tokens = last.get("outputTokens")
     visible_output = (
         output_tokens - reasoning_tokens
-        if isinstance(output_tokens, int) and isinstance(reasoning_tokens, int)
-        else output_tokens
+        if type(output_tokens) is int and type(reasoning_tokens) is int
+        else None
     )
     output_first = forwarder_state.turn_output_first_at
     output_last = forwarder_state.turn_output_last_at
@@ -7973,13 +8015,14 @@ def _turn_token_rate_fields(
         else None
     )
     if (
-        isinstance(visible_output, int)
+        type(visible_output) is int
         and visible_output > 0
         and output_span is not None
         and output_span > 0
     ):
-        fields["turn_output_tps"] = round(visible_output / output_span, 1)
-    return fields
+        fields["output"] = round(visible_output / output_span, 1)
+    _reset_completion_rate_window(forwarder_state, turn_id)
+    return {"completion_tps": fields}
 
 
 @dataclass

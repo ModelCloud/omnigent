@@ -7691,6 +7691,57 @@ async def test_external_session_usage_event_carries_priced_cost(
     assert published[0][1]["total_cost_usd"] == 0.42
 
 
+async def test_external_session_usage_preserves_atomic_completion_estimates(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published: list[tuple[str, dict[str, Any]]] = []
+    _capture_published(monkeypatch, published)
+    agent = await create_test_agent(client)
+    session = await _create_session(client, agent["id"])
+    snapshots = [{"reasoning": 3904.0, "output": 20.0}, {"output": 25.0}, {}]
+    for rates in snapshots:
+        resp = await client.post(
+            f"/v1/sessions/{session['id']}/events",
+            json={
+                "type": "external_session_usage",
+                "data": {
+                    "context_tokens": 100,
+                    "response_id": "codex_turn_abc",
+                    "completion_tps": rates,
+                },
+            },
+        )
+        assert resp.status_code == 202, resp.text
+    assert [event["completion_tps"] for _, event in published] == snapshots
+    assert all(event["response_id"] == "codex_turn_abc" for _, event in published)
+
+
+@pytest.mark.parametrize(
+    "rates",
+    [{"reasoning": -1}, {"output": "fast"}, {"reasoning": True}, {"other": 2}, []],
+)
+async def test_external_session_usage_rejects_invalid_completion_estimates(
+    client: httpx.AsyncClient,
+    rates: Any,
+) -> None:
+    agent = await create_test_agent(client)
+    session = await _create_session(client, agent["id"])
+    resp = await client.post(
+        f"/v1/sessions/{session['id']}/events",
+        json={
+            "type": "external_session_usage",
+            "data": {
+                "context_tokens": 100,
+                "response_id": "codex_turn_abc",
+                "completion_tps": rates,
+            },
+        },
+    )
+    assert resp.status_code == 400, resp.text
+    assert "completion_tps" in resp.text
+
+
 async def test_external_session_usage_event_carries_token_breakdown(
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,

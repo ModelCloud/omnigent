@@ -14,6 +14,7 @@ import { ConversationScrollLockContext } from "@/components/ai-elements/conversa
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FileViewerContext } from "@/shell/FileViewerContext";
 import { normalizeExplicitMathDelimiters } from "@/components/ai-elements/mathMarkdown";
+import { useTurnTpsStore } from "@/store/turnTps";
 import { BlockRenderer } from "./BlockRenderer";
 
 afterEach(cleanup);
@@ -45,6 +46,48 @@ const renderMarkdownText = (text: string) =>
   );
 
 describe("BlockRenderer dispatch", () => {
+  it("shows one completion estimate for 100 reasoning blocks, then replaces the whole sample", () => {
+    const conversationId = "completion-rate-test";
+    const responseId = "codex_turn_rates";
+    useTurnTpsStore.setState({ byKey: {} });
+    useTurnTpsStore.getState().record(conversationId, responseId, { reasoning: 3904 });
+    const items: RenderItem[] = Array.from({ length: 100 }, (_, index) => ({
+      kind: "reasoning",
+      itemId: `reason-${index}`,
+      text: `Small reasoning block ${index}`,
+      duration: 0.1,
+    }));
+    const props = {
+      items,
+      conversationId,
+      responseId,
+      sessionStatus: "idle" as const,
+      defaultExpanded: true,
+    };
+    const { rerender } = render(<BlockRenderer {...props} />);
+    expect(screen.getAllByText(/Thought for/)).toHaveLength(100);
+    expect(screen.getAllByText(/3904 t\/s/)).toHaveLength(1);
+    expect(screen.getByTestId("completion-tps").textContent).toBe(
+      "Latest completion estimate: reasoning ~3904 t/s",
+    );
+    for (const trigger of screen.getAllByText(/Thought for/)) {
+      expect(trigger.textContent).not.toContain("t/s");
+    }
+    act(() => useTurnTpsStore.getState().record(conversationId, responseId, { output: 25 }));
+    expect(screen.queryByText(/3904/)).toBeNull();
+    expect(screen.getByTestId("completion-tps").textContent).toBe(
+      "Latest completion estimate: output ~25.0 t/s",
+    );
+    rerender(<BlockRenderer {...props} continued />);
+    expect(screen.queryByTestId("completion-tps")).toBeNull();
+    rerender(<BlockRenderer {...props} responseId="other-turn" />);
+    expect(screen.queryByTestId("completion-tps")).toBeNull();
+    rerender(<BlockRenderer {...props} />);
+    act(() => useTurnTpsStore.getState().record(conversationId, responseId, {}));
+    expect(screen.queryByTestId("completion-tps")).toBeNull();
+    useTurnTpsStore.setState({ byKey: {} });
+  });
+
   it("renders a slash_command RenderItem via SlashCommandCard", () => {
     const items: RenderItem[] = [
       {

@@ -1,43 +1,36 @@
 import { create } from "zustand";
 
-/** Measured generation rates for one turn, in tokens/sec. */
+/** Latest completion's estimated rates, scoped to its containing turn. */
 export interface TurnTps {
   reasoning?: number;
   output?: number;
 }
 
 interface TurnTpsState {
-  /** `${conversationId}:${responseId}` -> measured rates for that turn. */
+  /** Encoded [conversationId, responseId] -> latest completion estimate. */
   byKey: Record<string, TurnTps>;
   /**
-   * Merge a fresh measurement for one response. Rate fields absent on the
-   * event keep the previously recorded value — a mid-turn frame may carry
-   * only one channel.
+   * Replace the whole sample so unavailable channels never retain old rates.
    */
   record: (conversationId: string, responseId: string, rates: TurnTps) => void;
 }
 
-const key = (conversationId: string, responseId: string) => `${conversationId}${responseId}`;
+const key = (conversationId: string, responseId: string) =>
+  JSON.stringify([conversationId, responseId]);
 
 /**
- * Per-response tokens/sec measured by the codex-native forwarder (delta-stream
- * span ÷ token count — queue, prompt processing and network transfer are
- * excluded). Arrives on ``session.usage``; read by the reasoning trigger and
- * the worked fold to render "… · NN t/s" on the turn it belongs to.
+ * Completion-level token counts divided by observed delta spans. Never attach
+ * these estimates to individual reasoning blocks: their token counts are unknown.
  */
 export const useTurnTpsStore = create<TurnTpsState>((set) => ({
   byKey: {},
   record: (conversationId, responseId, rates) =>
     set((s) => {
       const k = key(conversationId, responseId);
-      const prior = s.byKey[k];
       return {
         byKey: {
           ...s.byKey,
-          [k]: {
-            reasoning: rates.reasoning ?? prior?.reasoning,
-            output: rates.output ?? prior?.output,
-          },
+          [k]: rates,
         },
       };
     }),

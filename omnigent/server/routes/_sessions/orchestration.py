@@ -2058,14 +2058,27 @@ async def _persist_external_session_usage(
             "external_session_usage data.context_window must be a positive int",
             code=ErrorCode.INVALID_INPUT,
         )
-    for rate_key in ("turn_reasoning_tps", "turn_output_tps"):
-        raw_rate = body.data.get(rate_key)
-        if raw_rate is not None and (not isinstance(raw_rate, (int, float)) or raw_rate < 0):
+    completion_tps = body.data.get("completion_tps")
+    if completion_tps is not None:
+        if (
+            not isinstance(completion_tps, dict)
+            or any(
+                type(rate) not in {int, float} or not math.isfinite(rate) or rate < 0
+                for rate in completion_tps.values()
+            )
+            or completion_tps.keys() - {"reasoning", "output"}
+        ):
             raise OmnigentError(
-                f"external_session_usage data.{rate_key} must be a non-negative number",
+                "external_session_usage data.completion_tps must contain "
+                "non-negative finite rates",
                 code=ErrorCode.INVALID_INPUT,
             )
     raw_response_id = body.data.get("response_id")
+    if completion_tps is not None and not raw_response_id:
+        raise OmnigentError(
+            "external_session_usage data.completion_tps requires response_id",
+            code=ErrorCode.INVALID_INPUT,
+        )
     if raw_response_id is not None and (
         not isinstance(raw_response_id, str) or not raw_response_id
     ):
@@ -2164,7 +2177,7 @@ async def _persist_external_session_usage(
         event_payload["total_cost_usd"] = subtree_cost
     if usage_by_model is not None:
         event_payload["usage_by_model"] = usage_by_model
-    for rate_key in ("turn_reasoning_tps", "turn_output_tps", "response_id"):
+    for rate_key in ("completion_tps", "response_id"):
         if body.data.get(rate_key) is not None:
             event_payload[rate_key] = body.data[rate_key]
     event = SessionUsageEvent(**event_payload)

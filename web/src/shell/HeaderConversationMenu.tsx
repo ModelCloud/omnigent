@@ -67,6 +67,7 @@ import { useNavigate } from "@/lib/routing";
 import { USER_SESSION_TITLE_MAX_CHARS } from "@/lib/sessionTitles";
 import { showArchiveUndoToast } from "./archiveUndoToast";
 import { unpinWithUndo } from "./unpinUndoToast";
+import { useUnpinConfirmation } from "./UnpinConfirmationDialog";
 import { useArchiveWorktreePrompt } from "./ArchiveWorktreeDialog";
 import { cn } from "@/lib/utils";
 import { MOBILE_GLASS_SURFACE } from "./mobileGlass";
@@ -114,6 +115,7 @@ export function HeaderConversationMenu({
   const isMobile = useIsMobileViewport();
   const { trackClick } = useOmnigentAnalytics();
   const togglePinned = useTogglePinnedConversation();
+  const unpinConfirmation = useUnpinConfirmation();
   // Pin writes don't overlap, so Pin/Unpin is disabled while one is saving.
   const pinSaving = useIsMutating({ mutationKey: PIN_WRITE_MUTATION_KEY }) > 0;
   const rename = useRenameConversation();
@@ -237,7 +239,9 @@ export function HeaderConversationMenu({
         disabled={pinSaving}
         onSelect={() =>
           isPinned
-            ? unpinWithUndo(queryClient, togglePinned.mutateAsync, conversation.id, conversation)
+            ? unpinConfirmation.requestUnpin(label, () =>
+                unpinWithUndo(queryClient, togglePinned.mutateAsync, conversation.id, conversation),
+              )
             : togglePinned.mutate({ id: conversation.id, pinned: true })
         }
       >
@@ -446,6 +450,7 @@ export function HeaderConversationMenu({
       </DropdownMenu>
 
       {archiveWorktreePrompt.dialog}
+      {unpinConfirmation.dialog}
       <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
         <DialogContent>
           <form onSubmit={submitRename}>

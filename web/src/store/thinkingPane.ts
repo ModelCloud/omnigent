@@ -5,8 +5,6 @@ export interface ThinkingPaneSection {
   text: string;
   isStreaming: boolean;
   duration: number | undefined;
-  /** Forwarder-measured reasoning generation rate (tokens/sec). */
-  tps: number | undefined;
 }
 
 interface ThinkingPaneState {

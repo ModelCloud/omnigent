@@ -1,15 +1,14 @@
 """Browser e2e for the sidebar's pin / unpin quick action.
 
-Pinning is a client-side navigation preference (persisted to
-``localStorage`` under ``omnigent:pinned-conversation-ids`` — see
-``sidebarNav.ts``), surfaced as a hover/focus-revealed button on every
+Pinning is persisted in the session's ``omnigent.pinned`` label,
+surfaced as a hover/focus-revealed button on every
 conversation row (``data-testid="quick-pin-conversation"``). Toggling it
 moves the row between the sidebar's grouped sections:
 
   - **Pin** lifts the row out of "Sessions" and into a "Pinned" section
     rendered above it (``ConversationList`` peels pinned, non-archived
     rows into their own group — Sidebar.tsx).
-  - **Unpin** drops it back under "Sessions".
+  - **Unpin** asks for confirmation before dropping it back under "Sessions".
 
 These drive the real chain the ``Sidebar`` unit tests mock out: the live
 ``GET /v1/sessions`` list feeding ``useConversations`` → the section
@@ -79,10 +78,16 @@ def _pin_and_wait(page: Page, row: Locator, session_id: str) -> None:
     :param session_id: The session being pinned.
     """
     row.hover()
+    button = row.get_by_test_id("quick-pin-conversation")
+    is_unpin = button.get_attribute("aria-label") == "Unpin conversation"
     with page.expect_response(
         lambda r: r.request.method == "PATCH" and r.url.endswith(f"/v1/sessions/{session_id}")
     ) as patch_info:
-        row.get_by_test_id("quick-pin-conversation").click()
+        button.click()
+        if is_unpin:
+            page.get_by_role("dialog", name="Unpin session?").get_by_role(
+                "button", name="Yes", exact=True
+            ).click()
     assert patch_info.value.ok, patch_info.value.status
 
 
@@ -125,6 +130,14 @@ def test_unpin_moves_session_back_to_recent(
     unpin_button = pinned_row.get_by_test_id("quick-pin-conversation")
     expect(unpin_button).to_have_attribute("aria-label", "Unpin conversation")
     unpin_button.click()
+    dialog = page.get_by_role("dialog", name="Unpin session?")
+    expect(dialog.get_by_role("button", name="No", exact=True)).to_be_focused()
+    dialog.get_by_role("button", name="No", exact=True).click()
+    expect(pinned_row).to_be_visible()
+    unpin_button.click()
+    page.get_by_role("dialog", name="Unpin session?").get_by_role(
+        "button", name="Yes", exact=True
+    ).click()
 
     # Back under "Sessions", and no longer in "Pinned".
     expect(_section(page, "Sessions").locator(f'a[href="/c/{session_id}"]')).to_be_visible()
