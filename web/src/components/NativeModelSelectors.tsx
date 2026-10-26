@@ -68,7 +68,7 @@ export function NativeModelSelectors({
   ) {
     if (entries.length <= 1) return null;
     return (
-      <div className="grid grid-cols-[5rem_1fr] items-center gap-2">
+      <div className="grid grid-cols-[5rem_minmax(0,1fr)] items-center gap-2">
         <span className="text-xs text-muted-foreground">{label}</span>
         <Select value={value ?? ""} onValueChange={change} disabled={disabled}>
           <SelectTrigger aria-label={label} className="w-full">
