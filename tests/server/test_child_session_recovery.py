@@ -15,6 +15,7 @@ import pytest
 
 from omnigent.db.utils import generate_agent_id
 from omnigent.entities import Conversation
+from omnigent.models.model_fallbacks import MULTIDEX_DEEPSEEK_LITHOS, MULTIDEX_DEEPSEEK_OPENROUTER
 from omnigent.server.child_session_recovery import (
     RECOVERY_STORE_CONCURRENCY,
     restore_active_children,
@@ -61,6 +62,53 @@ def recovery_tree(
 
     initializer = RunnerSessionInitializer(Mock(get=lambda _: None), server_version="test")
     return store, parent, child, relay, recovered, initializer
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["running", "failed"])
+@pytest.mark.parametrize(
+    "model",
+    [*MULTIDEX_DEEPSEEK_OPENROUTER.model_ids, *MULTIDEX_DEEPSEEK_LITHOS.model_ids],
+)
+async def test_recovery_preserves_saved_child_model(
+    recovery_tree: Any, db_uri: str, model: str, status: str
+) -> None:
+    """A fresh initializer restores a child's selection, not the parent's current one."""
+    store, parent, child, _, _, _ = recovery_tree
+    row = child(status)
+    store.update_conversation(row.id, model_override=model, reasoning_effort="high")
+    store.set_external_session_id(row.id, "native-child")
+    if status == "failed":
+        store.set_labels(
+            row.id,
+            {
+                "omnigent.last_task_error_code": "runner_disconnected",
+                "omnigent.last_task_error_message": "Disconnected",
+            },
+        )
+    store.update_conversation(parent.id, model_override="different-parent-model")
+    parent = store.get_conversation(parent.id)
+    # Drop process-local readiness and reload database state as on service restart.
+    fresh_store = SqlAlchemyConversationStore(db_uri)
+    initializer = RunnerSessionInitializer(Mock(get=lambda _: None), server_version="test")
+    calls = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        calls.append(json.loads(request.content))
+        return httpx.Response(201)
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(respond), base_url="http://runner"
+    ) as client:
+        await restore_active_children(parent, client, fresh_store, initializer)
+
+    assert len(calls) == 1
+    envelope = calls[0]["session_init"]
+    assert envelope["resume_interrupted_turn"] is True
+    assert envelope["snapshot"]["model_override"] == model
+    assert envelope["snapshot"]["reasoning_effort"] == "high"
+    assert envelope["snapshot"]["external_session_id"] == "native-child"
+    assert fresh_store.get_conversation(row.id).model_override == model
 
 
 @pytest.mark.asyncio
