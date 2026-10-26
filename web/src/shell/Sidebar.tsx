@@ -24,6 +24,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -187,6 +188,7 @@ import { relativeTime } from "@/lib/relativeTime";
 import { showToast } from "@/components/ui/toast";
 import { showArchiveUndoToast } from "./archiveUndoToast";
 import { unpinWithUndo } from "./unpinUndoToast";
+import { useUnpinConfirmation } from "./UnpinConfirmationDialog";
 import { useArchiveWorktreePrompt } from "./ArchiveWorktreeDialog";
 import { PermissionsModal } from "@/components/PermissionsModal";
 import { ProjectSettingsDialog } from "./ProjectSettingsDialog";
@@ -281,13 +283,7 @@ import KiroColor from "@lobehub/icons/es/Kiro/components/Color";
 import { type PullRequest, usePullRequestInfo } from "@/hooks/usePullRequests";
 import { matchWorktree } from "@/hooks/useHostWorktrees";
 import { useSessionWorktrees } from "@/hooks/useSessionWorktrees";
-import {
-  deriveRepoName,
-  localMachineLabel,
-  resolveThisMachineHostId,
-  SANDBOX_REPO_LABEL_KEY,
-} from "./NewChatDialog";
-import { useDesktopHostId } from "./RevealInFileManager";
+import { deriveRepoName, SANDBOX_REPO_LABEL_KEY } from "./NewChatDialog";
 import { ForkSessionDialog } from "./ForkSessionDialog";
 import { SessionActionMenuItem } from "@/components/SessionActionMenuItem";
 import { useSessionActionRestrictions } from "@/hooks/useSessionActionRestrictions";
@@ -882,6 +878,7 @@ function SidebarImpl({
   }, [pinnedConversations, pinnedLoaded, ownedPinIds]);
   const queryClient = useQueryClient();
   const togglePinnedMutation = useTogglePinnedConversation();
+  const unpinConfirmation = useUnpinConfirmation();
   const pinnedIdSet = useMemo(() => new Set(pinnedConversationIds), [pinnedConversationIds]);
   // The migration compares the legacy key against what the SERVER already owns
   // (not the union — a legacy-only id must still count as "to migrate").
@@ -895,11 +892,11 @@ function SidebarImpl({
       togglePinnedMutation.mutate({ id: conversationId, pinned: true });
       return;
     }
-    unpinWithUndo(
-      queryClient,
-      togglePinnedMutation.mutateAsync,
-      conversationId,
-      pinnedConversations.find((c) => c.id === conversationId),
+    const conversation = pinnedConversations.find((c) => c.id === conversationId);
+    unpinConfirmation.requestUnpin(
+      conversation ? conversationDisplayLabel(conversation) : "this session",
+      () =>
+        unpinWithUndo(queryClient, togglePinnedMutation.mutateAsync, conversationId, conversation),
     );
   });
 
@@ -977,6 +974,7 @@ function SidebarImpl({
 
   return (
     <>
+      {unpinConfirmation.dialog}
       {/* Mobile: the drawer stops short of the right edge, leaving a strip of
       the chat visible; this scrim covers that strip so tapping it dismisses the
       drawer — the gesture that replaced the collapse icon. Full-bleed and
@@ -1804,6 +1802,7 @@ function ConversationList({
   const [overProject, setOverProject] = useState<string | null>(null);
   const [overPin, setOverPin] = useState<string | null>(null);
   const { mutateAsync: pinAt } = useTogglePinnedConversation();
+  const { requestUnpin, dialog: unpinDialog } = useUnpinConfirmation();
   // Pin writes don't overlap (the hooks refuse one while another saves), so the
   // pinned rows stop taking drops until the current write settles.
   const pinWriting = useIsMutating({ mutationKey: PIN_WRITE_MUTATION_KEY }) > 0;
@@ -2249,13 +2248,13 @@ function ConversationList({
         target,
       );
       if (action.kind === "move") {
-        moveToProject.mutate({ id: dragged.id, project: action.project });
-        // Unpin a pinned session so it actually drops into the folder instead of
-        // staying floated up in Pinned (pin outranks project membership). No
-        // Undo pill: re-pinning would leave the session filed in the new folder.
-        if (action.unpin) pinAt({ id: dragged.id, pinned: false }).catch(() => {});
-        // Open the (possibly brand-new) folder so the session is visible in it.
-        expandProject(action.project);
+        const move = () => {
+          moveToProject.mutate({ id: dragged.id, project: action.project });
+          if (action.unpin) pinAt({ id: dragged.id, pinned: false }).catch(() => {});
+          expandProject(action.project);
+        };
+        if (action.unpin) requestUnpin(dragged.label, move);
+        else move();
         return;
       }
       if (action.kind === "reorder-pin") {
@@ -2289,10 +2288,12 @@ function ConversationList({
         return;
       }
       if (action.kind === "ungroup") {
-        // Unfile silently — a first-class project persists when emptied, so
-        // dragging out its last session deletes nothing. Mirrors the kebab flow.
-        moveToProject.mutate({ id: dragged.id, project: "" });
-        if (action.unpin) pinAt({ id: dragged.id, pinned: false }).catch(() => {});
+        const ungroup = () => {
+          moveToProject.mutate({ id: dragged.id, project: "" });
+          if (action.unpin) pinAt({ id: dragged.id, pinned: false }).catch(() => {});
+        };
+        if (action.unpin) requestUnpin(dragged.label, ungroup);
+        else ungroup();
       }
     },
     [
@@ -2305,6 +2306,7 @@ function ConversationList({
       saveOrder,
       sections.pinned,
       pinAt,
+      requestUnpin,
       reorderPins,
     ],
   );
@@ -2631,6 +2633,7 @@ function ConversationList({
       serverInfo={serverInfo}
       onActivate={activateRow}
     >
+      {unpinDialog}
       <DndContext
         sensors={sensors}
         collisionDetection={(args) => {
@@ -3453,7 +3456,7 @@ function SessionFilterMenu({
           </FilterMenuSub>
           <DropdownMenuSeparator />
           <FilterMenuSub label="Show" testId="session-show-menu">
-            {SIDEBAR_SHOW_FIELDS.map((field) => (
+            {SIDEBAR_SHOW_FIELDS.filter((field) => field !== "environment").map((field) => (
               <DropdownMenuCheckboxItem
                 key={field}
                 checked={view.show.includes(field)}
@@ -4309,25 +4312,6 @@ function sessionLocationLabel(
     : (host?.name ?? conversation.host_id);
 }
 
-/** A row's short environment: the sandbox type, this device, or the host's name. */
-function sessionEnvironmentLabel(
-  conversation: Conversation,
-  hostsById: ReadonlyMap<string, Host>,
-  desktopHostId: string | null,
-): string {
-  const hostId = conversation.host_id;
-  if (!hostId || hostsById.get(hostId)?.sandbox_provider) {
-    return sessionLocationLabel(conversation, hostsById);
-  }
-  const onlineHostIds = [...hostsById.values()]
-    .filter((h) => h.status === "online" && !h.sandbox_provider)
-    .map((h) => h.host_id);
-  if (hostId === resolveThisMachineHostId(desktopHostId, isCurrentServerLocal(), onlineHostIds)) {
-    return localMachineLabel(navigator.userAgent);
-  }
-  return hostsById.get(hostId)?.name ?? hostId;
-}
-
 /** The automation name stamped on a scheduled-task-fired session, null otherwise. */
 function sessionAutomationName(conversation: Conversation): string | null {
   return conversation.labels?.["omnigent.automation"] ?? null;
@@ -4341,30 +4325,21 @@ function sessionRepoName(conversation: Conversation): string | null {
   return workspace ? deriveRepoName(workspace.split("#")[0]!) : null;
 }
 
-// Its own component so only rows showing Environment subscribe to the desktop host id.
-function SessionEnvironmentLabel({
-  conversation,
-  hostsById,
-}: {
-  conversation: Conversation;
-  hostsById: ReadonlyMap<string, Host>;
-}) {
-  return sessionEnvironmentLabel(conversation, hostsById, useDesktopHostId());
-}
-
 // Its own component so only rows showing the timestamp subscribe to the shared clock.
 function SessionUpdatedLabel({ updatedAt }: { updatedAt: number }) {
   const now = useNow();
   return relativeTime(updatedAt * 1000, now.getTime());
 }
 
-// A row's second line: the "Show" environment and branch, each omitted when empty.
+// The host pill is always visible; other metadata follows the "Show" preferences.
 function SessionMetaLine({
+  id,
   environment,
   automation,
   repo,
   branch,
 }: {
+  id: string;
   environment: ReactNode;
   automation: string | null;
   repo: string | null;
@@ -4379,6 +4354,7 @@ function SessionMetaLine({
   if (parts.length === 0) return null;
   return (
     <span
+      id={id}
       data-testid="session-row-meta"
       className="flex w-full min-w-0 items-center gap-1.5 text-sm text-muted-foreground"
     >
@@ -4391,7 +4367,10 @@ function SessionMetaLine({
             // crowding the row.
             <span
               data-testid={`session-row-${key}`}
-              className="flex min-w-0 max-w-[55%] items-center gap-1 rounded-full border border-border/60 bg-muted/60 px-1.5 py-px text-[11px] leading-4"
+              className={cn(
+                "flex min-w-0 items-center gap-1 rounded-full border border-border/60 bg-muted/60 px-1.5 py-px text-[11px] leading-4",
+                parts.length > 1 ? "max-w-[55%]" : "max-w-full",
+              )}
             >
               <Icon aria-hidden className="size-3 shrink-0" />
               <span className="truncate">{value}</span>
@@ -4673,6 +4652,7 @@ function ConversationRowImpl({
   // session navigated to via `/c/:id`), scroll it toward the center of the
   // sidebar so it's comfortably in view rather than pinned to an edge.
   const rowRef = useRef<HTMLLIElement>(null);
+  const metaId = useId();
   useEffect(() => {
     if (!isActive) return;
     rowRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -4838,9 +4818,9 @@ function ConversationRowImpl({
   const show = useContext(SidebarShowContext);
   const showUpdated = show.includes("updated") && !hasSessionIndicator;
   const hasTrailingIndicator = hasSessionIndicator || showSharedIndicator || showUpdated;
-  const metaEnvironment = show.includes("environment") ? (
-    <SessionEnvironmentLabel conversation={conversation} hostsById={hostsById} />
-  ) : null;
+  const metaEnvironment =
+    (conversation.host_id ? hostsById.get(conversation.host_id)?.name : null) ??
+    sessionLocationLabel(conversation, hostsById);
   const metaAutomation = show.includes("automation") ? sessionAutomationName(conversation) : null;
   const metaRepo = show.includes("repo") ? sessionRepoName(conversation) : null;
   const loadBranch = show.includes("branch") && gitBranch === null;
@@ -4856,12 +4836,8 @@ function ConversationRowImpl({
   const metaBranch = show.includes("branch")
     ? (gitBranch ?? (workspaceWorktree?.detached ? null : (workspaceWorktree?.branch ?? null)))
     : null;
-  // Overlays (checkbox, badges, controls; each also `-translate-y-1/2`) center on
-  // the row, or on the title line — padding + half its 20px box — above a meta line.
-  const overlayTop =
-    metaEnvironment !== null || metaAutomation !== null || metaRepo !== null || metaBranch !== null
-      ? "top-4 md:top-3.5"
-      : "top-1/2";
+  // Keep controls aligned with the first title line as the title wraps.
+  const overlayTop = "top-4 md:top-3.5";
 
   // Drag-and-drop: a row is grabbable when the viewer owns it (re-filing is
   // owner-only, like the Move-to-project kebab item), outside selection /
@@ -5059,6 +5035,8 @@ function ConversationRowImpl({
   const rowLink = (
     <Link
       to={selectionMode ? "#" : `/c/${conversation.id}`}
+      aria-label={`${label}${hasUnseenMessages ? " (unread)" : ""}`}
+      aria-describedby={metaId}
       componentId="sidebar.conversation_switcher"
       draggable={gridsEnabled ? false : undefined}
       onDragStart={gridsEnabled ? (event) => event.preventDefault() : undefined}
@@ -5139,7 +5117,7 @@ function ConversationRowImpl({
       <div className="flex w-full items-center">
         <span
           className={cn(
-            "relative min-w-0 truncate",
+            "relative min-w-0 whitespace-normal wrap-anywhere",
             // The optimistic first-prompt label is a placeholder until the
             // server's title lands — dim it so it doesn't read as final.
             isProvisionalLabel && "italic text-muted-foreground",
@@ -5151,6 +5129,7 @@ function ConversationRowImpl({
       </div>
       {/* Row 2: the "Show" metadata, each part omitted when it has no value. */}
       <SessionMetaLine
+        id={metaId}
         environment={metaEnvironment}
         automation={metaAutomation}
         repo={metaRepo}

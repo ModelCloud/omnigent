@@ -418,9 +418,41 @@ describe("quick pin/unpin hover button", () => {
     // user across devices — same contract as the kebab's Pin item.
     expect(mocks.pinnedStore.ids).toContain("conv_1");
 
-    // Clicking again unpins: the Pinned section disappears.
+    // Unpin waits for explicit confirmation.
     fireEvent.click(screen.getByTestId("quick-pin-conversation"));
+    expect(mocks.pinnedStore.ids).toContain("conv_1");
+    fireEvent.click(screen.getByRole("button", { name: "Yes" }));
     expect(screen.queryByText("Pinned")).toBeNull();
+  });
+
+  it.each(["No", "Enter", "Escape", "Close"])(
+    "keeps the session pinned when unpin is dismissed with %s",
+    async (dismiss) => {
+      const user = userEvent.setup();
+      mocks.pinnedStore.set(["conv_1"]);
+      renderSidebar();
+      await user.click(screen.getByTestId("quick-pin-conversation"));
+      const dialog = screen.getByRole("dialog", { name: "Unpin session?" });
+      expect(within(dialog).getByRole("button", { name: "No" })).toHaveFocus();
+      if (dismiss === "Enter" || dismiss === "Escape") await user.keyboard(`{${dismiss}}`);
+      else await user.click(within(dialog).getByRole("button", { name: dismiss }));
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(mocks.pinnedStore.ids).toEqual(["conv_1"]);
+    },
+  );
+
+  it("wraps the complete title and describes the row with its machine pill", () => {
+    const label = "Investigate and fix a very long session title with a second line";
+    mockConversations([{ ...CONV, title: label }]);
+    renderSidebar();
+    const title = screen.getByText(label);
+    expect(title).toHaveClass("whitespace-normal", "wrap-anywhere");
+    expect(title).not.toHaveClass("truncate");
+    const link = screen.getByRole("link", { name: label });
+    const pill = within(link).getByTestId("session-row-environment");
+    expect(pill).toHaveClass("rounded-full", "max-w-full");
+    expect(link).toHaveAccessibleDescription(pill.textContent!);
+    expect(link).toHaveClass("h-auto");
   });
 
   it.each([
