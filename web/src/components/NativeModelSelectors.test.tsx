@@ -167,7 +167,7 @@ it("shows the relative speed on provider and variant options", async () => {
   const providerTexts = screen.getAllByRole("option").map((option) => option.textContent);
   expect(providerTexts).toEqual(
     expect.arrayContaining([
-      expect.stringContaining("⚡1.0–2.0"), // Lithos spans its three variants
+      expect.stringContaining("⚡⚡1.0–2.0"), // Lithos spans its three variants
       expect.stringContaining("⚡1.0"), // Local / OpenRouter flat baseline
     ]),
   );
@@ -177,8 +177,8 @@ it("shows the relative speed on provider and variant options", async () => {
   expect(variantTexts).toEqual(
     expect.arrayContaining([
       expect.stringContaining("Regular⚡1.0"),
-      expect.stringContaining("Fast⚡1.5"),
-      expect.stringContaining("Ultra⚡2.0"),
+      expect.stringContaining("Fast⚡⚡1.5"), // second bolt is masked half-faded
+      expect.stringContaining("Ultra⚡⚡2.0"),
     ]),
   );
 });

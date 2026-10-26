@@ -10,6 +10,25 @@ import { familyId, providerId, resolveModelSelection, variantId } from "@/lib/mo
 import { cn } from "@/lib/utils";
 import type { NativeModelOption } from "@/lib/types";
 
+/** One bolt per whole multiplier; a fractional remainder adds a bolt faded
+ * vertically so e.g. 1.5 renders ⚡⚡ with the second bolt half-transparent. */
+function SpeedBolts({ speed }: { speed: string }) {
+  const value = Number(speed.split("–").pop());
+  if (!Number.isFinite(value) || value <= 0) return null;
+  const whole = Math.floor(value);
+  const fraction = value - whole;
+  const faded =
+    fraction > 0
+      ? `linear-gradient(to top, black ${(1 - fraction) * 100}%, rgba(0,0,0,0.2) ${(1 - fraction) * 100}%)`
+      : undefined;
+  return (
+    <span aria-hidden>
+      {"⚡".repeat(whole)}
+      {faded && <span style={{ maskImage: faded, WebkitMaskImage: faded }}>⚡</span>}
+    </span>
+  );
+}
+
 /** Dependent choices; every selection maps to one runner-advertised row. */
 export function NativeModelSelectors({
   options,
@@ -120,7 +139,7 @@ export function NativeModelSelectors({
                   <span className="truncate">{text}</span>
                   {speed?.[id] && (
                     <span className="shrink-0 text-muted-foreground">
-                      <span aria-hidden>⚡</span>
+                      <SpeedBolts speed={speed[id]} />
                       {speed[id]}
                       <span className="sr-only">, speed {speed[id]}</span>
                     </span>
