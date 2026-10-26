@@ -12851,6 +12851,9 @@ def _workspace_api_server_url(server: str) -> str:
     ``databricks auth login``), the mount probe is retried with that
     bearer before giving up.
 
+    Notices about the decision go to stderr, so a command's
+    machine-readable stdout (e.g. ``host status --json``) stays parseable.
+
     :param server: The user-supplied server URL, e.g.
         ``"https://example.databricks.com"``.
     :returns: The normalized base URL without a trailing slash, e.g.
@@ -12910,7 +12913,8 @@ def _workspace_api_server_url(server: str) -> str:
         return server
     if _workspace_mount_probe_matches(candidate, api_probe):
         click.echo(
-            f"Using {display_server_url(candidate)} (Databricks workspace-hosted omnigent)."
+            f"Using {display_server_url(candidate)} (Databricks workspace-hosted omnigent).",
+            err=True,
         )
         return candidate
     # The anonymous probe came back inconclusive (404 on Azure even
@@ -12930,7 +12934,8 @@ def _workspace_api_server_url(server: str) -> str:
             authed_probe = None
         if authed_probe is not None and _workspace_mount_probe_matches(candidate, authed_probe):
             click.echo(
-                f"Using {display_server_url(candidate)} (Databricks workspace-hosted omnigent)."
+                f"Using {display_server_url(candidate)} (Databricks workspace-hosted omnigent).",
+                err=True,
             )
             return candidate
         click.echo(
@@ -12939,7 +12944,8 @@ def _workspace_api_server_url(server: str) -> str:
             f"the cached workspace credentials. Connecting to {server} as "
             "given; if omnigent is hosted on this workspace, refresh the "
             f"login with `databricks auth login --host {server}` or pass "
-            "the full mount URL."
+            "the full mount URL.",
+            err=True,
         )
         return server
     click.echo(
@@ -12948,7 +12954,8 @@ def _workspace_api_server_url(server: str) -> str:
         f"(HTTP {api_probe.status_code}). Some edges hide the mount from "
         "unauthenticated requests — if omnigent is hosted on this "
         f"workspace, run `databricks auth login --host {server}` and "
-        "retry, or pass the full mount URL."
+        "retry, or pass the full mount URL.",
+        err=True,
     )
     return server
 
