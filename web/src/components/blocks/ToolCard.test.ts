@@ -169,7 +169,9 @@ describe("ToolCard rendering", () => {
       state: "output-available",
     });
     expect(screen.getByText("Create pull request")).toBeInTheDocument();
-    expect(screen.getByText("github")).toBeInTheDocument();
+    // A known server shows its brand spelling rather than the config name.
+    expect(screen.getByText("GitHub")).toBeInTheDocument();
+    expect(screen.queryByText("github")).toBeNull();
     const line = screen.getByTestId("tool-result-line");
     expect(line.textContent).toBe("Error: 422 Validation Failed: A pull request already exists");
     expect(line.className).toContain("text-destructive");

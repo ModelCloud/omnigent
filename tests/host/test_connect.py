@@ -1434,10 +1434,22 @@ async def test_handle_launch_without_harness_skips_check(
     _cleanup_host(host)
 
 
+@pytest.mark.parametrize(
+    ("console_error", "log_sink_closed"),
+    [
+        (None, False),
+        (BrokenPipeError(), False),
+        (ValueError("closed"), False),
+        (BrokenPipeError(), True),
+    ],
+)
 async def test_handle_launch_prints_exact_runner_log_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+    console_error: Exception | None,
+    log_sink_closed: bool,
 ) -> None:
     """The launch banner names the exact runner log file, not just the dir.
 
@@ -1475,21 +1487,39 @@ async def test_handle_launch_prints_exact_runner_log_path(
             stderr=subprocess.DEVNULL,
         )
 
-    with patch("omnigent.host.connect.subprocess.Popen", side_effect=_fake_popen):
-        result = await host._handle_launch(frame)
+    try:
+        with (
+            patch("omnigent.host.connect.subprocess.Popen", side_effect=_fake_popen),
+            patch("omnigent.host.connect.print", side_effect=console_error, create=True)
+            if console_error is not None
+            else contextlib.nullcontext(),
+            patch("omnigent.host.connect._logger.warning", side_effect=BrokenPipeError())
+            if log_sink_closed
+            else contextlib.nullcontext(),
+        ):
+            result = await host._handle_launch(frame)
+    finally:
+        _cleanup_host(host)
 
     assert result.status == "launched", result.error
     # Exactly one runner-*.log was created under the runner log dir.
     runner_log_dir = tmp_path / ".omnigent" / "logs" / "runner"
     log_files = list(runner_log_dir.glob("runner-*.log"))
     assert len(log_files) == 1
-    out = capsys.readouterr().out
-    assert "↑ Runner started:" in out
-    # The exact file path is printed, home-collapsed to ``~`` for readability.
-    assert f"log: ~/.omnigent/logs/runner/{log_files[0].name}" in out
-    assert "session: conv_log" in out
-
-    _cleanup_host(host)
+    if console_error is None:
+        out = capsys.readouterr().out
+        assert "↑ Runner started:" in out
+        assert f"log: ~/.omnigent/logs/runner/{log_files[0].name}" in out
+        assert "session: conv_log" in out
+    elif not log_sink_closed:
+        [record] = [
+            row
+            for row in caplog.records
+            if getattr(row, "event_name", None) == "host_console_write_failed"
+        ]
+        assert record.attributes["exception_type"] == type(console_error).__name__
+        assert record.session_id == "conv_log"
+        assert record.attributes["runner_id"] == token_bound_runner_id("tok_log")
 
 
 class _FakeTunnel:
@@ -2041,9 +2071,11 @@ def test_runner_exit_error_redacts_credential_values(tmp_path: Path) -> None:
     assert "code 3" in error
 
 
+@pytest.mark.parametrize("console_closed", [False, True])
 async def test_watch_runner_silent_on_intentional_stop(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    console_closed: bool,
 ) -> None:
     """A host.stop_runner termination is NOT reported as a crash.
 
@@ -2088,9 +2120,14 @@ async def test_watch_runner_silent_on_intentional_stop(
     assert result.status == "launched", result.error
 
     runner_id = token_bound_runner_id("tok_stop")
-    stop_result = await host._handle_stop(
-        HostStopRunnerFrame(request_id="req_stop_2", runner_id=runner_id)
-    )
+    with (
+        patch("omnigent.host.connect.print", side_effect=BrokenPipeError(), create=True)
+        if console_closed
+        else contextlib.nullcontext()
+    ):
+        stop_result = await host._handle_stop(
+            HostStopRunnerFrame(request_id="req_stop_2", runner_id=runner_id)
+        )
     assert stop_result.status == "stopped"
 
     # Let the watcher observe the (intentional) death and finish.
@@ -2472,7 +2509,7 @@ async def test_connect_watchdog_silent_on_intentional_stop(
 
 @pytest.mark.parametrize("had_connected", [None, False, True])
 @pytest.mark.parametrize("send_fails", [False, True])
-@pytest.mark.parametrize("console_error", [None, BrokenPipeError, ValueError])
+@pytest.mark.parametrize("console_error", [None, BrokenPipeError, ValueError, OSError])
 async def test_unreported_exit_flushes_after_reconnect(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
@@ -7348,8 +7385,13 @@ async def test_accepted_connect_resets_loopback_refused_streak(
     assert spy.call_count == 6
 
 
+@pytest.mark.parametrize("console_error", [None, BrokenPipeError(), ValueError("closed")])
 def test_run_host_process_exits_nonzero_on_fatal(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+    console_error: Exception | None,
 ) -> None:
     """run_host_process surfaces a fatal tunnel failure as its own exit code.
 
@@ -7362,7 +7404,12 @@ def test_run_host_process_exits_nonzero_on_fatal(
     """
     _patch_connect(monkeypatch, _ConnectSpy([_invalid_status(403)]))
 
-    with pytest.raises(SystemExit) as excinfo:
+    with (
+        patch("omnigent.host.connect.print", side_effect=console_error, create=True)
+        if console_error is not None
+        else contextlib.nullcontext(),
+        pytest.raises(SystemExit) as excinfo,
+    ):
         run_host_process(
             server_url="https://app.example.databricks.com",
             config_path=tmp_path / "config.yaml",
@@ -7372,10 +7419,14 @@ def test_run_host_process_exits_nonzero_on_fatal(
     # from a crash so supervision doesn't retry it.
     assert excinfo.value.code == HOST_FATAL_EXIT_CODE
     assert HOST_FATAL_EXIT_CODE != 1
-    err = capsys.readouterr().err
-    # The actionable message reached stderr (banner + the 403 cause).
-    assert "Could not connect" in err
-    assert "HTTP 403" in err
+    assert _host_exit_reasons(caplog) == ["fatal_connect"]
+    assert isinstance(excinfo.value.__cause__, HostConnectError)
+    assert "HTTP 403" in str(excinfo.value.__cause__)
+    if console_error is None:
+        err = capsys.readouterr().err
+        # The actionable message reached stderr (banner + the 403 cause).
+        assert "Could not connect" in err
+        assert "HTTP 403" in err
 
 
 def _host_exit_reasons(caplog: pytest.LogCaptureFixture) -> list[object]:
@@ -8108,7 +8159,7 @@ async def test_sustained_recycle_failures_fall_back_to_backoff(
     assert prompt == [0, 1, 2], f"prompt cadence must stop after the streak cap: {prompt}"
 
 
-@pytest.mark.parametrize("console_error", [None, BrokenPipeError, ValueError])
+@pytest.mark.parametrize("console_error", [None, BrokenPipeError, ValueError, OSError])
 async def test_silent_connect_streak_escalates_and_slows_reconnects(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -8129,15 +8180,32 @@ async def test_silent_connect_streak_escalates_and_slows_reconnects(
             "omnigent.host.connect.print", Mock(side_effect=console_error), raising=False
         )
 
-    with caplog.at_level(logging.WARNING, logger="omnigent.host.connect"):
+    with (
+        caplog.at_level(logging.WARNING, logger="omnigent.host.connect"),
+        patch.object(
+            _DroppedTunnel,
+            "recv",
+            new_callable=AsyncMock,
+            side_effect=ConnectionClosedError(None, None),
+        ) as recv,
+    ):
         await host.run()
 
+    assert spy.call_count == 6
+    assert recv.await_count == 5
     errors = [record for record in caplog.records if record.levelno == logging.ERROR]
     assert len(errors) == 1
     assert "3 consecutive connections but never responded" in errors[0].message
     if console_error is None:
         assert capsys.readouterr().err.count("never responded") == 1
-    assert spy.call_count == 6
+    else:
+        failed_streams = [
+            record.attributes["stream"]
+            for record in caplog.records
+            if getattr(record, "event_name", None) == "host_console_write_failed"
+        ]
+        assert failed_streams.count("stdout") == 5
+        assert failed_streams.count("stderr") == 1
     reconnects = [
         record.message for record in caplog.records if "Reconnecting in" in record.message
     ]
