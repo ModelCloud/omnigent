@@ -82,6 +82,103 @@ describe("ThinkingPane", () => {
     expect(useThinkingPaneStore.getState().sectionKey).toBeNull();
   });
 
+  describe("resizing", () => {
+    function renderResizablePane() {
+      select("conv-1");
+      const view = render(<ThinkingPane conversationId="conv-1" />);
+      const pane = screen.getByTestId("thinking-pane");
+      const handle = screen.getByRole("separator", { name: "Resize thinking pane" });
+      handle.setPointerCapture = vi.fn();
+      const bounds = vi
+        .spyOn(pane.parentElement!, "getBoundingClientRect")
+        .mockReturnValue({ left: 200, right: 1000, width: 800 } as DOMRect);
+      return { ...view, pane, handle, bounds };
+    }
+
+    it("defaults to half width and drags relative to the session, not the viewport", () => {
+      const { pane, handle } = renderResizablePane();
+      expect(pane.style.getPropertyValue("--thinking-pane-width")).toBe("50%");
+      fireEvent.pointerDown(handle, { button: 0, pointerId: 1, clientX: 600 });
+      expect(handle.setPointerCapture).toHaveBeenCalledWith(1);
+      expect(handle).toHaveFocus();
+      fireEvent.pointerMove(handle, { pointerId: 1, clientX: 520 });
+      expect(pane.style.getPropertyValue("--thinking-pane-width")).toBe("60%");
+      fireEvent.pointerMove(handle, { pointerId: 1, clientX: 680 });
+      expect(pane.style.getPropertyValue("--thinking-pane-width")).toBe("40%");
+    });
+
+    it("keeps both columns usable at the drag limits", () => {
+      const { pane, handle } = renderResizablePane();
+      fireEvent.pointerDown(handle, { button: 0, pointerId: 1, clientX: 600 });
+      fireEvent.pointerMove(handle, { pointerId: 1, clientX: -1000 });
+      expect(pane.style.getPropertyValue("--thinking-pane-width")).toBe("75%");
+      expect(handle).toHaveAttribute("aria-valuenow", "75");
+      fireEvent.pointerMove(handle, { pointerId: 1, clientX: 2000 });
+      expect(pane.style.getPropertyValue("--thinking-pane-width")).toBe("25%");
+      expect(handle).toHaveAttribute("aria-valuenow", "25");
+    });
+
+    it("ignores secondary clicks, unrelated pointers, and unmeasurable containers", () => {
+      const { pane, handle, bounds } = renderResizablePane();
+      fireEvent.pointerDown(handle, { button: 2, pointerId: 1, clientX: 600 });
+      fireEvent.pointerMove(handle, { pointerId: 1, clientX: 520 });
+      expect(handle.setPointerCapture).not.toHaveBeenCalled();
+      fireEvent.pointerDown(handle, { button: 0, pointerId: 1, clientX: 600 });
+      fireEvent.pointerMove(handle, { pointerId: 2, clientX: 520 });
+      expect(pane.style.getPropertyValue("--thinking-pane-width")).toBe("50%");
+      bounds.mockReturnValue({ width: 0 } as DOMRect);
+      fireEvent.pointerMove(handle, { pointerId: 1, clientX: 520 });
+      expect(pane.style.getPropertyValue("--thinking-pane-width")).toBe("50%");
+    });
+
+    it.each(["pointerUp", "pointerCancel", "lostPointerCapture"] as const)(
+      "stops resizing after %s",
+      (event) => {
+        const { pane, handle } = renderResizablePane();
+        fireEvent.pointerDown(handle, { button: 0, pointerId: 1, clientX: 600 });
+        fireEvent.pointerMove(handle, { pointerId: 1, clientX: 520 });
+        fireEvent[event](handle, { pointerId: 1 });
+        fireEvent.pointerMove(handle, { pointerId: 1, clientX: 680 });
+        expect(pane.style.getPropertyValue("--thinking-pane-width")).toBe("60%");
+      },
+    );
+
+    it("supports keyboard resizing, bounds, and double-click reset", () => {
+      const { pane, handle } = renderResizablePane();
+      fireEvent.keyDown(handle, { key: "ArrowLeft" });
+      expect(pane.style.getPropertyValue("--thinking-pane-width")).toBe("55%");
+      fireEvent.keyDown(handle, { key: "ArrowRight" });
+      expect(pane.style.getPropertyValue("--thinking-pane-width")).toBe("50%");
+      fireEvent.keyDown(handle, { key: "End" });
+      fireEvent.keyDown(handle, { key: "ArrowLeft" });
+      expect(pane.style.getPropertyValue("--thinking-pane-width")).toBe("75%");
+      fireEvent.keyDown(handle, { key: "Home" });
+      fireEvent.keyDown(handle, { key: "ArrowRight" });
+      expect(pane.style.getPropertyValue("--thinking-pane-width")).toBe("25%");
+      fireEvent.doubleClick(handle);
+      expect(pane.style.getPropertyValue("--thinking-pane-width")).toBe("50%");
+      fireEvent.keyDown(handle, { key: "ArrowDown" });
+      expect(pane.style.getPropertyValue("--thinking-pane-width")).toBe("50%");
+    });
+
+    it("retains the chosen width across content updates and close/reopen, but not the drag", () => {
+      const { pane, handle } = renderResizablePane();
+      fireEvent.pointerDown(handle, { button: 0, pointerId: 1, clientX: 600 });
+      fireEvent.pointerMove(handle, { pointerId: 1, clientX: 520 });
+      act(() => select("conv-1", "reasoning:1"));
+      expect(pane.style.getPropertyValue("--thinking-pane-width")).toBe("60%");
+      fireEvent.keyDown(handle, { key: "Escape" });
+      act(() => select("conv-1"));
+      fireEvent.pointerMove(screen.getByRole("separator", { name: "Resize thinking pane" }), {
+        pointerId: 1,
+        clientX: 680,
+      });
+      expect(
+        screen.getByTestId("thinking-pane").style.getPropertyValue("--thinking-pane-width"),
+      ).toBe("60%");
+    });
+  });
+
   it("copies the entire raw trace, preserving Markdown and whitespace", async () => {
     const text = "  **Plan**\n\nFirst option.\n\n```python\nx = 1\n```\n\nFinal option.\n";
     select("conv-1", "reasoning:0", {
