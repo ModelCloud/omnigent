@@ -16,6 +16,7 @@ would authenticate the selected provider.
 
 from __future__ import annotations
 
+import subprocess
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
@@ -33,6 +34,12 @@ CODEX_BUILTIN_PROVIDERS = frozenset(
     }
 )
 _CODEX_AUTH_HEADER_NAMES = frozenset({"authorization", "api-key", "x-api-key"})
+
+# ``[model_providers.<id>.auth]`` defaults, mirroring Codex: 5s when the table
+# sets no ``timeout_ms``, capped here so a stuck credential command cannot stall
+# a host-side health refresh indefinitely.
+_PROVIDER_AUTH_DEFAULT_TIMEOUT_SECONDS = 5.0
+_PROVIDER_AUTH_MAX_TIMEOUT_SECONDS = 30.0
 
 CodexConfigAuth = Literal["provider-ready", "provider-auth-missing", "codex-login"]
 
@@ -130,6 +137,70 @@ def provider_table_has_self_contained_auth(table: dict[str, object]) -> bool:
             for key, value in headers.items()
         )
     return False
+
+
+def provider_table_auth_token(
+    table: dict[str, object],
+    *,
+    timeout: float = _PROVIDER_AUTH_DEFAULT_TIMEOUT_SECONDS,
+) -> str | None:
+    """Return the bearer token Codex would send for a provider table.
+
+    Codex resolves a configured provider's credential from ``config.toml``: a
+    literal ``experimental_bearer_token`` or the stdout of a command-backed
+    ``auth`` entry. ``env_key`` is not consulted here because it names a
+    variable rather than carrying a value, and the generated provider tables
+    never set one on a built-in gateway provider.
+
+    The command is executed exactly as Codex runs it (``command`` plus
+    ``args``, no shell wrapper of our own beyond what the command names), with
+    the table's ``timeout_ms`` bounding it. Every failure — missing binary,
+    non-zero exit, timeout, undecodable output — resolves to ``None`` so the
+    caller treats the endpoint as unauthenticated instead of raising inside a
+    health or endpoint probe.
+
+    :param table: A ``[model_providers.<id>]`` table from Codex's config.
+    :param timeout: Wall-clock ceiling when the table sets no usable
+        ``timeout_ms``.
+    :returns: The stripped token, or ``None`` when the table carries no usable
+        credential.
+    """
+    bearer = table.get("experimental_bearer_token")
+    if isinstance(bearer, str) and bearer.strip():
+        return bearer.strip()
+
+    auth = table.get("auth")
+    if not isinstance(auth, dict):
+        return None
+    command = auth.get("command")
+    if not isinstance(command, str) or not command.strip():
+        return None
+
+    args = auth.get("args")
+    argv = [command]
+    if isinstance(args, list):
+        argv.extend(str(item) for item in args)
+
+    timeout_ms = auth.get("timeout_ms")
+    if isinstance(timeout_ms, int) and not isinstance(timeout_ms, bool) and timeout_ms > 0:
+        effective_timeout = max(0.1, min(timeout_ms / 1000.0, _PROVIDER_AUTH_MAX_TIMEOUT_SECONDS))
+    else:
+        effective_timeout = timeout
+
+    try:
+        completed = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=effective_timeout,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    if completed.returncode != 0:
+        return None
+    token = completed.stdout.strip()
+    return token or None
 
 
 def codex_config_effective_auth(

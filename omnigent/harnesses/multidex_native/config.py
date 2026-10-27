@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import tempfile
 import tomllib
 from collections.abc import Mapping, Sequence
@@ -44,15 +45,17 @@ DEEPSEEK_SELECTOR_MODELS = {
 }
 MULTIDEX_RUNTIME_CAPABILITIES_FILE = "multidex-runtime-capabilities.json"
 # MultiDex rejects any other non-default field on its built-in gateway
-# providers. Verified against codex-cli 0.164: an unsupported key aborts the
-# whole config load ("only supports changing `provider`, `base_url`, `auth`,
-# `http_headers`, and `env_key`"), Codex falls back to built-in defaults, and
-# neither the hooks nor the MCP server load.
+# providers (``openrouter``, ``lithos``). An unsupported key aborts the whole
+# config load, so Codex falls back to built-in defaults and neither the hooks
+# nor the MCP server load: the terminal exits with status 1 before starting a
+# thread.
 #
-# Crucially the built-ins do NOT accept ``experimental_bearer_token``. A
-# literal token written into their table makes the session config invalid, so
-# built-ins authenticate exclusively through ``env_key`` — the name of the
-# variable whose value Codex sends as ``Authorization: Bearer <value>``.
+# The gateway credential channel is ``auth``, a command whose stdout Codex
+# sends as the bearer token. ``env_key`` and ``experimental_bearer_token`` are
+# each rejected by some MultiDex release, while ``auth`` is accepted by all of
+# them, so :func:`multidex_provider_config_overrides` embeds the registered
+# literal token in an auth command rather than writing either field.
+#
 # ``wire_api`` and ``requires_openai_auth`` are emitted only at their defaults,
 # which Codex accepts.
 MULTIDEX_BUILTIN_PROVIDER_OVERRIDE_FIELDS = frozenset(
@@ -61,22 +64,31 @@ MULTIDEX_BUILTIN_PROVIDER_OVERRIDE_FIELDS = frozenset(
         "base_url",
         "auth",
         "http_headers",
-        "env_key",
         "wire_api",
         "requires_openai_auth",
     }
 )
 
-# Built-in gateway providers and the environment variable that carries their
-# bearer when the registration has a literal ``experimental_bearer_token``
-# (MultiDex's own config format). Codex only accepts ``env_key`` for these
-# providers, so :func:`multidex_provider_config_overrides` translates a literal
-# token into this variable name and relies on ``provider_env_keys`` forwarding
-# the value from the host environment.
+# Built-in gateway providers, which accept only the limited override fields
+# above and authenticate through a command-backed ``auth`` entry.
+MULTIDEX_BUILTIN_PROVIDER_IDS = frozenset({"openrouter", "lithos"})
+
+# The variable older MultiDex builds read a built-in gateway's bearer from.
+#
+# Those builds define ``openrouter``/``lithos`` with this ``env_key`` by
+# default, and their credential resolution checks the environment before the
+# table's ``auth`` command, so the variable is still the effective credential
+# there. Builds that dropped the default ``env_key`` read ``auth`` instead and
+# never consult it. Emitting ``auth`` *and* forwarding this name covers both:
+# one of the two channels always resolves, and neither build rejects the table.
 MULTIDEX_BUILTIN_PROVIDER_ENV_KEYS: dict[str, str] = {
     "openrouter": "OPENROUTER_API_KEY",
     "lithos": "LITHOS_API_KEY",
 }
+
+# How long the generated auth command may take. It only prints a string that is
+# already in the session config, so it never performs I/O or network work.
+_MULTIDEX_AUTH_TIMEOUT_MS = 15000
 
 
 def multidex_model_picker_row(
@@ -299,20 +311,20 @@ def multidex_registration_bearer_token(
 def multidex_provider_env_keys(config: MultiDexConfig) -> tuple[str, ...]:
     """Return the ``env_key`` names this registration's providers authenticate with.
 
-    Built-in gateway providers (``openrouter``, ``lithos``) cannot carry a
-    literal ``experimental_bearer_token`` in a Codex config, so
-    :func:`multidex_provider_config_overrides` points them at an ``env_key``
-    instead. That name is only useful if the value reaches the Codex process,
-    and Codex children run with a filtered environment.
+    Built-in gateway providers (``openrouter``, ``lithos``) contribute the name
+    their older MultiDex builds resolve the bearer from (see
+    ``MULTIDEX_BUILTIN_PROVIDER_ENV_KEYS``): their session table carries
+    ``auth``, but a build that still defines the built-in with a default
+    ``env_key`` reads the environment first, so the value has to be there.
 
-    Reading the names from the registration — rather than from
-    ``~/.codex/config.toml`` — is what makes a MultiDex-only provider work: the
-    gateway tables live in MultiDex's own config file, so a session-private
-    Codex home would otherwise declare a variable nobody forwarded.
+    Custom providers may still declare ``env_key``. For either kind the name is
+    only useful if its value reaches the Codex process, and Codex children run
+    with a filtered environment, so the launcher forwards these names
+    explicitly.
 
     :param config: Loaded MultiDex registration.
     :returns: Sorted, de-duplicated environment variable names, e.g.
-        ``("LITHOS_API_KEY", "OPENROUTER_API_KEY")``.
+        ``("LITHOS_API_KEY", "MY_GATEWAY_KEY")``.
     """
     names: set[str] = set()
     for model in multidex_models(config):
@@ -323,6 +335,37 @@ def multidex_provider_env_keys(config: MultiDexConfig) -> tuple[str, ...]:
         if isinstance(env_key, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", env_key):
             names.add(env_key)
     return tuple(sorted(names))
+
+
+def multidex_builtin_provider_auth(
+    provider: str, provider_config: Mapping[str, object]
+) -> dict[str, object]:
+    """Build the command-backed ``auth`` table for a MultiDex built-in provider.
+
+    ``openrouter`` and ``lithos`` accept only ``provider``, ``base_url``,
+    ``auth``, ``http_headers``, ``wire_api`` and ``requires_openai_auth``.
+    ``auth`` is the one credential channel every MultiDex release accepts,
+    unlike ``env_key`` and ``experimental_bearer_token``.
+
+    The literal ``experimental_bearer_token`` from MultiDex's own registration
+    is embedded into the command, so builds that read it need nothing from the
+    environment. :func:`multidex_provider_env_keys` additionally forwards the
+    variable older builds resolve first, since ``auth`` is written for both.
+
+    :param provider: Provider name, e.g. ``"openrouter"``.
+    :param provider_config: The MultiDex registration table for that provider.
+    :returns: A ``{command, args, timeout_ms}`` table ready for the config.
+    :raises ValueError: The registration carries no usable literal token, which
+        :func:`load_multidex_config` normally rejects before reaching here.
+    """
+    token = provider_config.get("experimental_bearer_token")
+    if not isinstance(token, str) or not token.strip():
+        raise ValueError(f"MultiDex built-in provider {provider!r} has no bearer token")
+    return {
+        "command": "sh",
+        "args": ["-c", f"printf %s {shlex.quote(token.strip())}"],
+        "timeout_ms": _MULTIDEX_AUTH_TIMEOUT_MS,
+    }
 
 
 def multidex_provider_config_overrides(config: MultiDexConfig) -> tuple[str, ...]:
@@ -348,14 +391,16 @@ def multidex_provider_config_overrides(config: MultiDexConfig) -> tuple[str, ...
             }
         )
         provider_config.pop("env_key", None)
-        if model.provider in MULTIDEX_BUILTIN_PROVIDER_ENV_KEYS:
-            # Built-in providers reject ``experimental_bearer_token`` — writing
-            # one aborts the entire config load, so hooks and MCP never start.
-            # Their only accepted credential channel is ``env_key``: point it
-            # at the variable the host environment exports and drop every
-            # other non-default field, including the literal token itself.
+        if model.provider in MULTIDEX_BUILTIN_PROVIDER_IDS:
+            # Built-ins have no stable credential field across MultiDex
+            # releases, but ``auth`` is always accepted, so route the literal
+            # token through a command and drop every other non-default field.
+            # Older builds still resolve their default ``env_key`` first; the
+            # launcher forwards that variable alongside this table.
+            provider_config["auth"] = multidex_builtin_provider_auth(
+                model.provider, model.provider_config
+            )
             provider_config.pop("experimental_bearer_token", None)
-            provider_config["env_key"] = MULTIDEX_BUILTIN_PROVIDER_ENV_KEYS[model.provider]
             provider_config = {
                 key: value
                 for key, value in provider_config.items()

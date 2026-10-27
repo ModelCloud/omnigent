@@ -221,10 +221,18 @@ def _provider_endpoints(referenced: set[str]) -> dict[str, tuple[str, str | None
 def _config_toml_provider_endpoint(
     provider_name: str,
 ) -> tuple[str | None, str | None]:
-    """Read ``base_url`` + ``experimental_bearer_token`` for a config.toml provider."""
+    """Read ``base_url`` + credential for a config.toml provider.
+
+    The credential comes from the table itself — literal
+    ``experimental_bearer_token`` or the command-backed ``auth`` entry — because
+    a table that names a variable with ``env_key`` may be read by a different
+    Codex build than the one this probe runs beside. Resolving the value the
+    table carries keeps the health ping authenticated on every build.
+    """
     import tomllib
 
     from omnigent.inner.codex_executor import _codex_home_config_source_from_env
+    from omnigent.onboarding.codex_auth_readiness import provider_table_auth_token
 
     config_path = _codex_home_config_source_from_env() / "config.toml"
     try:
@@ -235,19 +243,9 @@ def _config_toml_provider_endpoint(
     if not isinstance(table, dict):
         return None, None
     base_url = table.get("base_url")
-    token = table.get("experimental_bearer_token")
-    if not isinstance(token, str) or not token:
-        # Built-in gateway providers (``openrouter``, ``lithos``) accept only
-        # ``env_key``, never a literal token, so resolve the name the table
-        # declares from the host environment the probe already runs under.
-        import os
-
-        env_key = table.get("env_key")
-        candidate = os.environ.get(env_key) if isinstance(env_key, str) else None
-        token = candidate if candidate else None
     return (
         base_url if isinstance(base_url, str) else None,
-        token if isinstance(token, str) else None,
+        provider_table_auth_token(table),
     )
 
 

@@ -1516,3 +1516,52 @@ def test_clear_bridge_state_removes_egress_certificate_failure(tmp_path: Path) -
     clear_bridge_state(bridge_dir)
 
     assert read_certificate_failure(bridge_dir) is None
+
+
+def test_read_codex_config_provider_endpoint_resolves_command_auth(
+    tmp_path: Path,
+) -> None:
+    """The probe authenticates the way Codex does: via the table's ``auth`` command.
+
+    Built-in gateway providers reject ``env_key`` outright, so a session table
+    carries a command-backed credential. Reading the environment instead would
+    hand the probe ``None`` and every health/latency probe would go out
+    unauthenticated.
+    """
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_text(
+        'model_provider = "openrouter"\n'
+        "[model_providers.openrouter]\n"
+        'base_url = "https://openrouter.ai/api/v1"\n'
+        'auth = { command = "sh", args = ["-c", "printf %s tok-auth"], timeout_ms = 5000 }\n',
+        encoding="utf-8",
+    )
+
+    assert read_codex_config_provider_endpoint(tmp_path) == (
+        "openrouter",
+        "https://openrouter.ai/api/v1",
+        "tok-auth",
+    )
+
+
+def test_read_codex_config_provider_endpoint_ignores_env_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An exported credential cannot authenticate a provider Codex ignores it for."""
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_text(
+        'model_provider = "gateway"\n'
+        "[model_providers.gateway]\n"
+        'base_url = "https://gateway.example/v1"\n'
+        'env_key = "GATEWAY_TOKEN"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GATEWAY_TOKEN", "leaked-env-token")
+
+    assert read_codex_config_provider_endpoint(tmp_path) == (
+        "gateway",
+        "https://gateway.example/v1",
+        None,
+    )
