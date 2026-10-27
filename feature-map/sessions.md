@@ -288,7 +288,10 @@ asks for confirmation before running, and a failed attempt opens the dialog,
 whose **Reconnect Arca** action retries. Success is reported only once the
 server lists the session's own host online; otherwise the dialog says the host
 is still offline and points to **Switch host** in case Arca came back as a
-different host.
+different host. In a session on an offline Arca host, the desktop app keeps the
+composer open: sending starts the same Arca reconnect, the message waits in the
+queue as **Waiting for host** without reaching the server, and it sends once the
+host is back.
 
 **Message recovery:** send the first prompt while a runner is starting, or send
 another message after its runner restarts. Also open a sub-agent's conversation
@@ -670,11 +673,13 @@ plain `uv run pytest`, which starts a private server for the test.
   `tests/e2e_ui/sessions/test_reconnect_local_host_from_app.py::test_desktop_reconnect_performs_local_host_reconnect`,
   `tests/e2e_ui/sessions/test_reconnect_local_host_from_app.py::test_desktop_reconnect_failure_offers_retry`,
   `tests/e2e_ui/sessions/test_reconnect_arca_from_app.py::test_desktop_reconnects_arca_from_current_chat`,
-  `tests/e2e_ui/sessions/test_reconnect_arca_from_app.py::test_desktop_arca_reconnect_failure_offers_retry`
+  `tests/e2e_ui/sessions/test_reconnect_arca_from_app.py::test_desktop_arca_reconnect_failure_offers_retry`,
+  `tests/e2e_ui/sessions/test_reconnect_arca_from_app.py::test_desktop_send_reconnects_offline_arca_then_sends`
   drive the real SPA and server with an injected desktop bridge and offline host
   responses. The Arca journeys cover a remembered host and a CLI-seeded host
   with no saved ID; they check one-action start, progress, failure and retry,
-  not live SSH or the desktop's consent console.
+  and a message that waits for the host, not live SSH or the desktop's consent
+  console.
 - **`message-recovery`, native binding races (own environment):**
   `tests/e2e/test_native_runner_binding_races_e2e.py::test_native_send_rechecks_binding_after_runner_miss`
   drives real servers, runners, and Claude/Codex CLIs with a mock model. It

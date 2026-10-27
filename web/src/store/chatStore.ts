@@ -1215,12 +1215,15 @@ export interface ChatActions {
    * while the agent is busy. The head is flushed automatically (FIFO, one per
    * turn) when the session next goes idle — see the `session_status` handler.
    * `conversationId` targets a live conversation beside the visible one (a side chat).
+   * `waitingForHost` holds it until `releaseHostHeldMessages`, for a send made
+   * while the session's host is offline.
    */
   enqueueMessage: (
     text: string,
     files?: File[],
     replyDraft?: StoredReplyDraft,
     conversationId?: string,
+    opts?: { waitingForHost?: boolean },
   ) => void;
   /** Let a conversation's messages held for an offline host flush again. */
   releaseHostHeldMessages: (conversationId: string) => void;
@@ -2158,12 +2161,18 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
   abortController: null,
   historyGeneration: 0,
 
-  enqueueMessage: (text, files, replyDraft, targetId) => {
+  enqueueMessage: (text, files, replyDraft, targetId, opts) => {
     const target = queueTarget(get, targetId);
     if (target === null) return;
     const { conversationId, boundAgentId, sessionHarness, startupPending } = target.state;
     if (conversationId === null) return;
-    if (startupPending && boundAgentId && !isCompactControl(sessionHarness, text, files)) {
+    const waitingForHost = opts?.waitingForHost === true;
+    if (
+      !waitingForHost &&
+      startupPending &&
+      boundAgentId &&
+      !isCompactControl(sessionHarness, text, files)
+    ) {
       void get().send(text, boundAgentId, files, {
         replyDraft,
         pinnedConversationId: conversationId,
@@ -2191,13 +2200,14 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
           ...(boundAgentId !== null ? { agentId: boundAgentId } : {}),
           ...(files && files.length > 0 ? { files } : {}),
           ...(replyDraft ? { replyDraft } : {}),
+          ...(waitingForHost ? { waitingForHost } : {}),
         },
       ],
     }));
     // A message queued while the agent is idle (a race where the send routed
     // to the queue but the turn had already ended) would otherwise wait for an
-    // idle edge that never comes — flush now.
-    get().maybeFlushQueuedHead(targetId);
+    // idle edge that never comes — flush now, unless it waits for the host.
+    if (!waitingForHost) get().maybeFlushQueuedHead(targetId);
   },
 
   dequeueMessage: (queueId) => {
@@ -2208,9 +2218,7 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
 
   releaseHostHeldMessages: (conversationId) => {
     setActive((s) => {
-      if (!s.queuedMessages.some((m) => m.conversationId === conversationId && m.waitingForHost)) {
-        return {};
-      }
+      if (!waitsForHost(s.queuedMessages, conversationId)) return {};
       return {
         queuedMessages: s.queuedMessages.map((m) =>
           m.conversationId === conversationId && m.waitingForHost
@@ -2255,6 +2263,7 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
     const target = s.queuedMessages.find((m) => m.queueId === queueId);
     const agentId = target?.agentId ?? s.boundAgentId;
     if (target === undefined || agentId === null) return;
+    if (waitsForHost(s.queuedMessages, target.conversationId)) return;
     if (target.command === "compact" && rejectBusyCompact(target.conversationId)) return;
     // Nothing can be steered past a first message still held for startup; it stays queued.
     const targetState = setterForState(target.conversationId);
@@ -2267,7 +2276,7 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
   steerAllQueuedMessages: (conversationId) => {
     const s = get();
     const own = s.queuedMessages.filter((m) => m.conversationId === conversationId);
-    if (own.length === 0) return;
+    if (own.length === 0 || waitsForHost(own, conversationId)) return;
     const state = setterForState(conversationId);
     if (state !== null && holdsInitialDraft(state)) return;
     // When the first one will be held for startup, the rest stay queued behind it.
@@ -2365,7 +2374,8 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
     // so an undrained message from another conversation can sit at index 0; a
     // head-only guard would let it block this conversation's messages forever.
     const head = s.queuedMessages.find((m) => m.conversationId === s.conversationId);
-    if (head === undefined || head.requiresRetry || head.waitingForHost) return;
+    if (head === undefined || head.requiresRetry) return;
+    if (waitsForHost(s.queuedMessages, s.conversationId)) return;
     // Remove it BEFORE the POST so a re-entrant flush can't double-send.
     target.write({ queuedMessages: s.queuedMessages.filter((m) => m.queueId !== head.queueId) });
     void s.send(head.text, head.agentId ?? s.boundAgentId, head.files, queuedSendOptions(head));
@@ -2430,7 +2440,8 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
       const cooldownUntil = backgroundFlushCooldownUntil.get(conversationId);
       if (cooldownUntil !== undefined && cooldownUntil > now) continue;
       const head = get().queuedMessages.find((m) => m.conversationId === conversationId);
-      if (head === undefined || head.requiresRetry || head.waitingForHost) continue;
+      if (head === undefined || head.requiresRetry) continue;
+      if (waitsForHost(get().queuedMessages, conversationId)) continue;
       const compactAgentId = head.agentId ?? local?.boundAgentId;
       if (head.command === "compact" && !compactAgentId) continue;
 
@@ -3846,6 +3857,11 @@ export function rejectBusyCompact(conversationId: string | null): boolean {
   if (state?.status !== "streaming" && state?.sessionStatus !== "running") return false;
   toast.error("Compact is disabled while a chat is in progress", { richColors: true });
   return true;
+}
+
+/** Whether a conversation has a message waiting for its offline host; none of its queue sends early. */
+function waitsForHost(queuedMessages: QueuedMessage[], conversationId: string | null): boolean {
+  return queuedMessages.some((m) => m.conversationId === conversationId && m.waitingForHost);
 }
 
 /**
