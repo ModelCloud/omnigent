@@ -10,6 +10,7 @@ from omnigent.onboarding.codex_auth_readiness import (
     codex_config_effective_auth,
     effective_codex_model_provider,
     load_codex_config,
+    provider_table_auth_token,
     provider_table_has_self_contained_auth,
 )
 
@@ -195,3 +196,47 @@ def test_auth_headers_are_self_contained_for_adoption(header: str) -> None:
 
 def test_env_key_is_not_self_contained_for_adoption() -> None:
     assert not provider_table_has_self_contained_auth({"env_key": "GATEWAY_TOKEN"})
+
+
+def test_auth_token_prefers_literal_bearer_token() -> None:
+    assert provider_table_auth_token({"experimental_bearer_token": " tok-literal "}) == (
+        "tok-literal"
+    )
+
+
+def test_auth_token_runs_command_backed_auth() -> None:
+    """A built-in gateway provider's credential comes from its ``auth`` command.
+
+    Codex resolves the token by running the command; no provider credential is
+    ever read from the process environment, so the mirror must do the same.
+    """
+    assert (
+        provider_table_auth_token(
+            {"auth": {"command": "sh", "args": ["-c", "printf %s tok-cmd"], "timeout_ms": 5000}}
+        )
+        == "tok-cmd"
+    )
+
+
+@pytest.mark.parametrize(
+    "table",
+    [
+        pytest.param({"env_key": "GATEWAY_TOKEN"}, id="env-key-only"),
+        pytest.param({"auth": {"command": "   "}}, id="blank-command"),
+        pytest.param({"auth": {"command": "/nonexistent/credential-binary"}}, id="missing-binary"),
+        pytest.param({"auth": {"command": "sh", "args": ["-c", "exit 3"]}}, id="nonzero-exit"),
+        pytest.param({"auth": {"command": "sh", "args": ["-c", "printf '   '"]}}, id="blank-out"),
+    ],
+)
+def test_auth_token_resolves_to_none_on_unusable_credential(table: dict[str, object]) -> None:
+    assert provider_table_auth_token(table) is None
+
+
+def test_auth_token_honours_the_table_timeout() -> None:
+    """A hung credential command fails closed instead of stalling the probe."""
+    assert (
+        provider_table_auth_token(
+            {"auth": {"command": "sh", "args": ["-c", "sleep 5"], "timeout_ms": 100}}
+        )
+        is None
+    )

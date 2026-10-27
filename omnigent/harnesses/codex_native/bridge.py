@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Literal
 
 from omnigent.harnesses.codex_egress import CertificateFailure
 from omnigent.native import native_bridge_common
+from omnigent.onboarding.codex_auth_readiness import provider_table_auth_token
 
 if TYPE_CHECKING:
     from omnigent.inner.terminal import TerminalInstance
@@ -717,10 +718,12 @@ def read_codex_config_provider_endpoint(
     """Return ``(provider, base_url, bearer_token)`` for the session's pinned provider.
 
     Follows ``model_provider`` in the session's private ``config.toml`` to its
-    ``[model_providers.<name>]`` table and extracts ``base_url`` and
-    ``experimental_bearer_token`` — the credentials materialized for the
-    session, never the process env. Re-read per call so an in-TUI provider
-    switch picks up on the next probe.
+    ``[model_providers.<name>]`` table and extracts ``base_url`` and the
+    credential materialized for the session — a literal
+    ``experimental_bearer_token`` or the command-backed ``auth`` entry. Both
+    live in the table, so the probe authenticates with exactly what Codex
+    sends and never guesses from the process environment. Re-read per call so
+    an in-TUI provider switch picks up on the next probe.
 
     :param bridge_dir: Native Codex bridge directory.
     :returns: ``(provider_id, base_url, token_or_None)``, or ``None`` when
@@ -741,16 +744,7 @@ def read_codex_config_provider_endpoint(
     base_url = table.get("base_url")
     if not isinstance(base_url, str) or not base_url:
         return None
-    token = table.get("experimental_bearer_token")
-    if not isinstance(token, str) or not token:
-        # Built-in gateway providers (``openrouter``, ``lithos``) reject a
-        # literal ``experimental_bearer_token``, so their session table names
-        # the credential with ``env_key`` instead. Resolve it from this
-        # process's environment — the same value Codex reads for its own
-        # request — so the latency/health probes stay authenticated.
-        env_key = table.get("env_key")
-        token = os.environ.get(env_key) if isinstance(env_key, str) else None
-    return provider, base_url, token if isinstance(token, str) and token else None
+    return provider, base_url, provider_table_auth_token(table)
 
 
 def read_codex_config_effort(bridge_dir: Path) -> str | None:

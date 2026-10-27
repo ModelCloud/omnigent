@@ -5793,10 +5793,10 @@ async def _auto_create_codex_terminal(
         # every turn fails on ``Missing environment variable``.
         #
         # Two sources, because they cover different providers: the user's
-        # Codex config (``localdex``, OpenRouter…) and the MultiDex
-        # registration. MultiDex's gateway tables live in its own config, and
-        # Codex only accepts ``env_key`` for those built-ins, so their names
-        # never appear in the session config's source file.
+        # Codex config and the MultiDex registration. Those registration tables
+        # live in MultiDex's own config, so their custom-provider names never
+        # appear in the session config's source file. Built-in gateway
+        # providers authenticate through ``auth`` and contribute no name.
         provider_env_keys=tuple(
             sorted(
                 {

@@ -52,11 +52,13 @@ def test_lithos_provider_registers_three_variants_with_one_model_label(
     assert "lithos" in native
     assert "name" not in native["lithos"]
     assert native["lithos"]["base_url"] == "https://api.lithosai.cloud/v1"
-    # codex 0.164 rejects ``experimental_bearer_token`` on a built-in provider
-    # and then discards the *entire* config, so hooks/MCP never load. The
-    # only credential channel it accepts is ``env_key``.
+    # A literal ``experimental_bearer_token`` or ``env_key`` on a built-in
+    # provider is rejected by some MultiDex releases, discarding the *entire*
+    # config so hooks/MCP never load. ``auth`` is on the allowlist in every
+    # release, so the credential travels as a token-printing command.
     assert "experimental_bearer_token" not in native["lithos"]
-    assert native["lithos"]["env_key"] == "LITHOS_API_KEY"
+    assert "env_key" not in native["lithos"]
+    assert native["lithos"]["auth"]["command"] == "sh"
     assert set(native["lithos"]) <= MULTIDEX_BUILTIN_PROVIDER_OVERRIDE_FIELDS
 
 
@@ -92,7 +94,12 @@ def test_openrouter_registration_keeps_native_routing_and_picker_metadata(
     ]["openrouter"]
     assert set(provider_config) <= MULTIDEX_BUILTIN_PROVIDER_OVERRIDE_FIELDS
     assert "experimental_bearer_token" not in provider_config
-    assert provider_config["env_key"] == "OPENROUTER_API_KEY"
+    assert "env_key" not in provider_config
+    assert provider_config["auth"] == {
+        "command": "sh",
+        "args": ["-c", "printf %s or-test-token"],
+        "timeout_ms": 15000,
+    }
     assert provider_config["base_url"] == "https://openrouter.ai/api/v1"
     assert provider_config["provider"] == {
         "only": ["wafer/mxfp4"],
@@ -378,15 +385,15 @@ requires_openai_auth = false
     assert "env_key" not in provider_config
 
 
-def test_builtin_provider_translates_literal_token_to_env_key(tmp_path: Path) -> None:
-    """A built-in provider's literal token becomes its ``env_key`` name.
+def test_builtin_provider_embeds_literal_token_in_auth_command(tmp_path: Path) -> None:
+    """A built-in provider's literal token travels through ``auth``.
 
     MultiDex registers ``lithos``/``openrouter`` with
-    ``experimental_bearer_token``, but codex-cli 0.164 rejects that field on a
-    built-in provider and then discards the whole config file — which silently
-    disabled hooks and MCP. Only ``env_key`` is accepted, so the literal must
-    be re-expressed as the name of the variable that carries it, and that
-    variable must be forwarded to the Codex process.
+    ``experimental_bearer_token``, but codex-cli 0.164 rejects both that field
+    and ``env_key`` on a built-in provider and then discards the whole config
+    file — which silently disabled hooks and MCP, so the terminal exited before
+    starting a thread. ``auth`` is accepted by every MultiDex release, so the
+    literal token is handed to a token-printing command instead.
     """
     providers = tmp_path / "config.toml"
     providers.write_text(
@@ -406,11 +413,42 @@ experimental_bearer_token = "lith-config-token"
         "lithos"
     ]
     assert "experimental_bearer_token" not in native
-    assert native["env_key"] == "LITHOS_API_KEY"
+    assert "env_key" not in native
+    assert native["auth"] == {
+        "command": "sh",
+        "args": ["-c", "printf %s lith-config-token"],
+        "timeout_ms": 15000,
+    }
     assert set(native) <= MULTIDEX_BUILTIN_PROVIDER_OVERRIDE_FIELDS
 
-    # The name is useless unless the value actually reaches the child env.
+    # ``auth`` is always accepted, and older MultiDex builds resolve their
+    # default ``env_key`` before it, so both channels are supplied.
     assert multidex_provider_env_keys(registration) == ("LITHOS_API_KEY",)
+
+
+def test_builtin_provider_requires_a_literal_token(tmp_path: Path) -> None:
+    """A built-in with no literal token is rejected at registration time.
+
+    ``auth`` embeds the registration's literal token so the session config is
+    self-contained. A provider registered without one has no credential the
+    generated command could print, so ``load_multidex_config`` refuses it up
+    front instead of emitting an auth command that would fail every turn.
+    """
+    providers = tmp_path / "config.toml"
+    providers.write_text(
+        """
+[model_providers.openrouter]
+base_url = "https://openrouter.ai/api/v1"
+""",
+        encoding="utf-8",
+    )
+    models = tmp_path / "models.toml"
+    models.write_text(
+        '[models."deepseek/deepseek-v4.1-flash-1017"]\nprovider = "openrouter"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="must set experimental_bearer_token"):
+        load_multidex_config(providers, models_path=models, require_token=True)
 
 
 def test_provider_env_key_is_rejected(tmp_path: Path) -> None:
@@ -448,3 +486,48 @@ def test_builtin_provider_without_token_is_rejected(tmp_path: Path) -> None:
         assert "experimental_bearer_token" in str(exc)
     else:
         raise AssertionError("credential-less lithos provider was accepted")
+
+
+def test_builtin_provider_covers_every_multidex_credential_generation(
+    tmp_path: Path,
+) -> None:
+    """One emitted table must authenticate on every MultiDex credential schema.
+
+    Three built-in credential schemas are in the wild:
+
+    * default ``env_key`` in the provider definition (oldest);
+    * ``experimental_bearer_token`` accepted, ``env_key`` still rejected;
+    * ``env_key`` rejected outright, config.toml credentials only (current).
+
+    No single field works everywhere: ``experimental_bearer_token`` is rejected
+    by the oldest and the current schema, and ``env_key`` by the current one.
+    ``auth`` is accepted by all three, but the oldest resolves its built-in
+    ``env_key`` before ``auth``, so the table alone is not enough there — the
+    variable has to be forwarded too. This pins both halves of that pairing.
+    """
+    providers = tmp_path / "config.toml"
+    providers.write_text(
+        '[model_providers.openrouter]\nexperimental_bearer_token = "or-shared-token"\n',
+        encoding="utf-8",
+    )
+    models = tmp_path / "models.toml"
+    models.write_text(
+        '[models."deepseek/deepseek-v4.1-flash-1017"]\nprovider = "openrouter"\n',
+        encoding="utf-8",
+    )
+    registration = load_multidex_config(providers, models_path=models, require_token=False)
+    native = tomllib.loads(multidex_provider_config_overrides(registration)[0])["model_providers"][
+        "openrouter"
+    ]
+
+    # Schema-independent channel: a command printing the registration's token.
+    assert native["auth"] == {
+        "command": "sh",
+        "args": ["-c", "printf %s or-shared-token"],
+        "timeout_ms": 15000,
+    }
+    # Rejected by at least one schema, so it must never be written.
+    assert "experimental_bearer_token" not in native
+    assert "env_key" not in native
+    # The oldest schema reads this variable before ``auth``, so it is forwarded.
+    assert multidex_provider_env_keys(registration) == ("OPENROUTER_API_KEY",)
