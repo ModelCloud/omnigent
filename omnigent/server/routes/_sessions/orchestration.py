@@ -305,6 +305,7 @@ from omnigent.server.routes._sessions.helpers import (
     _native_terminal_name_for_harness,
     _NativeTerminalEnsureOutcome,
     _owner_from_grants,
+    _owns_host_runner,
     _parse_external_conversation_item,
     _pending_elicitation_snapshot_for_session,
     _permission_level_from_grants,
@@ -998,13 +999,15 @@ async def _archive_stop(
     await _facade._best_effort_stop(session_id, conversation_store, runner_router)
     if conv.host_id and conv.runner_id:
         try:
-            await _stop_host_runner_intentionally(
-                session_id,
-                conv.host_id,
-                conv.runner_id,
-                host_registry,
-                conversation_store,
-            )
+            # A sub-agent riding an ancestor's runner leaves it up for the owner.
+            if await _owns_host_runner(conv, conversation_store):
+                await _stop_host_runner_intentionally(
+                    session_id,
+                    conv.host_id,
+                    conv.runner_id,
+                    host_registry,
+                    conversation_store,
+                )
         except Exception:  # noqa: BLE001
             _logger.debug(
                 "Archive host-runner teardown failed for %s",
@@ -1460,6 +1463,9 @@ def _build_session_response(
             cumulative_input_tokens=int(own_usage.get("input_tokens", 0) or 0) + cached,
             cumulative_output_tokens=int(own_usage.get("output_tokens", 0) or 0),
             cumulative_cache_read_input_tokens=cached,
+            cumulative_cost_usd=own_usage.get("total_cost_usd")
+            if own_usage.get("native_cost_complete") is True
+            else None,
         )
     # Collapse per-user pin keys to the canonical bare key for this viewer, so
     # the snapshot never carries another user's pin key (see _labels_for_viewer).
@@ -1816,6 +1822,9 @@ def _persist_native_cumulative_usage(
       (exact billing; used directly). Stored in ``total_cost_usd``, which
       drives the badge and the per-user daily rollup, so the badge matches
       ``/cost`` in the Claude TUI.
+    - ``cost_complete`` — whether the reporter priced all accumulated usage.
+      Native Pi uses this to distinguish a resumable cost baseline from a
+      display subtotal that excludes unpriced turns.
     - ``policy_cost_usd`` — total session cost for ENFORCEMENT (the
       cost-budget gate). claude-native forwards ``max(S, real-time
       transcript estimate)`` here so the gate reflects in-flight sub-agent
@@ -1880,6 +1889,12 @@ def _persist_native_cumulative_usage(
     # downward report a no-op, so the worst a forged post can do is leave the
     # figure unchanged. (See also the runner-token guard on cost_control.*
     # label writes — usage was the missing half.)
+    if "cost_complete" in data:
+        if type(data["cost_complete"]) is not bool:
+            raise OmnigentError("cost_complete must be a bool", code=ErrorCode.INVALID_INPUT)
+        current["native_cost_complete"] = data["cost_complete"] and cost is not None
+    else:
+        current.pop("native_cost_complete", None)
     old_cost = float(current.get("total_cost_usd", 0.0) or 0.0)
     old_policy_cost = float(current.get("policy_cost_usd", 0.0) or 0.0)
     # Old cumulative token totals, captured before the overwrites below so
