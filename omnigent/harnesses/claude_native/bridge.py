@@ -6374,7 +6374,16 @@ def _composer_frame_rule_indices(lines: list[str]) -> list[int]:
     if len(rules) < 2:
         return rules
     frame_indent = min(len(lines[idx]) - len(lines[idx].lstrip()) for idx in rules[-2:])
-    return [idx for idx in rules if len(lines[idx]) - len(lines[idx].lstrip()) == frame_indent]
+    rules = [idx for idx in rules if len(lines[idx]) - len(lines[idx].lstrip()) == frame_indent]
+    last_prompt = next((line for line in lines[rules[-1] + 1 :] if line.strip()), "")
+    if (
+        last_prompt.strip()[:1] in _COMPOSER_MODE_GLYPHS
+        and len(last_prompt) - len(last_prompt.lstrip()) == frame_indent
+    ):
+        # A lower prompt makes the last rule an opening edge. The older frame
+        # cannot establish that this clipped draft is complete or empty.
+        return [rules[-1]]
+    return rules
 
 
 def _composer_box(pane: str) -> _ComposerBox | None:

@@ -11764,13 +11764,27 @@ def test_a_draft_taller_than_the_pane_is_cleared_before_delivery(
 
 @pytest.mark.parametrize("slash", [False, True], ids=["web-message", "slash-command"])
 @pytest.mark.parametrize("cursor", [0, 8, 18], ids=["start", "middle", "end"])
+@pytest.mark.parametrize("stale_frame", [False, True], ids=["plain", "previous-frame"])
 @pytest.mark.parametrize("draft", ["", "ONE\nTWO\nTHREE\nFOUR"], ids=["empty", "hidden-draft"])
 def test_delivery_expands_a_clipped_composer_until_submit_is_verified(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, slash: bool, cursor: int, draft: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    slash: bool,
+    cursor: int,
+    draft: str,
+    stale_frame: bool,
 ) -> None:
     """A tiny pane can hide the closing rule even after every draft line was cleared."""
     composer = _EditableComposer(draft, cursor=min(cursor, len(draft)), visible_rows=1)
     composer.install(monkeypatch)
+    if stale_frame:
+        capture = composer._capture_pane
+
+        def capture_after_old_frame(socket_path: str, tmux_target: str) -> str:
+            pane = capture(socket_path, tmux_target).removeprefix("⏺ done\n")
+            return f"{composer._RULE}\n❯ previous message\n{pane}"
+
+        monkeypatch.setattr(claude_native_bridge, "_capture_pane", capture_after_old_frame)
     monkeypatch.setattr(
         subprocess,
         "run",
