@@ -3659,8 +3659,13 @@ class HostProcess:
             self._fs_readers.move_to_end(expanded)
             reader = cached[1]
         params = frame.params or {}
+        from omnigent.runner import pr_resource
+
         try:
-            payload = self._dispatch_fs_op(reader, frame.op, frame.session_id, params)
+            with pr_resource.server_tracking(
+                params.get("server_tracked"), params.get("default_pr_url")
+            ):
+                payload = self._dispatch_fs_op(reader, frame.op, frame.session_id, params)
         except WorkspaceReaderError as exc:
             return HostFsResultFrame(
                 request_id=frame.request_id,
@@ -3733,8 +3738,26 @@ class HostProcess:
                 session_id=frame.session_id,
                 agent_id=frame.agent_id,
             )
-        except Exception:
-            _logger.exception("Skill discovery failed for %r", frame.harness)
+        except Exception as exc:
+            _logger.exception(
+                "Skill discovery failed for %r",
+                frame.harness,
+                extra=debug_event(
+                    "host_skill_discovery_failed",
+                    session_id=frame.session_id,
+                    request_id=frame.request_id,
+                    host_id=self._identity.host_id,
+                    harness=frame.harness,
+                    discovery_scope="session" if frame.session_id is not None else "directory",
+                    error_type=type(exc).__name__,
+                    http_status=(
+                        exc.response.status_code
+                        if isinstance(exc, httpx.HTTPStatusError)
+                        else None
+                    ),
+                    errno=exc.errno if isinstance(exc, OSError) else None,
+                ),
+            )
             return HostSkillsResultFrame(
                 request_id=frame.request_id,
                 status="failed",
@@ -4202,10 +4225,14 @@ class HostProcess:
                 error_code="not_found",
                 error="workspace directory does not exist on host",
             )
+        params = {**(frame.params or {}), "session_id": frame.session_id}
+        from omnigent.runner import pr_resource
+
         try:
-            payload = self._dispatch_fs_write_op(
-                expanded, frame.op, {**(frame.params or {}), "session_id": frame.session_id}
-            )
+            with pr_resource.server_tracking(
+                params.get("server_tracked"), params.get("default_pr_url")
+            ):
+                payload = self._dispatch_fs_write_op(expanded, frame.op, params)
         except ValueError as exc:
             return HostFsResultFrame(
                 request_id=frame.request_id,
@@ -4812,13 +4839,15 @@ class HostProcess:
                                 "reconnecting on slow backoff until it responds.",
                                 cause,
                             )
-                            print(
-                                f"⚠ {cause} The server may be unhealthy. "
-                                "Retrying on a slower cadence — this recovers "
-                                "automatically once the server responds.",
-                                file=sys.stderr,
-                                flush=True,
-                            )
+                            # A detached console must not stop tunnel recovery.
+                            with contextlib.suppress(OSError, ValueError):
+                                print(
+                                    f"⚠ {cause} The server may be unhealthy. "
+                                    "Retrying on a slower cadence — this recovers "
+                                    "automatically once the server responds.",
+                                    file=sys.stderr,
+                                    flush=True,
+                                )
                     else:
                         self._silent_connect_streak = 0
                     # Classify the disconnect to choose a reconnect cadence.
@@ -5383,12 +5412,14 @@ class HostProcess:
                 await self._report_runner_exit(
                     runner_id, report.error, had_connected=report.had_connected
                 )
-            print(
-                f"✓ Connected as {self._identity.name!r} "
-                f"({self._identity.host_id}), {len(hello.runners)} live runner(s). "
-                "Listening for sessions — Ctrl-C to disconnect.",
-                flush=True,
-            )
+            # Registration remains usable after the console reader exits.
+            with contextlib.suppress(OSError, ValueError):
+                print(
+                    f"✓ Connected as {self._identity.name!r} "
+                    f"({self._identity.host_id}), {len(hello.runners)} live runner(s). "
+                    "Listening for sessions — Ctrl-C to disconnect.",
+                    flush=True,
+                )
 
             # Readiness refresh runs in its own task, never on this receive loop:
             # a harness probe that blocks (a hung CLI ``--version`` / ``auth
