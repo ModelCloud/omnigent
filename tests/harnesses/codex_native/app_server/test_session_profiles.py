@@ -328,7 +328,12 @@ def test_native_codex_profile_is_materialized_for_app_server_and_passed_to_remot
         config_profile="local",
     )
 
-    assert app_server_argv[:2] == ["codex session-tag", "app-server"]
+    assert app_server_argv[:4] == [
+        "codex session-tag",
+        "-c",
+        'model_provider="local-openai"',
+        "app-server",
+    ]
     assert "--profile" not in app_server_argv
     assert remote_argv[:2] == ["--profile", "local"]
 
