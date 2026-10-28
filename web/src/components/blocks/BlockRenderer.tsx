@@ -347,6 +347,7 @@ export function BlockRenderer({
             indexBase: segment.startIndex,
             onRetryError,
             conversationId,
+            responseId,
           }),
         );
         continue;
@@ -379,6 +380,7 @@ export function BlockRenderer({
             indexBase: segment.startIndex,
             onRetryError,
             conversationId,
+            responseId,
           })}
         </TurnWorkedFold>,
       );
@@ -405,6 +407,7 @@ export function BlockRenderer({
       suppressReasoningDuration: showsWorking,
       onRetryError,
       conversationId,
+      responseId,
     }),
     rateSummary,
   ];
@@ -425,6 +428,7 @@ function renderSequence(
     indexBase = 0,
     onRetryError,
     conversationId,
+    responseId,
   }: TurnSequenceOptions,
 ): ReactNode[] {
   const rendered: ReactNode[] = [];
@@ -491,6 +495,7 @@ function renderSequence(
         followsText,
         onRetryError,
         conversationId,
+        responseId,
       ),
     );
     previousRenderedItemWasText = item.kind === "text";
@@ -506,6 +511,9 @@ interface TurnSequenceOptions {
   onRetryError?: BlockRendererProps["onRetryError"];
   /** Conversation these items belong to — scopes thinking-pane selections. */
   conversationId?: string;
+  /** Turn these items belong to — keeps positional section keys unique
+   *  across bubbles when a section lacks a server item id. */
+  responseId?: string;
 }
 
 interface TurnPartition {
@@ -913,6 +921,7 @@ function renderItem(
   followsText = false,
   onRetryError?: BlockRendererProps["onRetryError"],
   conversationId?: string,
+  responseId?: string,
 ): ReactNode {
   const key = keyFor(item, index);
   switch (item.kind) {
@@ -949,7 +958,7 @@ function renderItem(
           isStreaming={isReasoningStreaming}
           duration={suppressReasoningDuration ? undefined : item.duration}
           conversationId={conversationId}
-          sectionKey={key}
+          sectionKey={responseId ? `${responseId}:${key}` : key}
         />
       );
     case "tool":

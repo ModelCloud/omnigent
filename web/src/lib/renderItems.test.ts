@@ -2528,6 +2528,71 @@ describe("buildBubbles — reasoning", () => {
     const r = items[0] as Extract<RenderItem, { kind: "reasoning" }>;
     expect(r.duration).toBe(12);
   });
+
+  it("consecutive reasoning blocks merge into one section keeping every trace", () => {
+    // Codex-style turns persist several reasoning items in a row; on
+    // hydration they form one run. The merged section must keep every
+    // item's text — the live path merges consecutive thinking sections
+    // the same way — and take a stable itemId so the thinking pane and
+    // React keys can target it.
+    const blocks: AnyBlock[] = [
+      {
+        type: "reasoning_block",
+        ctx: ctx({ itemId: "r1" }),
+        reasoningText: "first thought",
+        summaryText: "",
+      },
+      {
+        type: "reasoning_block",
+        ctx: ctx({ itemId: "r2" }),
+        reasoningText: "",
+        summaryText: "second thought",
+      },
+      {
+        type: "reasoning_block",
+        ctx: ctx({ itemId: "r3" }),
+        reasoningText: "third thought",
+        summaryText: "",
+      },
+    ];
+    const bubbles = buildBubbles(blocks, null);
+    const items = (bubbles[0] as Extract<Bubble, { kind: "assistant" }>).items;
+    expect(items.length).toBe(1);
+    const r = items[0] as Extract<RenderItem, { kind: "reasoning" }>;
+    expect(r.text).toBe("first thought\n\nsecond thought\n\nthird thought");
+    expect(r.itemId).toBe("r3");
+  });
+
+  it("consecutive persisted reasoning items hydrate into one merged section", () => {
+    // End-to-end: the itemsToBlocks → buildBubbles path a history page or
+    // reload takes. Without the merge, every reasoning item but the last
+    // in a run lost its trace.
+    const items: ConversationItem[] = [
+      {
+        id: "r1",
+        response_id: "resp_1",
+        type: "reasoning",
+        status: "completed",
+        model: "codex",
+        summary: [{ type: "summary_text", text: "planned the fix" }],
+      },
+      {
+        id: "r2",
+        response_id: "resp_1",
+        type: "reasoning",
+        status: "completed",
+        model: "codex",
+        summary: [],
+        content: [{ type: "reasoning_text", text: "inspected the code" }],
+      },
+    ];
+    const bubbles = buildBubbles(itemsToBlocks(items), null);
+    const assistant = bubbles[0] as Extract<Bubble, { kind: "assistant" }>;
+    expect(assistant.items.length).toBe(1);
+    const r = assistant.items[0] as Extract<RenderItem, { kind: "reasoning" }>;
+    expect(r.text).toBe("planned the fix\n\ninspected the code");
+    expect(r.itemId).toBe("r2");
+  });
 });
 
 describe("buildBubbles — slash_command items", () => {

@@ -1877,29 +1877,31 @@ function reasoningItem(run: AnyBlock[], preceding?: AnyBlock): RenderItem {
     }
   }
 
-  // If chunks are present, concatenate them. Otherwise fall back to a
-  // closed reasoning_block's reasoningText / summaryText.
+  // The last block carrying an itemId names the section (hydrated blocks
+  // have one; live reasoning chunks do not).
+  let itemId: string | null = null;
+  for (let i = run.length - 1; i >= 0 && itemId === null; i -= 1) {
+    itemId = run[i]!.ctx.itemId;
+  }
+
+  // If chunks are present, concatenate them. Otherwise merge every
+  // reasoning_block in the run: a hydrated turn can hold several persisted
+  // reasoning items in a row, and the live path merges consecutive thinking
+  // sections the same way (blank-line separated).
   const chunkText = run
     .filter((b) => b.type === "reasoning_chunk")
     .map((b) => (b as Extract<AnyBlock, { type: "reasoning_chunk" }>).text)
     .join("");
   if (chunkText.length > 0) {
-    return { kind: "reasoning", itemId: null, text: chunkText, duration };
+    return { kind: "reasoning", itemId, text: chunkText, duration };
   }
-  for (let i = run.length - 1; i >= 0; i -= 1) {
-    const b = run[i]!;
-    if (b.type === "reasoning_block") {
-      const parts = [b.reasoningText, b.summaryText].filter((s) => s.length > 0);
-      return {
-        kind: "reasoning",
-        itemId: null,
-        text: parts.join("\n\n"),
-        duration,
-      };
-    }
-  }
-  // reasoning_start with nothing else — empty section.
-  return { kind: "reasoning", itemId: null, text: "", duration };
+  const parts = run
+    .filter(
+      (b): b is Extract<AnyBlock, { type: "reasoning_block" }> => b.type === "reasoning_block",
+    )
+    .map((b) => [b.reasoningText, b.summaryText].filter((s) => s.length > 0).join("\n\n"))
+    .filter((s) => s.length > 0);
+  return { kind: "reasoning", itemId, text: parts.join("\n\n"), duration };
 }
 
 function toolItem(

@@ -19,7 +19,7 @@ function SpeedBolts({ speed }: { speed: string }) {
   const fraction = value - whole;
   const faded =
     fraction > 0
-      ? `linear-gradient(to top, black ${(1 - fraction) * 100}%, rgba(0,0,0,0.2) ${(1 - fraction) * 100}%)`
+      ? `linear-gradient(to top, black ${fraction * 100}%, rgba(0,0,0,0.2) ${fraction * 100}%)`
       : undefined;
   return (
     <span aria-hidden className="text-amber-600 dark:text-amber-500">
