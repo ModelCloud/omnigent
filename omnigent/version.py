@@ -14,7 +14,7 @@ the two in sync, so releases are cut by bumping pyproject alone (via
 
 import pathlib
 
-VERSION = "0.20.0.dev0"
+VERSION = "0.21.0.dev0"
 
 _DISPLAY_VERSION: str | None = None
 
