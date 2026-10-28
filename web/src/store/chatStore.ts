@@ -8339,6 +8339,7 @@ export function handleSessionEvent(event: StreamEvent, streamConversationId?: st
               source: "",
               code: statusError.code,
               ...structuredErrorFields(statusError, statusAgentName),
+              fromSessionStatus: true,
             } satisfies ErrorBlock,
           ];
         }

@@ -33,6 +33,7 @@ import type {
 } from "@/lib/blocks";
 import type { ConversationItem, MessageItem } from "@/lib/conversationItems";
 import { itemsToBlocks } from "@/lib/itemsToBlocks";
+import { latestActivityErrorState } from "@/lib/sessionError";
 import { RECONNECT_BASE_MS } from "@/lib/reconnectBackoff";
 import { buildBubbles } from "@/lib/renderItems";
 import { getSessionSlim, INITIAL_WINDOW_ITEMS, SESSION_HISTORY_PAGE_SIZE } from "@/lib/sessionsApi";
@@ -5475,6 +5476,34 @@ describe("chatStore — send while streaming (queueing)", () => {
     const errorBlocks = useChatStore.getState().blocks.filter((b) => b.type === "error");
     expect(errorBlocks).toHaveLength(1);
     expect(errorBlocks[0]).toMatchObject({ code: "executor_error", message: "boom" });
+  });
+
+  it("stops reporting a status-only relaunch failure as the latest error after a resume", () => {
+    // A failed resume, then a successful one that adds no items.
+    useChatStore.setState({
+      conversationId: "conv_abc",
+      sessionStatus: "idle",
+      blocks: itemsToBlocks([userMessage("resp_a", "hi"), assistantMessage("resp_a", "Done.")]),
+    });
+    handleSessionEvent({
+      type: "session_status",
+      conversationId: "conv_abc",
+      status: "failed",
+      error: { code: "required_terminal_exited", message: "Required terminal exited." },
+    });
+    let state = useChatStore.getState();
+    expect(latestActivityErrorState(state.blocks, null, state.sessionStatus)).toBe("error");
+
+    for (const status of ["idle", "running", "idle"] as const) {
+      handleSessionEvent({ type: "session_status", conversationId: "conv_abc", status });
+    }
+    state = useChatStore.getState();
+    expect(state.blocks.at(-1)).toMatchObject({
+      type: "error",
+      code: "required_terminal_exited",
+      fromSessionStatus: true,
+    });
+    expect(latestActivityErrorState(state.blocks, null, state.sessionStatus)).toBeNull();
   });
 
   it("preserves a cancelled turn across a bare idle edge", () => {
