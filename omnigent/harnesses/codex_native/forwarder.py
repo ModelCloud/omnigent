@@ -2471,6 +2471,7 @@ async def supervise_forwarder(
             name="codex-native-forwarder-rtt-probe",
         )
         await _sleep(0)
+        stream_error: BaseException | None = None
         try:
             async for event in client.iter_events():
                 try:
@@ -2534,25 +2535,41 @@ async def supervise_forwarder(
                     )
                 except Exception:  # keep the long-lived mirror alive.
                     _logger.warning("Codex forwarder event handling failed", exc_info=True)
+        except BaseException as exc:
+            stream_error = exc
+            raise
         finally:
+            # Stop producers before draining their output while the HTTP client is open.
+            background_tasks = [subscribe_task, side_chat_task, rtt_probe_task]
             if mcp_settle_timer is not None:
-                mcp_settle_timer.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await mcp_settle_timer
-            await target.delta_coalescer.close()
-            await target.usage_coalescer.close()
-            await target.elicitation_tracker.close()
-            subscribe_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await subscribe_task
-            side_chat_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await side_chat_task
-            rtt_probe_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await rtt_probe_task
-            await forwarder_state.close_child_streams()
-            await client.close()
+                background_tasks.append(mcp_settle_timer)
+            for task in background_tasks:
+                task.cancel()
+            results = await asyncio.gather(*background_tasks, return_exceptions=True)
+            cleanup_errors = [
+                result
+                for result in results
+                if isinstance(result, BaseException)
+                and not isinstance(result, asyncio.CancelledError)
+            ]
+            for close in (
+                target.delta_coalescer.close,
+                target.usage_coalescer.close,
+                target.elicitation_tracker.close,
+                forwarder_state.close_child_streams,
+                client.close,
+            ):
+                try:
+                    await close()
+                except BaseException as exc:  # noqa: BLE001 - finish all closers, even on cancellation.
+                    cleanup_errors.append(exc)
+            for error in cleanup_errors[1 if stream_error is None else 0 :]:
+                _logger.warning(
+                    "Codex forwarder cleanup failed",
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+            if stream_error is None and cleanup_errors:
+                raise cleanup_errors[0]
 
 
 async def _provider_rtt_probe_loop(
