@@ -6537,7 +6537,14 @@ def create_runner_app(
                     )
                 else:
                     await side_chat.submit_side_turn(
-                        _side_client, str(_side_thread_id), _side_text
+                        _side_client,
+                        str(_side_thread_id),
+                        _side_text,
+                        transport=_side_state.socket_path,
+                        model=body.get("model_override"),
+                        effort=body.get("reasoning_effort"),
+                        reset_effort="reasoning_effort" in body
+                        and body["reasoning_effort"] is None,
                     )
             except CodexAppServerResponseError as exc:
                 # Codex refused the turn (e.g. typing into a multi-agent-v2
@@ -6558,6 +6565,17 @@ def create_runner_app(
                         if _missing
                         else "codex_side_chat_rejected",
                         "detail": _rpc_message,
+                    },
+                )
+            except side_chat.SideChatEffortUnavailable:
+                return JSONResponse(
+                    status_code=409,
+                    content={
+                        "error": "codex_side_chat_settings_unavailable",
+                        "detail": (
+                            "Could not resolve the side chat's default effort. "
+                            "Select an explicit effort and retry."
+                        ),
                     },
                 )
             except (ConnectionError, OSError, TimeoutError, WebSocketException) as exc:

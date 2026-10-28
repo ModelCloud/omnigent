@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/useSession";
+import * as runnerHealth from "@/hooks/RunnerHealthProvider";
 import * as sessionsApi from "@/lib/sessionsApi";
 import * as identity from "@/lib/identity";
 import type { Session, NativeModelOption } from "@/lib/types";
@@ -73,7 +74,7 @@ function Pane() {
 function mount(session = child) {
   cache.setQueryData(["session", "side"], session);
   cache.setQueryData(["session", "parent"], parent);
-  render(
+  return render(
     <QueryClientProvider client={cache}>
       <Pane />
     </QueryClientProvider>,
@@ -488,8 +489,25 @@ it.each([
   { harness: "codex-native", labels: {} },
   { harness: null, labels: { "omnigent.wrapper": "codex-native-ui" } },
   { harness: null, labels: { "omnigent.codex_native.agent_nickname": "Side chat" } },
-])("leaves native Codex settings for the separate implementation (%j)", (metadata) => {
+])("hides native Codex settings when unsupported (%j)", (metadata) => {
   mount({ ...child, ...metadata } as Session);
+  expect(screen.queryByRole("button", { name: "Side chat model and effort" })).toBeNull();
+});
+
+it.each([false, true])("hides native settings before a child exists (draft=%s)", (draft) => {
+  render(
+    <QueryClientProvider client={cache}>
+      <SideChatSettings
+        session={{
+          ...parent,
+          sideChatSettingsSupported: true,
+          harness: "codex-native",
+          labels: { "omnigent.wrapper": "codex-native-ui" },
+        }}
+        draft={draft ? { onChange: vi.fn(), disabled: false } : undefined}
+      />
+    </QueryClientProvider>,
+  );
   expect(screen.queryByRole("button", { name: "Side chat model and effort" })).toBeNull();
 });
 
@@ -599,3 +617,59 @@ it.each([
     else expect(sessionsApi.updateSession).toHaveBeenCalledWith("side", updates);
   },
 );
+
+it("uses the parent catalog while targeting a native Codex side thread", async () => {
+  mount({
+    ...child,
+    harness: "codex-native",
+    sideChatSettingsSupported: true,
+    parentSessionId: "parent",
+    codexModelOptions: [],
+    labels: {
+      "omnigent.wrapper": "codex-native-ui-subagent",
+      "omnigent.codex_native.agent_nickname": "Side chat",
+    },
+  });
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "Side chat model and effort" }));
+  await user.click(screen.getByTestId("side-chat-model-edit"));
+  await user.click(screen.getByRole("menuitemcheckbox", { name: "Model B" }));
+  await waitFor(() =>
+    expect(sessionsApi.updateSession).toHaveBeenCalledWith("side", {
+      modelOverride: "model-b",
+      reasoningEffort: null,
+    }),
+  );
+  expect(cache.getQueryData(["session", "parent"])).toEqual(parent);
+});
+
+it("refreshes native settings support when the parent runner reconnects", async () => {
+  const session = {
+    ...child,
+    harness: "codex-native",
+    sideChatSettingsSupported: false,
+    parentSessionId: "parent",
+    labels: {
+      "omnigent.wrapper": "codex-native-ui-subagent",
+      "omnigent.codex_native.agent_nickname": "Side chat",
+    },
+  };
+  const health = vi
+    .spyOn(runnerHealth, "useRunnerHealthRegistration")
+    .mockReturnValue(new Map([["parent", false]]));
+  const snapshot = vi.spyOn(sessionsApi, "getSessionSlim").mockResolvedValue(session);
+  const view = mount(session);
+  await waitFor(() => expect(snapshot).toHaveBeenCalledTimes(1));
+  expect(screen.queryByRole("button", { name: "Side chat model and effort" })).toBeNull();
+
+  snapshot.mockResolvedValue({ ...session, sideChatSettingsSupported: true });
+  health.mockReturnValue(new Map([["parent", true]]));
+  view.rerender(
+    <QueryClientProvider client={cache}>
+      <Pane />
+    </QueryClientProvider>,
+  );
+  expect(await screen.findByRole("button", { name: "Side chat model and effort" })).toBeVisible();
+  expect(snapshot).toHaveBeenCalledTimes(2);
+  expect(cache.getQueryData(["session", "parent"])).toEqual(parent);
+});

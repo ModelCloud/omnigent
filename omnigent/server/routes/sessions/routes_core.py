@@ -41,6 +41,7 @@ from omnigent.entities import (
 )
 from omnigent.entities.permission import SessionPermission
 from omnigent.errors import ErrorCategory, ErrorCode, ErrorImpact, ErrorPhase, OmnigentError
+from omnigent.harnesses.codex_native.side_chat import EFFORT_RESET_LABEL, is_side_chat_child
 from omnigent.models.model_override import validate_model_override
 from omnigent.runner.identity import (
     ORCHESTRATION_SOURCE_HEADER,
@@ -137,6 +138,7 @@ from omnigent.server.routes._sessions.helpers import (
     _forward_session_change_to_runner,
     _get_runner_client,
     _grant_default_public,
+    _is_codex_native_subagent,
     _live_settings_change,
     _LiveSettingsChange,
     _multipart_missing_detail,
@@ -160,6 +162,7 @@ from omnigent.server.routes._sessions.helpers import (
     _require_cost_control_label_authority,
     _require_permission_mode_forward,
     _resolve_harness,
+    _runner_supports_side_chat_settings,
     _RunnerForwardResult,
     _same_provider_family,
     _session_status_cache,
@@ -3185,7 +3188,35 @@ def register_core_routes(
                 code=ErrorCode.INVALID_INPUT,
             )
 
-        live_model_change = not body.silent and (model_override is not None or clear_model)
+        # Ephemeral side threads have no terminal; apply their saved picks on the next turn.
+        defer_side_settings = (
+            conv is not None
+            and _is_codex_native_subagent(conv)
+            and is_side_chat_child(conv.labels)
+        )
+        if defer_side_settings and clear_model:
+            raise OmnigentError(
+                "Choose a specific model for this side chat; resetting its model is not supported.",
+                code=ErrorCode.INVALID_INPUT,
+            )
+        if (
+            defer_side_settings
+            and not body.silent
+            and (model_override is not None or clear_model or effort is not None or clear_effort)
+        ):
+            assert conv is not None
+            if not await _runner_supports_side_chat_settings(
+                conv, conversation_store, getattr(request.app.state, "tunnel_registry", None)
+            ):
+                raise OmnigentError(
+                    "This runner cannot apply side-chat settings. Update the host and restart the session.",
+                    code=ErrorCode.RUNNER_UNAVAILABLE,
+                )
+        live_model_change = (
+            not body.silent
+            and not defer_side_settings
+            and (model_override is not None or clear_model)
+        )
         wake_for_model_change = (
             live_model_change
             and conv is not None
@@ -3217,6 +3248,11 @@ def register_core_routes(
             share_workspace_files=(body.share_workspace_files if set_share_workspace else None),
             terminal_launch_args=terminal_launch_args,
             archived=body.archived,
+            label_updates=(
+                {EFFORT_RESET_LABEL: "true" if clear_effort else "false"}
+                if defer_side_settings and (clear_effort or effort is not None)
+                else None
+            ),
         )
         if update_result is None:
             raise _session_not_found()
@@ -3275,9 +3311,10 @@ def register_core_routes(
         )
         # The runner applies native settings live. Silent startup metadata
         # writes skip both recovery and forwarding to avoid recursive launches.
-        live_forward = not body.silent
-        codex_native = updated.labels.get(_CLAUDE_NATIVE_WRAPPER_LABEL_KEY) in (
-            _CODEX_NATIVE_WRAPPER_LABEL_VALUE,
+        live_forward = not body.silent and not defer_side_settings
+        codex_native = (
+            updated.labels.get(_CLAUDE_NATIVE_WRAPPER_LABEL_KEY)
+            == _CODEX_NATIVE_WRAPPER_LABEL_VALUE
         )
         # This server rolls back Codex refusals and keeps unconfirmed changes, so the
         # runner neither saves a refusal nor waits out this server's forward timeout.
