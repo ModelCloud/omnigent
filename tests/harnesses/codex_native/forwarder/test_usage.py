@@ -231,6 +231,7 @@ def test_completion_token_rate_fields_computes_estimates() -> None:
     rate subtracts them; spans come from the first→last delta bounds.
     """
     state = fwd._CodexForwarderState()
+    state.completion_rate_window_from_start = True
     state.turn_reasoning_first_at = 10.0
     state.turn_reasoning_last_at = 16.0  # 30 reasoning tok / 6s = 5.0 t/s
     state.turn_output_first_at = 20.0
@@ -247,6 +248,7 @@ def test_completion_token_rate_fields_computes_estimates() -> None:
 def test_completion_token_rate_fields_clears_unmeasurable_channels(span: float | None) -> None:
     """No rate without BOTH tokens and a positive measured span."""
     state = fwd._CodexForwarderState()
+    state.completion_rate_window_from_start = True
     if span is not None:
         state.turn_output_first_at = 20.0
         state.turn_output_last_at = 20.0 + span
@@ -256,6 +258,7 @@ def test_completion_token_rate_fields_clears_unmeasurable_channels(span: float |
 def test_completion_token_rate_fields_subtracts_probed_rtt() -> None:
     """The probed round-trip is removed from the measured delta span."""
     state = fwd._CodexForwarderState()
+    state.completion_rate_window_from_start = True
     state.turn_output_first_at = 20.0
     state.turn_output_last_at = 29.0
     state.provider_rtt_seconds = 3.0  # 90 tok / (9s - 3s) = 15.0 t/s
@@ -265,14 +268,58 @@ def test_completion_token_rate_fields_subtracts_probed_rtt() -> None:
     assert fields == {"completion_tps": {"output": 15.0}}
 
 
-def test_completion_token_rate_fields_drops_span_fully_consumed_by_rtt() -> None:
-    """An RTT at least as wide as the span leaves nothing measurable."""
+def test_completion_token_rate_fields_caps_rtt_at_half_the_span() -> None:
+    """An outsized probe sample eats at most half the measured window."""
     state = fwd._CodexForwarderState()
+    state.completion_rate_window_from_start = True
     state.turn_output_first_at = 20.0
     state.turn_output_last_at = 21.0
+    state.provider_rtt_seconds = 5.0  # capped: 90 tok / (1s - 0.5s) = 180 t/s
+
+    assert fwd._completion_token_rate_fields(_usage_frame(), state) == {
+        "completion_tps": {"output": 180.0}
+    }
+
+
+def test_completion_token_rate_fields_prefers_the_rolling_rtt_average() -> None:
+    """A single spiky probe must not inflate the estimate; the average wins."""
+    state = fwd._CodexForwarderState()
+    state.completion_rate_window_from_start = True
+    state.turn_output_first_at = 20.0
+    state.turn_output_last_at = 29.0
     state.provider_rtt_seconds = 5.0
+    state.provider_rtt_avg_seconds = 3.0  # 90 tok / (9s - 3s) = 15.0 t/s
+
+    assert fwd._completion_token_rate_fields(_usage_frame(), state) == {
+        "completion_tps": {"output": 15.0}
+    }
+
+
+def test_completion_token_rate_fields_suppresses_mid_turn_windows() -> None:
+    """A window opened without turn/started never yields a rate.
+
+    On mid-turn attach/resume ``tokenUsage.last`` counts deltas this
+    connection never observed; dividing it by the partial window inflates
+    the estimate by the unobserved head of the stream, so nothing posts.
+    """
+    state = fwd._CodexForwarderState()
+    # Bounds recorded by deltas, but ``turn_abc`` never emitted turn/started
+    # on this connection — completion_rate_window_from_start stays False.
+    state.turn_reasoning_first_at = 10.0
+    state.turn_reasoning_last_at = 10.5  # 30 tok / 0.5s would read 60 t/s
 
     assert fwd._completion_token_rate_fields(_usage_frame(), state) == {"completion_tps": {}}
+
+
+def test_reset_marks_window_from_start_only_for_observed_turns() -> None:
+    """The flag tracks whether this connection saw the turn's start."""
+    state = fwd._CodexForwarderState()
+    fwd._reset_completion_rate_window(state, "turn_missed")
+    assert state.completion_rate_window_from_start is False
+
+    state.turns_started_observed.add("turn_seen")
+    fwd._reset_completion_rate_window(state, "turn_seen")
+    assert state.completion_rate_window_from_start is True
 
 
 @pytest.mark.asyncio
@@ -281,6 +328,7 @@ async def test_usage_post_carries_response_id_and_rates() -> None:
     client = _RecordingClient()
     coalescer = fwd._SessionUsageCoalescer(client, "conv_1")
     state = fwd._CodexForwarderState()
+    state.completion_rate_window_from_start = True
     state.turn_output_first_at = 100.0
     state.turn_output_last_at = 104.5  # 90 visible tok / 4.5s = 20 t/s
 
@@ -301,6 +349,8 @@ async def test_successive_completions_have_independent_rates_and_keep_response_i
     client = _RecordingClient()
     coalescer = fwd._SessionUsageCoalescer(client, "conv_1")
     state = fwd._CodexForwarderState()
+    state.turns_started_observed.add("turn_abc")
+    fwd._reset_completion_rate_window(state, "turn_abc")
     times = iter([10.0, 16.0, 100.0, 103.0])
     params = {"turnId": "turn_abc", "delta": "trace"}
 
@@ -346,6 +396,7 @@ async def test_equal_estimates_on_different_turns_keep_both_identities() -> None
     client = _RecordingClient()
     coalescer = fwd._SessionUsageCoalescer(client, "conv_1")
     state = fwd._CodexForwarderState()
+    state.turns_started_observed.update(("turn_a", "turn_b"))
     for turn_id in ("turn_a", "turn_b"):
         fwd._reset_completion_rate_window(state, turn_id)
         state.turn_reasoning_first_at = 10.0

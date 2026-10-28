@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from types import MappingProxyType
 
 from omnigent.llms.errors import PermanentLLMError
 
@@ -169,13 +168,56 @@ def unsupported_effort_message(effort: str, provider: str, supported: Iterable[s
 # overrides them via ``routing.effort_caps`` (see
 # :class:`~omnigent.server.smart_routing.RoutingSettings`). The provider ladders
 # above stay frozen: they are the wire APIs' own vocabularies.
-_MODEL_EFFORT_FALLBACK: Mapping[str, str] = MappingProxyType({"glm-5-2": "medium"})
-# Efforts a fallback model cannot accept, so a pinned high value coerces down.
-# GLM tops out at ``high``, so every rung above it (``xhigh``/``max``/``ultra``)
-# is unsupported.
-_MODEL_EFFORT_UNSUPPORTED: Mapping[str, frozenset[str]] = MappingProxyType(
-    {"glm-5-2": frozenset({"xhigh", "max", "ultra"})}
-)
+def _bare_model(model: str) -> str:
+    """Strip a catalog/gateway prefix and fold to the comparison spelling."""
+    bare = model.rsplit("/", 1)[-1]
+    for prefix in ("databricks-", "system.ai."):
+        if bare.startswith(prefix):
+            bare = bare[len(prefix) :]
+    return bare.replace(".", "-").lower()
+
+
+def _deepseek_v41_selector_ids() -> tuple[str, ...]:
+    """Catalog ids the MultiDex DeepSeek selector can switch a session onto."""
+    from omnigent.models.model_fallbacks import (
+        MULTIDEX_DEEPSEEK_LITHOS,
+        MULTIDEX_DEEPSEEK_OPENROUTER,
+    )
+
+    return (*MULTIDEX_DEEPSEEK_OPENROUTER.model_ids, *MULTIDEX_DEEPSEEK_LITHOS.model_ids)
+
+
+def _deepseek_v41_keys() -> frozenset[str]:
+    """``_bare_model`` spellings of the DeepSeek selector's catalog ids.
+
+    DeepSeek v4.1 Flash's wire vocabulary is off/low/high/max (plus numeric
+    budgets); codex-only rungs 400 its endpoint. Keys cover every selector
+    catalog id plus the local selector label. Computed lazily: the selector
+    ids live on model_fallbacks records, whose import chain is unfinished
+    when this module is first imported through it.
+    """
+    return frozenset(
+        {
+            *(_bare_model(mid) for mid in _deepseek_v41_selector_ids()),
+            "ds v4-1 flash 1017",
+        }
+    )
+
+
+_DEEPSEEK_V41_UNSUPPORTED = frozenset({"minimal", "medium", "xhigh", "ultra"})
+
+
+def _default_effort_fallback() -> Mapping[str, str]:
+    """Bare model → effort sent when the requested one is barred."""
+    return {"glm-5-2": "medium", **dict.fromkeys(_deepseek_v41_keys(), "high")}
+
+
+def _default_effort_unsupported() -> Mapping[str, frozenset[str]]:
+    """Bare model → efforts its backend rejects outright."""
+    return {
+        "glm-5-2": frozenset({"xhigh", "max", "ultra"}),
+        **dict.fromkeys(_deepseek_v41_keys(), _DEEPSEEK_V41_UNSUPPORTED),
+    }
 
 
 @dataclass(frozen=True)
@@ -191,14 +233,31 @@ class ModelEffortCaps:
 
     # default_factory, not default: a mapping is unhashable and dataclasses
     # rejects an unhashable default outright.
-    fallback: Mapping[str, str] = field(default_factory=lambda: _MODEL_EFFORT_FALLBACK)
-    unsupported: Mapping[str, frozenset[str]] = field(
-        default_factory=lambda: _MODEL_EFFORT_UNSUPPORTED
-    )
+    fallback: Mapping[str, str] = field(default_factory=_default_effort_fallback)
+    unsupported: Mapping[str, frozenset[str]] = field(default_factory=_default_effort_unsupported)
 
 
-#: The caps every deployment gets unless its ``routing:`` block overrides them.
-DEFAULT_MODEL_EFFORT_CAPS = ModelEffortCaps()
+_default_caps_cache: ModelEffortCaps | None = None
+
+
+def _default_caps() -> ModelEffortCaps:
+    """The caps every deployment gets unless its routing block overrides them.
+
+    Built on first use: constructing one resolves the model_fallbacks
+    catalog, which is still mid-import when this module loads through it.
+    """
+    global _default_caps_cache
+    if _default_caps_cache is None:
+        _default_caps_cache = ModelEffortCaps()
+    return _default_caps_cache
+
+
+def __getattr__(name: str) -> ModelEffortCaps:
+    # Kept for callers documenting against the old module constant; resolving
+    # lazily keeps the model_fallbacks import out of module load.
+    if name == "DEFAULT_MODEL_EFFORT_CAPS":
+        return _default_caps()
+    raise AttributeError(name)
 
 
 def model_effort_caps(caps: ModelEffortCaps | None = None) -> ModelEffortCaps:
@@ -218,17 +277,8 @@ def model_effort_caps(caps: ModelEffortCaps | None = None) -> ModelEffortCaps:
     try:
         from omnigent.server.smart_routing import routing_settings
     except ImportError:  # pragma: no cover — a build without the server extra
-        return DEFAULT_MODEL_EFFORT_CAPS
-    return routing_settings().model_effort_caps or DEFAULT_MODEL_EFFORT_CAPS
-
-
-def _bare_model(model: str) -> str:
-    """Strip a catalog/gateway prefix and fold to the comparison spelling."""
-    bare = model.rsplit("/", 1)[-1]
-    for prefix in ("databricks-", "system.ai."):
-        if bare.startswith(prefix):
-            bare = bare[len(prefix) :]
-    return bare.replace(".", "-").lower()
+        return _default_caps()
+    return routing_settings().model_effort_caps or _default_caps()
 
 
 def clamp_effort_for_model(
