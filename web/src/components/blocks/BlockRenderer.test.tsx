@@ -191,15 +191,17 @@ describe("BlockRenderer dispatch", () => {
       { kind: "text", itemId: "m_1", text: "Done.", final: true },
     ];
 
-    render(
+    const { container } = render(
       <TooltipProvider>
         <BlockRenderer items={items} sessionStatus="idle" />
       </TooltipProvider>,
     );
 
-    expect(screen.getByText("Patch")).toBeInTheDocument();
-    expect(screen.getByText("+new")).toBeInTheDocument();
+    // The registered file-edit view renders the call as its own tool row,
+    // not folded into the worked disclosure after the final answer lands.
     expect(screen.getByText("Done.")).toBeInTheDocument();
+    fireEvent.click(container.querySelector<HTMLElement>('[data-slot="collapsible-trigger"]')!);
+    expect(screen.getByText("+new")).toBeInTheDocument();
   });
 
   it("renders error diagnostics with local wrapping and preserved line breaks", () => {
