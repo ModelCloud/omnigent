@@ -128,6 +128,10 @@ _DELTA_FLUSH_GRACE_SECONDS = 1.0
 # 30s whose measured RTT is subtracted from delta spans so turn rates exclude
 # network transfer.
 _PROVIDER_RTT_PROBE_INTERVAL_SECONDS = 30.0
+# The probed network offset can never honestly own more than this share of an
+# observed delta window: capping it bounds the inflation an over-subtracted
+# span could produce to 1/(1-fraction).
+_RTT_SPAN_FRACTION_MAX = 0.5
 # Bound the post-shedding wait below the runner's 10s cancellation budget and
 # above the delta POST deadline.
 _DELTA_MARKER_TIMEOUT_SECONDS = 6.0
@@ -345,6 +349,8 @@ class _CodexChildStream:
                 return False
             self.active_turn_id = turn_id
             self.state.reasoning_stream_item_id = None
+            if turn_id is not None:
+                self.state.turns_started_observed.add(turn_id)
             _reset_completion_rate_window(self.state, turn_id)
         elif method in {"turn/completed", "turn/failed"}:
             if turn_id is not None:
@@ -588,6 +594,11 @@ class _CodexForwarderState:
     turn_output_last_at: float | None = None
     completion_rate_turn_id: str | None = None
     completion_usage_signature: tuple[str, int, int] | None = None
+    # Turns whose ``turn/started`` this connection observed. A mid-turn
+    # attach/resume window covers only the stream's tail, and ``tokenUsage.last``
+    # still counts the unobserved head — partial windows can't yield a rate.
+    turns_started_observed: set[str] = field(default_factory=set)
+    completion_rate_window_from_start: bool = False
     # Shared health-probe RTT adjusts the estimate, not exact server timing.
     provider_rtt_seconds: float | None = None
     provider_rtt_avg_seconds: float | None = None
@@ -4021,10 +4032,10 @@ async def _maybe_handle_turn_event(
             await _handle_turn_started(client, session_id, bridge_dir, params)
             if forwarder_state is not None:
                 turn = params.get("turn")
-                _reset_completion_rate_window(
-                    forwarder_state,
-                    _turn_id_from_payload(turn) or _turn_id_from_payload(params),
-                )
+                started_turn_id = _turn_id_from_payload(turn) or _turn_id_from_payload(params)
+                if started_turn_id is not None:
+                    forwarder_state.turns_started_observed.add(started_turn_id)
+                _reset_completion_rate_window(forwarder_state, started_turn_id)
             if forwarder_state is not None and bridge_dir is not None:
                 # A new turn opens a fresh reasoning block: the next reasoning
                 # delta must emit ``response.reasoning.started`` again.
@@ -7923,6 +7934,9 @@ def _reset_completion_rate_window(
     state.turn_reasoning_last_at = None
     state.turn_output_first_at = None
     state.turn_output_last_at = None
+    state.completion_rate_window_from_start = (
+        turn_id is not None and turn_id in state.turns_started_observed
+    )
 
 
 def _note_completion_rate_delta(
@@ -7983,16 +7997,28 @@ def _completion_token_rate_fields(
     if not isinstance(last, dict):
         _reset_completion_rate_window(forwarder_state, turn_id)
         return {"completion_tps": {}}
+    if not forwarder_state.completion_rate_window_from_start:
+        # The window opened mid-turn (attach/resume) or the turn's ``turn/started``
+        # was missed: tokenUsage.last covers deltas this connection never saw,
+        # so any rate computed here is inflated past meaning — emit nothing.
+        return {"completion_tps": {}}
     fields: dict[str, float] = {}
-    rtt = forwarder_state.provider_rtt_seconds
+    # The rolling average damps single-probe spikes; the subtraction itself can
+    # never own more than half the observed window (a transit offset shifts
+    # every delta together, so it must not dominate a first->last span).
+    rtt = forwarder_state.provider_rtt_avg_seconds or forwarder_state.provider_rtt_seconds
     overhead = rtt if isinstance(rtt, (int, float)) and rtt > 0 else 0.0
+
+    def _adjusted_span(first: float | None, last_at: float | None) -> float | None:
+        if first is None or last_at is None:
+            return None
+        raw_span = last_at - first
+        return raw_span - min(overhead, raw_span * _RTT_SPAN_FRACTION_MAX)
+
     reasoning_tokens = last.get("reasoningOutputTokens")
-    reasoning_first = forwarder_state.turn_reasoning_first_at
-    reasoning_last = forwarder_state.turn_reasoning_last_at
-    reasoning_span = (
-        reasoning_last - reasoning_first - overhead
-        if reasoning_first is not None and reasoning_last is not None
-        else None
+    reasoning_span = _adjusted_span(
+        forwarder_state.turn_reasoning_first_at,
+        forwarder_state.turn_reasoning_last_at,
     )
     if (
         type(reasoning_tokens) is int
@@ -8007,12 +8033,9 @@ def _completion_token_rate_fields(
         if type(output_tokens) is int and type(reasoning_tokens) is int
         else None
     )
-    output_first = forwarder_state.turn_output_first_at
-    output_last = forwarder_state.turn_output_last_at
-    output_span = (
-        output_last - output_first - overhead
-        if output_first is not None and output_last is not None
-        else None
+    output_span = _adjusted_span(
+        forwarder_state.turn_output_first_at,
+        forwarder_state.turn_output_last_at,
     )
     if (
         type(visible_output) is int

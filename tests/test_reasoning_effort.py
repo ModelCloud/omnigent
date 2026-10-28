@@ -145,6 +145,38 @@ def test_switch_to_uncapped_model_without_effort_stays_none() -> None:
     assert effort_for_model_switch(None, None) is None
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "DS v4.1 Flash 1017",
+        "deepseek/deepseek-v4.1-flash-1017",
+        "deepseek-ai/DeepSeek-V4.1-Flash",
+        "deepseek-ai/DeepSeek-V4.1-Flash-fast",
+        "deepseek-ai/DeepSeek-V4.1-Flash-ultra",
+    ],
+)
+@pytest.mark.parametrize("effort", ["minimal", "medium", "xhigh", "ultra"])
+def test_deepseek_v41_clamps_codex_only_efforts_to_high(model: str, effort: str) -> None:
+    """DeepSeek v4.1's wire vocabulary is off/low/high/max — the codex-only
+    rungs an OpenAI session leaves behind (xhigh, medium, ...) must not reach
+    its endpoint on a model switch or resume."""
+    assert clamp_effort_for_model(effort, model) == "high"
+
+
+@pytest.mark.parametrize("effort", ["none", "low", "high", "max"])
+def test_deepseek_v41_keeps_its_own_ladder(effort: str) -> None:
+    """low/high/max are native rungs; ``none`` is left alone (the endpoint's
+    ``off`` spelling is normalized downstream, not by this clamp)."""
+    assert clamp_effort_for_model(effort, "deepseek-ai/DeepSeek-V4.1-Flash") == effort
+
+
+def test_switch_to_deepseek_v41_guards_inherited_effort() -> None:
+    """A no-effort switch sends DeepSeek's fallback so the thread doesn't
+    inherit config.toml's xhigh and 400 (same shape as the GLM guard)."""
+    assert effort_for_model_switch(None, "deepseek-ai/DeepSeek-V4.1-Flash") == "high"
+    assert effort_for_model_switch("xhigh", "deepseek/deepseek-v4.1-flash-1017") == "high"
+
+
 # ── Deployment-configurable effort caps ────────────────────────────────────
 #
 # The GLM ceiling above is one gateway's probed fact, not a property of the
