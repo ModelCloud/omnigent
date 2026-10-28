@@ -5995,6 +5995,11 @@
             "title": "Sandbox Providers",
             "type": "array"
           },
+          "scheduled_task_projects": {
+            "default": false,
+            "title": "Scheduled Task Projects",
+            "type": "boolean"
+          },
           "server_version": {
             "title": "Server Version",
             "type": "string"

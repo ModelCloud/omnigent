@@ -130,6 +130,8 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { useServerInfo } from "@/lib/CapabilitiesContext";
+import { HarnessFixDialog } from "@/pages/settings/HarnessFixDialog";
+import { applyHarnessFixResult, harnessFixMode, harnessStatus } from "@/lib/harnessFix";
 import { HarnessSetupDialog } from "@/shell/HarnessSetupDialog";
 import {
   harnessReadinessOnHost,
@@ -868,7 +870,8 @@ function harnessWarningMessage(
  *
  * Gated on the setup feature: when OFF, renders the original "run omnigent
  * setup" guidance so the flag-off UI is unchanged. When ON, offers a "Set up
- * <agent>" action that opens the shared {@link HarnessSetupDialog}.
+ * <agent>" action that repairs native agents on user hosts in place, or opens
+ * the setup checklist for other agents and managed hosts.
  */
 function HarnessSetupNotice({
   agentName,
@@ -2758,9 +2761,27 @@ export function NewChatLandingScreen() {
   // row; null when closed. One dialog serves every entry point.
   const [setupTarget, setSetupTarget] = useState<{
     agentName: string | undefined;
+    nativeAgent: ReturnType<typeof nativeCodingAgentForAvailableAgent>;
     harness: string | null;
     host: Host | undefined | null;
   } | null>(null);
+
+  const fixStatus = setupTarget?.nativeAgent
+    ? harnessStatus(setupTarget.nativeAgent.harness, setupTarget.host ?? null)
+    : null;
+  const fixTarget =
+    harnessInstallEnabled &&
+    setupTarget?.host &&
+    !setupTarget.host.sandbox_provider &&
+    setupTarget.nativeAgent &&
+    fixStatus?.needsSetup
+      ? {
+          host: setupTarget.host,
+          harness: setupTarget.nativeAgent.harness,
+          label: setupTarget.nativeAgent.displayName,
+          mode: harnessFixMode(fixStatus.reason),
+        }
+      : null;
 
   // Ctrl+Shift+M opens the agent/model picker here, the keyboard equivalent of the
   // existing-chat model-picker shortcut. The picker owns model selection on the
@@ -7584,6 +7605,7 @@ export function NewChatLandingScreen() {
               onSetup={() =>
                 setSetupTarget({
                   agentName: selectedAgent?.display_name,
+                  nativeAgent: nativeCodingAgentForAvailableAgent(selectedAgent),
                   harness: selectedAgent?.harness ?? null,
                   host: harnessWarningHost,
                 })
@@ -7751,18 +7773,27 @@ export function NewChatLandingScreen() {
         </DialogContent>
       </Dialog>
 
-      {/* Harness "Set up" dialog — the single home for install/login (and later
-          API key / gateway) setup, opened from the composer notice or a picker
-          row's "Set up →". */}
-      <HarnessSetupDialog
-        open={setupTarget !== null}
-        onOpenChange={(open) => {
-          if (!open) setSetupTarget(null);
-        }}
-        agentName={setupTarget?.agentName}
-        harness={setupTarget?.harness ?? null}
-        host={setupTarget?.host}
-      />
+      {fixTarget ? (
+        <HarnessFixDialog
+          open
+          onOpenChange={(open) => !open && setSetupTarget(null)}
+          mode={fixTarget.mode}
+          host={fixTarget.host}
+          harness={fixTarget.harness}
+          harnessLabel={fixTarget.label}
+          onFixed={(result) => applyHarnessFixResult(queryClient, fixTarget.host.host_id, result)}
+        />
+      ) : (
+        <HarnessSetupDialog
+          open={setupTarget !== null}
+          onOpenChange={(open) => {
+            if (!open) setSetupTarget(null);
+          }}
+          agentName={setupTarget?.agentName}
+          harness={setupTarget?.harness ?? null}
+          host={setupTarget?.host}
+        />
+      )}
 
       {/* Create custom agent dialog — opened from the agent picker dropdown. */}
       <CreateAgentDialog

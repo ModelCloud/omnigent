@@ -71,7 +71,16 @@ describe("listScheduledTasks", () => {
       state: "active",
       hostId: null,
       workspace: null,
+      // Servers that predate task projects omit the key.
+      projectId: null,
     });
+  });
+
+  it("reads a task's project id", async () => {
+    fetchMock.mockResolvedValueOnce(
+      mockResponse({ scheduled_tasks: [{ ...TASK_WIRE, project_id: "proj_1" }] }),
+    );
+    expect((await listScheduledTasks())[0].projectId).toBe("proj_1");
   });
 
   it("returns [] when the server omits the key", async () => {
@@ -162,6 +171,16 @@ describe("createScheduledTask", () => {
     expect(body.host_id).toBe("host_1");
     expect(body.workspace).toBe("/home/me/repo");
   });
+
+  it("sends a project id and omits a null one", async () => {
+    fetchMock.mockResolvedValue(mockResponse(TASK_WIRE));
+    const base = { name: "n", prompt: "p", rrule: "FREQ=DAILY", agentId: "ag_1" };
+    await createScheduledTask({ ...base, projectId: "proj_1" });
+    await createScheduledTask({ ...base, projectId: null });
+    const bodies = fetchMock.mock.calls.map(([, init]) => JSON.parse(init.body));
+    expect(bodies[0].project_id).toBe("proj_1");
+    expect(bodies[1]).not.toHaveProperty("project_id");
+  });
 });
 
 describe("updateScheduledTask", () => {
@@ -173,6 +192,12 @@ describe("updateScheduledTask", () => {
     expect(init.method).toBe("PATCH");
     expect(JSON.parse(init.body)).toEqual({ state: "paused" });
     expect(updated.state).toBe("paused");
+  });
+
+  it("sends an explicit null project id to unfile future runs", async () => {
+    fetchMock.mockResolvedValueOnce(mockResponse({ ...TASK_WIRE, project_id: null }));
+    await updateScheduledTask("st_1", { projectId: null });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ project_id: null });
   });
 });
 
