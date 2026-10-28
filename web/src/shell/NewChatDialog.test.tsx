@@ -7020,7 +7020,7 @@ describe("NewChatLandingScreen", () => {
     expect(fixDialogProps).toMatchObject({
       mode,
       harness: "codex-native",
-      harnessLabel: "Codex",
+      harnessLabel: "MultiDex",
       host: { host_id: "host_1" },
     });
     expect(screen.getByTestId("new-chat-landing-input")).toHaveValue("Harness readiness changed");
@@ -7044,7 +7044,7 @@ describe("NewChatLandingScreen", () => {
     renderLanding({ harness_install_enabled: true });
     breakSelectedHarness("custom", "codex-native", "needs-auth");
     fireEvent.click(screen.getByTestId("new-chat-landing-harness-setup"));
-    expect(fixDialogProps?.harnessLabel).toBe("Codex");
+    expect(fixDialogProps?.harnessLabel).toBe("MultiDex");
   });
 
   it("keeps the setup checklist for an SDK Claude agent needing authentication", () => {
