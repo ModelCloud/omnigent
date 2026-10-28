@@ -184,6 +184,35 @@ it("shows the relative speed on provider and variant options", async () => {
   );
 });
 
+it("fades the fractional bolt in proportion to the speed remainder", async () => {
+  // The mask gradient must show `fraction` of the bolt — an inverted stop
+  // (1 - fraction) made smaller remainders look stronger, so Regular (1.25)
+  // rendered a nearly-full second bolt while Fast (1.5) looked weaker.
+  const timed = options.map((row) =>
+    row.providerId === "lithos"
+      ? { ...row, speed: row.variant === "ultra" ? 2.0 : row.variant === "fast" ? 1.5 : 1.25 }
+      : { ...row, speed: row.providerId === "openrouter" ? 1.25 : 1.0 },
+  );
+  render(
+    <NativeModelSelectors
+      options={timed}
+      selectedModel="lithos-fast"
+      effort={null}
+      onModelChange={vi.fn()}
+      onEffortChange={vi.fn()}
+    />,
+  );
+  fireEvent.keyDown(screen.getByRole("combobox", { name: "Speed" }), { key: "ArrowDown" });
+  const fadedBolt = (label: string) =>
+    screen
+      .getAllByRole("option")
+      .find((option) => option.textContent?.startsWith(label))
+      ?.querySelector<HTMLElement>("span[style*='mask-image']") ?? null;
+  expect(fadedBolt("Regular")?.style.maskImage).toContain("black 25%");
+  expect(fadedBolt("Fast")?.style.maskImage).toContain("black 50%");
+  expect(fadedBolt("Ultra")).toBeNull();
+});
+
 it.each(options.filter((row) => row.modelFamily === "ds").map((row) => row.id))(
   "keeps explicit Off distinct from Default for %s",
   async (id) => {

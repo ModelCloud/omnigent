@@ -14,6 +14,7 @@ import { ConversationScrollLockContext } from "@/components/ai-elements/conversa
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FileViewerContext } from "@/shell/FileViewerContext";
 import { normalizeExplicitMathDelimiters } from "@/components/ai-elements/mathMarkdown";
+import { useThinkingPaneStore } from "@/store/thinkingPane";
 import { useTurnTpsStore } from "@/store/turnTps";
 import { BlockRenderer } from "./BlockRenderer";
 
@@ -1493,6 +1494,35 @@ describe("BlockRenderer dispatch", () => {
       fireEvent.click(screen.getByRole("button", { name: "Worked" }));
       fireEvent.click(screen.getByText(/Thought/));
       expect(screen.getByText("Finishing checks.")).toBeDefined();
+    });
+
+    it("scopes thinking-pane section keys to the turn", () => {
+      // Positional fallback keys (reasoning:0) repeat across bubbles in
+      // one conversation — without the responseId prefix, a reasoning
+      // section in one turn could publish into the pane a sibling turn
+      // opened, showing the wrong trace.
+      useThinkingPaneStore.getState().close();
+      const items: RenderItem[] = [
+        { kind: "reasoning", itemId: null, text: "First thought", duration: 1 },
+        { kind: "text", itemId: "m0", text: "Done.", final: true },
+      ];
+      render(
+        <FileViewerContext.Provider value={FILE_VIEWER_NOOP}>
+          <BlockRenderer
+            items={items}
+            sessionStatus="idle"
+            turnLifecycle="completed"
+            conversationId="conv-1"
+            responseId="resp_A"
+          />
+        </FileViewerContext.Provider>,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Worked" }));
+      fireEvent.click(screen.getByText(/Thought/));
+      const state = useThinkingPaneStore.getState();
+      expect(state.sectionKey).toBe("resp_A:reasoning:0");
+      expect(state.section?.text).toBe("First thought");
+      useThinkingPaneStore.getState().close();
     });
 
     it("never folds a bubble made only of streaming artifacts", () => {
