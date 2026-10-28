@@ -98,6 +98,7 @@ from omnigent.server.disconnect_evidence import DisconnectEvidence, drop_attribu
 from omnigent.server.feature_flags import (
     Feature,
     FeatureFlags,
+    deployment_gate_enabled,
     harness_install_enabled,
     resolve_feature_flags,
 )
@@ -234,6 +235,8 @@ class ServerInfoResponse(BaseModel):
     features: dict[str, bool]
     harness_install_enabled: bool
     installable_harnesses: list[str]
+    # Whether the scheduled-tasks routes are mounted and enabled for this caller.
+    automations_enabled: bool = False
     dictation_available: bool
     # The archive PATCH accepts ``delete_worktree``; older servers reject it.
     archive_worktree_cleanup: bool = True
@@ -1408,6 +1411,7 @@ def create_app(
     base_path: str | None = None,
     host_sharded: bool = False,
     *,
+    automations: bool | Callable[[], bool] | None = None,
     default_agents_seeded: bool = False,
     preference_store: PreferenceStore | None = None,
     preference_policy: PreferencePolicy = DEFAULT_PREFERENCE_POLICY,
@@ -1449,6 +1453,11 @@ def create_app(
         active task and fires the injected ``on_fire`` callback on
         schedule. ``None`` disables the scheduler entirely.
     :param preference_store: Optional shared-preference API; no launcher adoption.
+    :param automations: Whether this request's caller can use automations. A static
+        bool or a zero-arg callable resolved per request; ``None`` enables them.
+        When off, the ``/v1/scheduled-tasks`` routes return 404 and ``GET /v1/info``
+        reports ``automations_enabled`` false. Scheduling of existing tasks is not
+        affected.
     :param scheduled_task_dispatch: Overrides for automations_v2: host ownership,
         the owner identity fires act under, or a replacement executor. ``None``
         uses the built-in executor with every host owned by this replica.
@@ -2116,6 +2125,7 @@ def create_app(
     app.state.branding_snapshot = branding_snapshot
     app.state.feature_flags = resolved_feature_flags
     app.state.harness_install = app_harness_install
+    app.state.automations = True if automations is None else automations
     app.state.scheduled_task_dispatch_enabled = automations_v2_enabled
     # Deployment base path (e.g. "/proxy/6767"), so route handlers that build
     # a full-page redirect (not covered by BasePathMiddleware's inbound-only
@@ -3402,6 +3412,8 @@ def create_app(
                     "all_types": filesystem_attachment_policy.all_types,
                 },
                 "scheduled_task_projects": project_store is not None,
+                "automations_enabled": scheduled_task_store is not None
+                and deployment_gate_enabled(app.state.automations, "automations"),
                 "branding": branding_snapshot.config(),
             }
         )
@@ -3699,6 +3711,7 @@ def create_app(
                 auth_provider=auth_provider,
                 artifact_store=artifact_store,
                 project_store=project_store,
+                automations=app.state.automations,
             ),
             prefix="/v1",
             tags=["scheduled_tasks"],
