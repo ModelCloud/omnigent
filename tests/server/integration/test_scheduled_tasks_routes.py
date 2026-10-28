@@ -7,7 +7,7 @@ validation (400s) and live-scheduler sync on every mutation.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -1422,6 +1422,144 @@ async def test_list_runs_returns_history_for_owned_task(
     assert newest["scheduled_task_id"] == task_id
     # The free-text error blob is not exposed on the run list.
     assert "error" not in newest
+    # The run's session doesn't exist, so it carries no session read state.
+    assert newest["conversation_updated_at"] is None
+    assert newest["conversation_status"] is None
+    assert newest["viewer_last_seen"] is None
+    assert newest["viewer_unread"] is None
+
+
+@pytest.fixture()
+def clean_session_read_state() -> Iterator[None]:
+    """Clear the module-level session read-state cache around a test."""
+    from omnigent.server.routes._sessions import helpers
+
+    helpers._read_last_seen.clear()
+    helpers._read_explicit_unread.clear()
+    yield
+    helpers._read_last_seen.clear()
+    helpers._read_explicit_unread.clear()
+
+
+@pytest.mark.usefixtures("clean_session_read_state")
+async def test_list_runs_includes_conversation_read_state_fields(
+    auth_client: httpx.AsyncClient, db_uri: str
+) -> None:
+    """Run rows include batched conversation read-state fields; skipped runs get nulls.
+
+    The ``/runs`` endpoint enriches each run that has a ``conversation_id`` with
+    ``conversation_updated_at``, ``conversation_status``, and ``viewer_unread``
+    so the frontend can compute the unread dot without per-row session GETs.
+    Runs with no conversation (skipped/failed host-less) get null for all three.
+    """
+    import uuid
+
+    from omnigent.stores.conversation_store.sqlalchemy_store import SqlAlchemyConversationStore
+
+    _make_user(db_uri)
+    created = (
+        await auth_client.post("/v1/scheduled-tasks", json=_create_body(), headers=_headers())
+    ).json()
+    task_id = created["id"]
+
+    from omnigent.server.routes._sessions.helpers import _set_read_state
+
+    # Create a real conversation in the store so the batch-fetch can hydrate it.
+    conv_store = SqlAlchemyConversationStore(db_uri)
+    conv = conv_store.create_conversation(conversation_id=uuid.uuid4().hex)
+    conv_store.set_session_live_status(conv.id, "idle")
+    _set_read_state("alice@example.com", conv.id, conv.updated_at - 1, True)
+    # A known session the viewer saw but never flagged, waiting on its harness.
+    waiting = conv_store.create_conversation(conversation_id=uuid.uuid4().hex)
+    conv_store.set_session_live_status(waiting.id, "waiting")
+    _set_read_state("alice@example.com", waiting.id, 1_700_000_100, False)
+
+    succeeded_id = uuid.uuid4().hex
+    running_id = uuid.uuid4().hex
+    skipped_id = uuid.uuid4().hex
+    _seed_run(
+        db_uri,
+        task_id,
+        succeeded_id,
+        scheduled_at=1000,
+        status="succeeded",
+        conversation_id=conv.id,
+    )
+    _seed_run(
+        db_uri,
+        task_id,
+        running_id,
+        scheduled_at=1500,
+        status="running",
+        conversation_id=waiting.id,
+    )
+    _seed_run(
+        db_uri,
+        task_id,
+        skipped_id,
+        scheduled_at=2000,
+        status="skipped",
+        error_code="no_online_host",
+        conversation_id=None,
+    )
+
+    resp = await auth_client.get(f"/v1/scheduled-tasks/{task_id}/runs", headers=_headers())
+    assert resp.status_code == 200, resp.text
+    runs = {r["id"]: r for r in resp.json()["runs"]}
+
+    # The succeeded run with a real conversation gets enriched fields.
+    succ = runs[succeeded_id]
+    assert succ["conversation_updated_at"] == conv_store.get_conversation(conv.id).updated_at
+    assert succ["conversation_status"] == "idle"
+    assert succ["viewer_last_seen"] == conv.updated_at - 1
+    assert succ["viewer_unread"] is True
+
+    # Status reads as the sessions list reports it ("waiting" is "running"), and
+    # an unflagged session is explicitly not unread rather than unknown.
+    running = runs[running_id]
+    assert running["conversation_status"] == "running"
+    assert running["viewer_last_seen"] == 1_700_000_100
+    assert running["viewer_unread"] is False
+
+    # The skipped run (no conversation_id) gets null for all three fields.
+    skip = runs[skipped_id]
+    assert skip["conversation_updated_at"] is None
+    assert skip["conversation_status"] is None
+    assert skip["viewer_last_seen"] is None
+    assert skip["viewer_unread"] is None
+
+
+@pytest.mark.usefixtures("clean_session_read_state")
+async def test_list_runs_reads_the_local_users_read_state(
+    runtime_init: None,
+    db_uri: str,
+    tmp_path: Path,
+    mock_llm: ControllableMockClient,
+) -> None:
+    """On the single-user local runtime, ``viewer_unread`` matches the session list's.
+
+    Session read state is keyed by the raw "local" identity; ``/runs`` must read
+    the same key rather than the ``None`` the task-ownership check uses.
+    """
+    import uuid
+
+    from omnigent.server.routes._sessions.helpers import _set_read_state
+
+    app = _build_app(db_uri, tmp_path, local_single_user=True)
+    async with _serve(app, mock_llm, tmp_path) as client:
+        created = await client.post(
+            "/v1/scheduled-tasks", json=_create_body(host_id=None, workspace=None)
+        )
+        assert created.status_code == 200, created.text
+        task_id = created.json()["id"]
+        conv_store = SqlAlchemyConversationStore(db_uri)
+        conv = conv_store.create_conversation(conversation_id=uuid.uuid4().hex)
+        _seed_run(db_uri, task_id, uuid.uuid4().hex, conversation_id=conv.id)
+        _set_read_state("local", conv.id, conv.updated_at - 1, True)
+
+        resp = await client.get(f"/v1/scheduled-tasks/{task_id}/runs")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["runs"][0]["viewer_unread"] is True
 
 
 async def test_list_runs_empty_for_task_with_no_runs(

@@ -38,6 +38,11 @@ from omnigent.server.routes._session_create_validation import (
     validate_session_model_metadata,
     validate_session_permission_mode,
 )
+from omnigent.server.routes._sessions.helpers import (
+    _read_state_entry,
+    _session_status_from_cache,
+)
+from omnigent.server.routes._sessions.orchestration import _list_status_with_starting
 from omnigent.server.scheduled.rrule import RRuleSearchError, RRuleValidationError, validate_rrule
 from omnigent.server.scheduled.run_reconciler import force_fail_stale_runs
 from omnigent.stores import AgentStore, ConversationStore, PermissionStore
@@ -200,11 +205,33 @@ def _to_response(
     }
 
 
-def _run_to_response(run: ScheduledTaskRun) -> dict[str, Any]:
+def _run_to_response(
+    run: ScheduledTaskRun,
+    *,
+    conversation_updated_at: int | None = None,
+    conversation_status: str | None = None,
+    viewer_last_seen: int | None = None,
+    viewer_unread: bool | None = None,
+) -> dict[str, Any]:
     """Serialize a :class:`ScheduledTaskRun` to a JSON-safe dict.
 
     Excludes the free-text ``error`` blob (never SQL-queried, potentially
     large); ``error_code`` carries the queryable failure classification.
+
+    :param conversation_updated_at: The conversation's ``updated_at`` epoch
+        seconds, or ``None`` for runs without a conversation. Embedded so the
+        frontend can call ``isConversationUnseen`` with no per-row fetch.
+    :param conversation_status: The session's status as ``GET /v1/sessions``
+        reports it (``"idle"``, ``"running"`` or ``"failed"``; waiting and
+        booting read as running), without that list's sub-agent roll-up. ``None``
+        for runs without a conversation.
+    :param viewer_last_seen: When the caller last saw the conversation (epoch
+        seconds), or ``None`` if never or for runs without a conversation. Same
+        value as ``viewer_last_seen`` in ``GET /v1/sessions``.
+    :param viewer_unread: The caller's ``viewer_unread`` flag for the
+        conversation (in-memory read-state explicit-unread), or ``None`` for
+        runs without a conversation. Hydrates ``useUnseenConversations`` on load
+        so the frontend never needs a separate session fetch.
     """
     return {
         "id": run.id,
@@ -215,6 +242,10 @@ def _run_to_response(run: ScheduledTaskRun) -> dict[str, Any]:
         "fired_at": run.fired_at,
         "finished_at": run.finished_at,
         "error_code": run.error_code,
+        "conversation_updated_at": conversation_updated_at,
+        "conversation_status": conversation_status,
+        "viewer_last_seen": viewer_last_seen,
+        "viewer_unread": viewer_unread,
     }
 
 
@@ -559,10 +590,37 @@ def create_scheduled_tasks_router(
         owner = _owner(request)
         owner_id = None if owner == RESERVED_USER_LOCAL else owner
         _require_owned(scheduled_task_id, owner_id)
+        # Read state is keyed by the caller's raw identity, as the session
+        # read-state routes key it; ``owner_id`` folds "local" into None.
+        viewer_id = require_user(request, auth_provider)
         runs, next_cursor = store.list_runs(scheduled_task_id, limit=limit, after_id=after)
         runs = force_fail_stale_runs(store, runs)
+        # Batch-fetch conversation metadata for runs that produced a session so
+        # the frontend can compute unread dots without per-row session GETs.
+        # Runs without a conversation_id (skipped/failed) contribute null fields.
+        conv_ids = [r.conversation_id for r in runs if r.conversation_id is not None]
+        sessions = conversation_store.get_session_activity(conv_ids) if conv_ids else {}
+        run_rows = []
+        for r in runs:
+            session = sessions.get(r.conversation_id) if r.conversation_id is not None else None
+            if r.conversation_id is not None and session is not None:
+                last_seen, explicit_unread = _read_state_entry(viewer_id, r.conversation_id)
+                run_rows.append(
+                    _run_to_response(
+                        r,
+                        conversation_updated_at=session.updated_at,
+                        conversation_status=_list_status_with_starting(
+                            _session_status_from_cache(r.conversation_id, session.live_status),
+                            r.conversation_id,
+                        ),
+                        viewer_last_seen=last_seen,
+                        viewer_unread=explicit_unread,
+                    )
+                )
+            else:
+                run_rows.append(_run_to_response(r))
         return {
-            "runs": [_run_to_response(r) for r in runs],
+            "runs": run_rows,
             "next_cursor": next_cursor,
         }
 

@@ -313,6 +313,24 @@ class SessionConnectivity:
     runner_last_seen: int | None = None
 
 
+@dataclass(frozen=True)
+class SessionActivity:
+    """
+    When a session last changed and what it is doing now.
+
+    Returned by :meth:`ConversationStore.get_session_activity` for callers
+    that list sessions alongside other records (an automation's runs) and
+    need only these fields, not labels or content.
+
+    :param updated_at: Epoch seconds of the session's last update.
+    :param live_status: The persisted live status (``"idle"``, ``"running"``,
+        ``"waiting"``, ``"failed"``), or ``None`` when none is recorded.
+    """
+
+    updated_at: int
+    live_status: str | None
+
+
 # Freshness window for ``omnigent_conversation_metadata.runner_last_seen``. The tunnel
 # replica refreshes live runners every ~30s (the tunnel ping interval),
 # so 3 missed refreshes = offline — the same budget the tunnel's own
@@ -656,6 +674,20 @@ class ConversationStore(ABC):
         :returns: Mapping ``conversation_id -> SessionConnectivity``.
             Ids with no conversation row are absent (callers treat a
             missing id as reachable, mirroring the single-row path).
+        """
+        ...
+
+    @abstractmethod
+    def get_session_activity(self, conversation_ids: list[str]) -> dict[str, SessionActivity]:
+        """
+        Return each session's last update time and live status in one batch.
+
+        Reads two columns per id and no labels, so the cost is bounded by the
+        id count. Missing ids are omitted from the result.
+
+        :param conversation_ids: Conversation ids, e.g. ``["conv_abc123"]``.
+            Duplicates are tolerated; empty input returns ``{}`` without a query.
+        :returns: Mapping ``conversation_id -> SessionActivity``.
         """
         ...
 

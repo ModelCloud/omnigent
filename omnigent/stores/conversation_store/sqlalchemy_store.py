@@ -108,6 +108,7 @@ from omnigent.stores.conversation_store import (
     ConversationUpdateResult,
     CreatedSession,
     DailyCostState,
+    SessionActivity,
     SessionConnectivity,
     pinned_label_key,
 )
@@ -1379,6 +1380,39 @@ class SqlAlchemyConversationStore(ConversationStore):
             )
             for row in meta_rows
         }
+
+    def get_session_activity(self, conversation_ids: list[str]) -> dict[str, SessionActivity]:
+        """One ``SELECT`` per database for the ids' update times and live statuses."""
+        if not conversation_ids:
+            return {}
+        unique_ids = list(set(conversation_ids))
+        with self._conv_session("get_session_activity") as session:
+            updated = session.execute(
+                select(SqlConversation.id, SqlConversation.updated_at).where(
+                    SqlConversation.workspace_id == current_workspace_id(),
+                    SqlConversation.id.in_(unique_ids),
+                )
+            ).all()
+        if not updated:
+            return {}
+        with self._session("get_session_activity") as session:
+            meta_rows = session.execute(
+                select(SqlConversationMetadata.id, SqlConversationMetadata.live_status).where(
+                    SqlConversationMetadata.workspace_id == current_workspace_id(),
+                    SqlConversationMetadata.id.in_([row.id for row in updated]),
+                )
+            ).all()
+        statuses = {row.id: row.live_status for row in meta_rows}
+        activity: dict[str, SessionActivity] = {}
+        for row in updated:
+            status = statuses.get(row.id)
+            try:
+                live_status = decode_session_live_status(status) if status is not None else None
+            except ValueError:
+                # A newer replica's status must not drop the rest of the batch.
+                live_status = None
+            activity[row.id] = SessionActivity(updated_at=row.updated_at, live_status=live_status)
+        return activity
 
     def get_conversations(self, conversation_ids: list[str]) -> dict[str, Conversation]:
         """

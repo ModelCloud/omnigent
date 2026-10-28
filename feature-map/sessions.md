@@ -53,6 +53,10 @@ the header menu), and each place is a separate entry point.
   including for the session being viewed. Its dot appears once the turn is
   idle; approval and error indicators can take precedence. A row showing the
   unread dot offers Mark as read instead. Bulk selection also offers these actions.
+  Behind `automations_v2`, an automation's detail page shows the same unread state
+  on each run that started a session: a run that succeeds while the page is open
+  is marked unread, and opening its session from the run row clears it there and
+  in the sidebar.
 - `project`: Add to project (Move session once filed) puts a session in a
   project folder from the row menu, the header menu, or the header's folder tag.
 - `project-rename`: the project menu opens a dialog with the name selected;
