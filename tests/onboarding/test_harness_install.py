@@ -869,7 +869,9 @@ def test_try_install_names_the_npm_failure_cause(
     An unwritable global directory and an unreachable registry are both exit
     code 1; reporting only that left the two indistinguishable in the toast.
     """
-    monkeypatch.setattr(hi.shutil, "which", lambda name: "/usr/bin/npm" if name == "npm" else None)
+    monkeypatch.setattr(
+        hi.shutil, "which", lambda name: "/usr/bin/bash" if name == "bash" else None
+    )
     monkeypatch.setattr(hi.subprocess, "Popen", fake_installer(returncode=1, stderr=stderr))
 
     installed, reason = hi.try_install_harness_cli(OPENAI_FAMILY)
@@ -886,7 +888,9 @@ def test_try_install_falls_back_to_the_exit_code_for_unrecognized_output(
     A vendor install script's output is not npm-shaped, so the bare exit code
     remains the fallback rather than an error.
     """
-    monkeypatch.setattr(hi.shutil, "which", lambda name: "/usr/bin/npm" if name == "npm" else None)
+    monkeypatch.setattr(
+        hi.shutil, "which", lambda name: "/usr/bin/bash" if name == "bash" else None
+    )
     monkeypatch.setattr(
         hi.subprocess,
         "Popen",
@@ -907,7 +911,9 @@ def test_installer_stderr_still_reaches_this_process(
     The output is what makes a failure visible in the setup terminal and the
     host log, so it is teed — captured for the reason *and* written through.
     """
-    monkeypatch.setattr(hi.shutil, "which", lambda name: "/usr/bin/npm" if name == "npm" else None)
+    monkeypatch.setattr(
+        hi.shutil, "which", lambda name: "/usr/bin/bash" if name == "bash" else None
+    )
     monkeypatch.setattr(hi.subprocess, "Popen", fake_installer(returncode=1, stderr=NPM_EACCES))
 
     hi.try_install_harness_cli(OPENAI_FAMILY)
