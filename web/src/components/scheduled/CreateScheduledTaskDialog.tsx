@@ -31,6 +31,15 @@ import {
 import { Label } from "@/components/scheduled/Label";
 import { ScheduleFields } from "@/components/scheduled/ScheduleFields";
 import { ModelEffortFields } from "@/components/scheduled/ModelEffortFields";
+import { TriggerTemplateFields } from "@/components/scheduled/TriggerTemplateFields";
+import {
+  emptyTriggerFields,
+  renderTriggerPrompt,
+  TRIGGER_TEMPLATES,
+  triggerFieldsComplete,
+  type TriggerFields,
+  type TriggerSource,
+} from "@/components/scheduled/triggerTemplates";
 import { WorkspacePickerDialog } from "@/shell/WorkspacePickerDialog";
 import { AgentHarnessPicker } from "@/shell/NewChatDialog";
 import { ProjectPicker, ProjectRowIcon } from "@/shell/ProjectPicker";
@@ -71,6 +80,8 @@ export function CreateScheduledTaskDialog({
   onOpenChange,
   initialName,
   initialPrompt,
+  initialTrigger = null,
+  sessionLink = "",
   editingTask = null,
 }: {
   open: boolean;
@@ -79,6 +90,10 @@ export function CreateScheduledTaskDialog({
    *  "Suggestions" suggestion chip). Omitted → the fields start empty. */
   initialName?: string;
   initialPrompt?: string;
+  /** Open on a Jira/Slack/GitHub trigger template instead of a plain prompt. */
+  initialTrigger?: TriggerSource | null;
+  /** Shareable session URL the trigger prompt links back with; see `SESSION_LINK_ID_PLACEHOLDER`. */
+  sessionLink?: string;
   editingTask?: ScheduledTask | null;
 }) {
   const { data: agents } = useAvailableAgents({ enabled: open });
@@ -245,6 +260,12 @@ export function CreateScheduledTaskDialog({
   const [pickedProjectId, setPickedProjectId] = useState<string | null>(null);
   const [sessionMode, setSessionMode] = useState<ScheduledTaskSessionMode>("new");
   const [startNewSession, setStartNewSession] = useState(false);
+  // An active trigger template replaces the Prompt field; the saved prompt is
+  // rendered from its fields. Create-only: an edit always shows the prompt.
+  const [trigger, setTrigger] = useState<TriggerSource | null>(null);
+  const [triggerFields, setTriggerFields] = useState<TriggerFields>(() =>
+    emptyTriggerFields("jira"),
+  );
   const [error, setError] = useState<string | null>(null);
   const [scheduleUnsupported, setScheduleUnsupported] = useState(false);
 
@@ -275,16 +296,20 @@ export function CreateScheduledTaskDialog({
         setPickedProjectId(null);
         setSessionMode(editingTask.sessionMode);
         setStartNewSession(false);
+        setTrigger(null);
       } else {
-        setName(initialName ?? "");
+        setName(initialTrigger ? TRIGGER_TEMPLATES[initialTrigger].name : (initialName ?? ""));
         setPrompt(initialPrompt ?? "");
         setPickedAgentId(null);
         setPickedModel("");
         setPickedEffort("");
         setPickedPermission("");
-        setSessionMode("new");
+        // The manager session must persist: it dedupes against its own workers.
+        setSessionMode(initialTrigger ? "continue" : "new");
         setStartNewSession(false);
-        setSchedule(DEFAULT_SCHEDULE_MODEL);
+        setTrigger(initialTrigger);
+        setTriggerFields(emptyTriggerFields(initialTrigger ?? "jira"));
+        setSchedule(initialTrigger ? HOURLY_SCHEDULE_MODEL : DEFAULT_SCHEDULE_MODEL);
         setScheduleUnsupported(false);
         setHostId("");
         setWorkspace("");
@@ -295,7 +320,7 @@ export function CreateScheduledTaskDialog({
       setError(null);
     }
     wasOpen.current = open;
-  }, [open, initialName, initialPrompt, editingTask]);
+  }, [open, initialName, initialPrompt, initialTrigger, editingTask]);
 
   const savedProjectId = editingTask?.projectId ?? null;
   const savedProjectName =
@@ -359,12 +384,24 @@ export function CreateScheduledTaskDialog({
   // Block submit on an invalid schedule (bad interval, empty multi-select) so
   // the form never posts an RRULE the server's validate_rrule would 400.
   const scheduleInvalid = scheduleUnsupported || validateSchedule(schedule) !== null;
+  const renderedTriggerPrompt =
+    trigger !== null && triggerFieldsComplete(triggerFields)
+      ? renderTriggerPrompt(trigger, triggerFields, {
+          // Workers run where the manager runs: beside it on a connected host,
+          // or each in its own sandbox.
+          placement: sandboxMode ? "managed" : "same_host",
+          sessionLink,
+          model: showModelEffort && pickedModel !== "" ? pickedModel : undefined,
+          effort: showModelEffort && pickedEffort !== "" ? pickedEffort : undefined,
+        })
+      : "";
+  const effectivePrompt = trigger !== null ? renderedTriggerPrompt : prompt;
   // Set across the whole submit, which may first find or create a project.
   const [submitting, setSubmitting] = useState(false);
   const mutationPending = submitting || createMutation.isPending || updateMutation.isPending;
   const canSubmit =
     name.trim() !== "" &&
-    prompt.trim() !== "" &&
+    effectivePrompt.trim() !== "" &&
     (isEdit || effectiveAgentId !== null) &&
     !workspaceWithoutHost &&
     !scheduleInvalid &&
@@ -384,6 +421,8 @@ export function CreateScheduledTaskDialog({
     setSandboxMode(false);
     setProjectChoice(null);
     setPickedProjectId(null);
+    setTrigger(null);
+    setTriggerFields(emptyTriggerFields("jira"));
     setError(null);
     setScheduleUnsupported(false);
   }
@@ -410,7 +449,7 @@ export function CreateScheduledTaskDialog({
         : sandboxMode;
       const input = {
         name: name.trim(),
-        prompt: prompt.trim(),
+        prompt: effectivePrompt.trim(),
         rrule: buildRRule(schedule),
         timezone: editingTask?.timezone ?? localTimezone(),
         ...(executionTargetChanged ? { executionTarget } : {}),
@@ -525,20 +564,34 @@ export function CreateScheduledTaskDialog({
             />
           </div>
 
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="task-prompt">Prompt</Label>
-            <Textarea
-              id="task-prompt"
-              value={prompt}
-              rows={3}
-              placeholder="What should the agent do each run?"
-              data-testid="task-prompt-input"
-              componentId="tasks.scheduled.prompt"
-              // No native resize grip — match the clean styling of the other fields.
-              className="resize-none text-ui"
-              onChange={(e) => setPrompt(e.target.value)}
+          {trigger !== null ? (
+            <TriggerTemplateFields
+              source={trigger}
+              fields={triggerFields}
+              onChange={setTriggerFields}
+              onSelectOpenChange={handleSelectOpenChange}
+              renderedPrompt={renderedTriggerPrompt}
+              onEditAsPrompt={() => {
+                setPrompt(renderedTriggerPrompt);
+                setTrigger(null);
+              }}
             />
-          </div>
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="task-prompt">Prompt</Label>
+              <Textarea
+                id="task-prompt"
+                value={prompt}
+                rows={3}
+                placeholder="What should the agent do each run?"
+                data-testid="task-prompt-input"
+                componentId="tasks.scheduled.prompt"
+                // No native resize grip — match the clean styling of the other fields.
+                className="resize-none text-ui"
+                onChange={(e) => setPrompt(e.target.value)}
+              />
+            </div>
+          )}
 
           <div className="flex flex-col gap-1.5">
             {/* "Runs with" — the unified picker offers BOTH harnesses (Claude
@@ -642,6 +695,7 @@ export function CreateScheduledTaskDialog({
               <Select
                 value={sessionMode}
                 componentId="tasks.scheduled.session_mode"
+                disabled={trigger !== null}
                 onValueChange={(v) => setSessionMode(v as ScheduledTaskSessionMode)}
                 onOpenChange={handleSelectOpenChange}
               >
@@ -660,9 +714,11 @@ export function CreateScheduledTaskDialog({
                 </SelectContent>
               </Select>
               <p className="text-sm text-muted-foreground">
-                {sessionMode === "continue"
-                  ? "The first run starts a session, and later runs send their prompt to it so the agent keeps its context, even while an earlier run is still working."
-                  : "Each run starts a new session."}
+                {trigger !== null
+                  ? "Trigger automations keep one session, which remembers its last check and the sessions it already started."
+                  : sessionMode === "continue"
+                    ? "The first run starts a session, and later runs send their prompt to it so the agent keeps its context, even while an earlier run is still working."
+                    : "Each run starts a new session."}
               </p>
               {isEdit && sessionMode === "continue" && editingTask?.sessionId && (
                 <div className="flex items-center gap-2">
@@ -892,6 +948,8 @@ async function projectChangeInput(
   if (pickedId !== null) return pickedId === savedProjectId ? {} : { projectId: pickedId };
   return { projectId: await resolveProjectId(choice) };
 }
+
+const HOURLY_SCHEDULE_MODEL: ScheduleModel = { ...DEFAULT_SCHEDULE_MODEL, preset: "hourly" };
 
 /** Sentinel Select value for "no pinned host" — Radix Select disallows "". */
 const UNSET_HOST = "__unset_host__";
