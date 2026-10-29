@@ -2,20 +2,42 @@
 
 from __future__ import annotations
 
+import contextlib
 import io
 import os
 import shutil
 import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
+import psutil  # type: ignore[import-untyped]
 import pytest
 from packaging.version import Version
 
 import omnigent._platform as _platform
+from omnigent.inner import _proc
 from omnigent.onboarding import harness_install as hi
 from omnigent.onboarding.provider_config import ANTHROPIC_FAMILY, GEMINI_FAMILY, OPENAI_FAMILY
+from tests._helpers.polling import poll_until
+
+# Captured before the autouse fixture forbids Popen, for the tests that need a
+# real installer process tree.
+_REAL_POPEN = subprocess.Popen
+
+# Installer stand-in: prints to stderr, records the pid of a child that holds stderr and
+# touches a marker only if it lives 60s, then sleeps and exits.
+# argv: pid_file, marker, sleep_s, exit_code.
+_INSTALLER_LEAVING_A_CHILD = (
+    "import pathlib, subprocess, sys, time\n"
+    "print('npm error code EACCES', file=sys.stderr, flush=True)\n"
+    "child = subprocess.Popen([sys.executable, '-c', 'import pathlib, sys, time; "
+    "time.sleep(60); pathlib.Path(sys.argv[1]).touch()', sys.argv[2]])\n"
+    "pathlib.Path(sys.argv[1]).write_text(str(child.pid))\n"
+    "time.sleep(float(sys.argv[3]))\n"
+    "sys.exit(int(sys.argv[4]))\n"
+)
 
 
 @pytest.fixture(autouse=True)
@@ -70,12 +92,6 @@ class FakeInstaller:
         self.returncode = returncode
         self.stderr = io.StringIO(stderr)
         self.killed = False
-
-    def __enter__(self) -> FakeInstaller:
-        return self
-
-    def __exit__(self, *_exc: object) -> bool:
-        return False
 
     def wait(self, timeout: float | None = None) -> int:
         return self.returncode
@@ -919,6 +935,53 @@ def test_installer_stderr_still_reaches_this_process(
     hi.try_install_harness_cli(OPENAI_FAMILY)
 
     assert NPM_EACCES in capsys.readouterr().err
+
+
+def test_installer_timeout_kills_children_holding_stderr(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A timed-out installer's children die with it instead of holding stderr open.
+
+    Waiting on a pipe that a surviving child still writes to would stretch the
+    install timeout to that child's lifetime.
+    """
+    monkeypatch.setattr(hi.subprocess, "Popen", _REAL_POPEN)
+    pid_file, marker = tmp_path / "child.pid", tmp_path / "child-lived-60s"
+    installer = [sys.executable, "-c", _INSTALLER_LEAVING_A_CHILD]
+    installer += [str(pid_file), str(marker), "60", "0"]
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        hi._run_installer(installer, timeout=3)
+
+    assert not marker.exists(), "the timeout waited for the installer's child to finish"
+    child_pid = int(pid_file.read_text())
+    poll_until(lambda: not _proc.process_alive(child_pid), timeout_s=5, interval_s=0.05)
+
+
+def test_installer_returns_when_a_child_keeps_stderr_open(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An installer that exits while its child holds stderr returns without waiting for it.
+
+    The reason comes from what was teed before the drain wait gave up.
+    """
+    monkeypatch.setattr(hi.subprocess, "Popen", _REAL_POPEN)
+    monkeypatch.setattr(hi, "_INSTALLER_TEE_DRAIN_TIMEOUT_S", 0.5)
+    pid_file, marker = tmp_path / "child.pid", tmp_path / "child-lived-60s"
+    installer = [sys.executable, "-c", _INSTALLER_LEAVING_A_CHILD]
+    installer += [str(pid_file), str(marker), "0", "1"]
+
+    try:
+        returncode, stderr_tail = hi._run_installer(installer, timeout=30)
+        returned_before_child_finished = not marker.exists()
+    finally:
+        if pid_file.exists():
+            with contextlib.suppress(psutil.NoSuchProcess):
+                psutil.Process(int(pid_file.read_text())).kill()
+
+    assert returncode == 1
+    assert "npm error code EACCES" in stderr_tail
+    assert returned_before_child_finished, "the install call waited for the installer's child"
 
 
 def test_try_install_harness_cli_success(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -298,6 +298,7 @@ import {
   onHostStatusChanged,
   type HostIdentity,
 } from "@/lib/nativeBridge";
+import { SshConnectForm, useSshConnectAvailable } from "./SshConnectForm";
 import {
   fetchUserAgents,
   USER_AGENTS_QUERY_KEY,
@@ -529,9 +530,12 @@ function ConnectingText({ className }: { className?: string }) {
 export function ConnectHostInstructions({
   serverUrl,
   label,
+  onSshConnected,
 }: {
   serverUrl: string;
   label?: string;
+  /** After the desktop shell connects a machine over SSH, with its host id. */
+  onSshConnected?: (hostId: string) => void;
 }) {
   // Databricks/internal deployments add the "Databricks Lakebox" connect
   // path; OSS deployments (where the lakebox launcher is excluded) show
@@ -541,6 +545,7 @@ export function ConnectHostInstructions({
   // hints) until known, so the clean UI shows first and lakebox never flashes.
   const databricksFeatures = info !== "loading" && info.databricks_features;
   const quotedServerUrl = quoteShellArgument(serverUrl);
+  const sshConnectAvailable = useSshConnectAvailable();
   return (
     <div className="flex flex-col gap-4 rounded-lg border border-dashed border-border p-4">
       {label && <p className="text-sm text-muted-foreground">{label}</p>}
@@ -577,6 +582,7 @@ export function ConnectHostInstructions({
           testIdPrefix="connect-host"
         />
       )}
+      {sshConnectAvailable && <SshConnectForm onConnected={onSshConnected} />}
     </div>
   );
 }
@@ -7824,6 +7830,10 @@ export function NewChatLandingScreen() {
           <ConnectHostInstructions
             serverUrl={serverUrl}
             label="Run this on the machine you want to use, then pick it from the host menu:"
+            onSshConnected={(hostId) => {
+              setConnectOpen(false);
+              selectHost(hostId);
+            }}
           />
         </DialogContent>
       </Dialog>
