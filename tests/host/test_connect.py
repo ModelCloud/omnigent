@@ -9960,6 +9960,7 @@ async def test_handle_import_local_all_streams_a_frame_per_session(
             items=[item],
             title=f"{source} title",
             source=source,
+            archived=source == "codex",
         )
 
     monkeypatch.setattr(
@@ -9982,10 +9983,11 @@ async def test_handle_import_local_all_streams_a_frame_per_session(
     session_frames = [f for f in frames if isinstance(f, HostImportLocalSessionFrame)]
     done_frames = [f for f in frames if isinstance(f, HostImportLocalDoneFrame)]
 
-    # One frame per session, each tagged with its own source + title + the total.
+    # One frame per session, each tagged with its own source, title, archive state and the total.
     assert {
-        (f.session.external_session_id, f.session.source, f.session.title) for f in session_frames
-    } == {("c1", "claude", "claude title"), ("x1", "codex", "codex title")}
+        (f.session.external_session_id, f.session.source, f.session.title, f.session.archived)
+        for f in session_frames
+    } == {("c1", "claude", "claude title", False), ("x1", "codex", "codex title", True)}
     assert all(f.total == 2 for f in session_frames)
     assert len(done_frames) == 1 and done_frames[0].status == "ok"
 
@@ -10014,6 +10016,7 @@ async def test_handle_import_local_exact_id_does_not_list_sessions(
             items=[item],
             title="Exact session",
             source=source,
+            archived=False,
         )
 
     monkeypatch.setattr(
@@ -10076,6 +10079,7 @@ async def test_handle_import_local_reports_unreadable_sessions_as_failed(
             items=[item],
             title="ok",
             source=source,
+            archived=False,
         )
 
     monkeypatch.setattr(
@@ -10149,6 +10153,7 @@ async def test_handle_import_local_unexpected_error_skips_only_that_session(
             items=[item],
             title="ok",
             source=source,
+            archived=False,
         )
 
     monkeypatch.setattr(
@@ -10218,6 +10223,7 @@ async def test_handle_import_local_send_failure_skips_only_that_session(
             items=[item],
             title="ok",
             source=source,
+            archived=False,
         )
 
     monkeypatch.setattr(
@@ -10274,6 +10280,7 @@ async def test_handle_import_local_send_connection_closed_aborts_batch(
             items=[item],
             title="ok",
             source=source,
+            archived=False,
         )
 
     monkeypatch.setattr(
@@ -10330,6 +10337,7 @@ async def test_handle_import_local_slices_oversized_session_into_chunks(
             items=[item],
             title=f"{session_id} title",
             source=source,
+            archived=False,
         )
 
     monkeypatch.setattr(
@@ -10404,6 +10412,7 @@ async def test_handle_import_local_legacy_server_skips_only_unsafe_session(
             items=[item],
             title=f"{session_id} title",
             source=source,
+            archived=False,
         )
 
     monkeypatch.setattr(
