@@ -174,19 +174,27 @@ export function ThinkingPane({ conversationId }: ThinkingPaneProps) {
         </Button>
         <Button
           type="button"
-          size="icon-sm"
+          size="sm"
           variant="ghost"
-          className={cn("shrink-0 px-2 text-xs", mode === "auto" && "bg-accent text-foreground")}
-          aria-label="Auto-follow latest reasoning trace"
+          data-testid="thinking-pane-mode"
+          className={cn(
+            "h-6 shrink-0 px-2 text-xs",
+            mode === "auto" ? "text-foreground" : "text-muted-foreground",
+          )}
+          aria-label={
+            mode === "auto"
+              ? "Auto mode — showing the latest completed trace"
+              : "Manual mode — click to resume auto-follow"
+          }
           aria-pressed={mode === "auto"}
           title={
             mode === "auto"
               ? "Auto mode: showing the latest completed trace"
-              : "Resume auto mode: always show the latest completed trace"
+              : "Manual mode: click to resume auto mode"
           }
           onClick={toggleAuto}
         >
-          Auto
+          {mode === "auto" ? "Auto" : "Manual"}
         </Button>
         <Button
           type="button"

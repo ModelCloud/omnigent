@@ -240,8 +240,8 @@ describe("ThinkingPane", () => {
         ]),
       );
       expect(screen.getByText("first")).toBeTruthy();
-      // Auto control resumes the follow.
-      fireEvent.click(screen.getByRole("button", { name: "Auto-follow latest reasoning trace" }));
+      // The mode tag resumes the follow.
+      fireEvent.click(screen.getByRole("button", { name: /manual mode/i }));
       expect(useThinkingPaneStore.getState().mode).toBe("auto");
       expect(screen.getByText("newest")).toBeTruthy();
     });

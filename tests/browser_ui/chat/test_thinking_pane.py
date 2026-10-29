@@ -155,6 +155,7 @@ def test_pane_auto_follows_newest_trace_and_manual_pick_pauses(
     page.get_by_role("button", name=re.compile("Worked")).first.click()
     page.get_by_role("button", name=re.compile("Thought")).first.click()
     expect(pane.get_by_text("First settled trace.")).to_be_visible(timeout=10_000)
+    expect(pane.get_by_test_id("thinking-pane-mode")).to_have_text("Manual")
 
     _emit_live_thought(chat, "pane-live-4", "Newest trace while paused.")
     # Wait until the new turn's answer landed so the paused assertion
@@ -163,8 +164,9 @@ def test_pane_auto_follows_newest_trace_and_manual_pick_pauses(
     expect(pane.get_by_text("First settled trace.")).to_be_visible()
     expect(pane.get_by_text("Newest trace while paused.")).not_to_be_visible()
 
-    # The Auto control resumes the follow: the pane jumps to the newest trace.
-    pane.get_by_role("button", name="Auto-follow latest reasoning trace").click()
+    # The mode tag resumes the follow: the pane jumps to the newest trace.
+    pane.get_by_test_id("thinking-pane-mode").click()
+    expect(pane.get_by_test_id("thinking-pane-mode")).to_have_text("Auto")
     expect(pane.get_by_text("Newest trace while paused.")).to_be_visible(timeout=10_000)
 
 
