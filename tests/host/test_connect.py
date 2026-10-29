@@ -8105,8 +8105,9 @@ async def test_handle_model_options_serves_codex_probe_rows_and_caches(
                 "displayName": "GPT-5.6-Sol",
                 "defaultReasoningEffort": "none",
                 "supportedReasoningEfforts": [{"reasoningEffort": "none"}],
+                "speed": 1.0,
             },
-            {"id": "gpt-5.4", "displayName": "gpt-5.4", "isDefault": True},
+            {"id": "gpt-5.4", "displayName": "gpt-5.4", "isDefault": True, "speed": 1.0},
         ],
         routable_models=["gpt-5.6-sol", "gpt-5.4"],
     )
@@ -8308,7 +8309,7 @@ async def test_model_options_frame_replies_off_the_receive_loop(
     assert isinstance(reply, HostModelOptionsResultFrame)
     assert reply.request_id == "req_slow"
     assert reply.status == "ok"
-    assert reply.models == [{"id": "gpt-5.6-sol", "displayName": "GPT-5.6-Sol"}]
+    assert reply.models == [{"id": "gpt-5.6-sol", "displayName": "GPT-5.6-Sol", "speed": 1.0}]
     _cleanup_host(host)
 
 
