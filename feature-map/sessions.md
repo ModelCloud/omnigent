@@ -68,7 +68,8 @@ the header menu), and each place is a separate entry point.
 - `fork`: fork the whole session or from a message; the fork keeps images and
   their files, elapsed "worked for" time, and can switch agent or host.
   For a native target, the fork dialog also offers model, reasoning effort,
-  and permission mode pickers.
+  and permission mode pickers. A long model list from several creators (Pi)
+  shows creator headings; it has no search or collapsible groups.
 - `fork-custom-agent`: switch to one of your custom agents (installed, imported,
   or discovered from an existing session), as well as to a built-in agent; the
   fork uses the chosen agent.

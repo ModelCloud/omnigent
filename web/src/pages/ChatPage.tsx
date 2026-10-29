@@ -4976,6 +4976,7 @@ function SessionHarnessPicker({
             title: nativeModelTooltip(model),
             className: "whitespace-normal break-words",
             data: { "data-model-id": model.id },
+            modelOption: model,
           })),
           ...(pickerSelectedModel &&
           !isFusionModelUid(pickerSelectedModel) &&
