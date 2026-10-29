@@ -85,7 +85,7 @@ describe("ImportContextModal – harness tabs", () => {
     const tabs = harnessTabs();
     expect(tabs.map((t) => t.getAttribute("aria-selected"))).toEqual(["true", "false", "false"]);
     expect(screen.getByRole("tab", { name: "Claude Code" })).toBe(tabs[0]);
-    expect(screen.getByRole("tab", { name: "Codex" })).toBe(tabs[1]);
+    expect(screen.getByRole("tab", { name: "MultiDex" })).toBe(tabs[1]);
     expect(screen.getByRole("tab", { name: "Cursor" })).toBe(tabs[2]);
     expect(screen.getByText("Your setup is ready")).toBeTruthy();
     expect(screen.getByText(/These carry over automatically\./)).toBeTruthy();
@@ -111,7 +111,7 @@ describe("ImportContextModal – harness tabs", () => {
 
   it("switches to Codex and omits the empty Plugins type", () => {
     renderModal();
-    switchHarness("Codex");
+    switchHarness("MultiDex");
 
     expect(screen.getByText("Databricks (dbc-a5d4177a-49dc)")).toBeTruthy();
     expect(assetTabNames()).toEqual(["MCPs 2", "Skills 3"]);
@@ -123,7 +123,7 @@ describe("ImportContextModal – harness tabs", () => {
     switchAsset("Skills");
     expect(rowNames("Skills")[0]).toBe("/create-kafka-topic");
 
-    switchHarness("Codex");
+    switchHarness("MultiDex");
     switchAsset("Skills");
     expect(rowNames("Skills")[0]).toBe("$code-review");
   });

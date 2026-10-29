@@ -267,7 +267,7 @@ describe("useAvailableAgents", () => {
       {
         id: "ag_codex",
         name: "codex-native-ui",
-        display_name: "Codex",
+        display_name: "MultiDex",
         description: null,
         harness: "codex-native",
         skills: [],
@@ -722,7 +722,7 @@ describe("useAvailableAgents", () => {
       {
         id: "ag_codex",
         name: "codex-native-ui",
-        display_name: "Codex",
+        display_name: "MultiDex",
         description: null,
         harness: "codex-native",
         skills: [],

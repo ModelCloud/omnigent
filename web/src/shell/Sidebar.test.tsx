@@ -3178,6 +3178,7 @@ describe("Sidebar view options", () => {
     "Claude Code",
     "Claude SDK",
     "Codex",
+    "MultiDex",
     "Unknown harness",
   ]);
   const groupHeaders = () =>
@@ -3251,20 +3252,25 @@ describe("Sidebar view options", () => {
         "Claude Code",
         "Claude SDK",
         "Codex",
+        "MultiDex",
         "Unknown harness",
       ]);
       expect(
         within(groupSection("Codex"))
           .getAllByRole("link", { name: /^conv_/ })
-          .map((link) => link.textContent),
+          .map((link) =>
+            link.closest("[data-sidebar-session-id]")?.getAttribute("data-sidebar-session-id"),
+          ),
       ).toEqual(
         ordering === "created"
-          ? ["conv_shared_sdk", "conv_custom_sdk", "conv_project_native"]
-          : ["conv_project_native", "conv_custom_sdk", "conv_shared_sdk"],
+          ? ["conv_shared_sdk", "conv_custom_sdk"]
+          : ["conv_custom_sdk", "conv_shared_sdk"],
       );
       for (const [title, id] of [
         ["Claude Code", "conv_wrapper"],
         ["Claude SDK", "conv_claude_sdk"],
+        ["Codex", "conv_shared_sdk"],
+        ["MultiDex", "conv_project_native"],
         ["acp:private", "conv_raw"],
         ["Unknown harness", "conv_unknown"],
         ["Pinned", "conv_pinned"],

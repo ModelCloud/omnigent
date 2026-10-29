@@ -54,7 +54,7 @@ def test_normalize_rewrites_only_top_level_model(tmp_path: Path) -> None:
         'base_url = "http://10.0.13.33:2120/v1"\n'
         'env_key = "LOCALDEX_API_KEY"\n'
         # A provider-level key named model must not be rewritten.
-        '[profiles.other]\n'
+        "[profiles.other]\n"
         'model = "QB/DSV4.1-Flash"\n',
         encoding="utf-8",
     )
@@ -98,9 +98,7 @@ def test_collects_env_keys_from_every_provider(tmp_path: Path) -> None:
 
 def test_ignores_invalid_env_key_and_missing_file(tmp_path: Path) -> None:
     config = tmp_path / "config.toml"
-    config.write_text(
-        '[model_providers.bad]\nenv_key = "not a var!"\n', encoding="utf-8"
-    )
+    config.write_text('[model_providers.bad]\nenv_key = "not a var!"\n', encoding="utf-8")
     assert codex_config_env_key_names(config) == ()
     assert codex_config_env_key_names(tmp_path / "absent.toml") == ()
 
@@ -155,14 +153,13 @@ def test_provider_env_keys_apply_to_plain_codex_native(tmp_path: Path, monkeypat
     from omnigent.runner.native import orchestration
 
     (tmp_path / "config.toml").write_text(
-        '[model_providers.openrouter]\n'
+        "[model_providers.openrouter]\n"
         'base_url = "https://openrouter.ai/api/v1"\n'
         'env_key = "OPENROUTER_API_KEY"\n',
         encoding="utf-8",
     )
     (tmp_path / "local-openai.config.toml").write_text(
-        '[model_providers.local-openai]\n'
-        'env_key = "CODEX_LOCAL_OPENAI_API_KEY"\n',
+        '[model_providers.local-openai]\nenv_key = "CODEX_LOCAL_OPENAI_API_KEY"\n',
         encoding="utf-8",
     )
     monkeypatch.setattr(
@@ -188,9 +185,7 @@ def test_resume_normalizes_existing_private_home(tmp_path: Path) -> None:
     home = tmp_path / "codex-home"
     home.mkdir()
     config = home / "config.toml"
-    config.write_text(
-        'model = "QB/DSV4.1-Flash"\nmodel_provider = "localdex"\n', encoding="utf-8"
-    )
+    config.write_text('model = "QB/DSV4.1-Flash"\nmodel_provider = "localdex"\n', encoding="utf-8")
     # Mirrors what start() does for an existing (resumed) private home.
     _normalize_copied_codex_model(home / "config.toml")
     assert config.read_text(encoding="utf-8").startswith('model = "DS v4.1 Flash 1017"')

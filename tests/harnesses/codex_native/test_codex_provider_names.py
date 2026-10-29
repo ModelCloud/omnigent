@@ -17,8 +17,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from omnigent.harnesses.codex_native.bridge import (
-    read_codex_home_config_provider_names,
     read_codex_home_config_model_provider,
+    read_codex_home_config_provider_names,
 )
 
 
@@ -41,9 +41,7 @@ def test_reads_defined_provider_names(tmp_path: Path) -> None:
         'base_url = "https://openrouter.ai/api/v1"\n',
     )
 
-    assert read_codex_home_config_provider_names(home) == frozenset(
-        {"multidex", "openrouter"}
-    )
+    assert read_codex_home_config_provider_names(home) == frozenset({"multidex", "openrouter"})
 
 
 def test_inline_dotted_provider_is_detected(tmp_path: Path) -> None:
@@ -64,7 +62,7 @@ def test_missing_table_is_absent_from_result(tmp_path: Path) -> None:
     home = _home(
         tmp_path,
         'model_provider = "openrouter"\nmodel = "deepseek/deepseek-v4.1-flash-1017"\n'
-        "\n[model_providers.openrouter]\nbase_url = \"https://openrouter.ai/api/v1\"\n",
+        '\n[model_providers.openrouter]\nbase_url = "https://openrouter.ai/api/v1"\n',
     )
 
     names = read_codex_home_config_provider_names(home)
@@ -74,4 +72,7 @@ def test_missing_table_is_absent_from_result(tmp_path: Path) -> None:
 
 def test_unreadable_or_providerless_config_returns_empty(tmp_path: Path) -> None:
     assert read_codex_home_config_provider_names(tmp_path / "absent") == frozenset()
-    assert read_codex_home_config_provider_names(_home(tmp_path, 'model = "gpt-6-astra"\n')) == frozenset()
+    assert (
+        read_codex_home_config_provider_names(_home(tmp_path, 'model = "gpt-6-astra"\n'))
+        == frozenset()
+    )
