@@ -11,7 +11,13 @@ import { useThinkingPaneStore } from "@/store/thinkingPane";
 
 afterEach(() => {
   cleanup();
-  useThinkingPaneStore.getState().close();
+  useThinkingPaneStore.setState({
+    conversationId: null,
+    sectionKey: null,
+    mode: "auto",
+    sections: [],
+    sectionsConversationId: null,
+  });
 });
 
 describe("ReasoningView — expandable gating", () => {
@@ -86,61 +92,30 @@ describe("ReasoningView — thinking pane routing", () => {
     expect(state.conversationId).toBe("conv-1");
     expect(state.sectionKey).toBe("reasoning:0");
     expect(screen.queryByText("Considered the options.")).toBeNull(); // never inline
-    // The click already selected this section, so the publish effect has
-    // populated the pane content for it.
-    expect(state.section?.text).toBe("Considered the options.");
+    // A user pick pauses the pane's auto-follow until its Auto control.
+    expect(state.mode).toBe("manual");
   });
 
-  it("keeps the pane's content in sync while the selected section streams", () => {
-    // Reasoning deltas keep arriving after the pane opens — each render
-    // republishes so the pane shows live text. A regression here would
-    // freeze the pane at whatever the block contained on open.
-    const { rerender } = render(
+  it("leaves auto mode to the pane's sections list, not the clicked view", () => {
+    // The pane's content now comes from the store's `sections` list —
+    // a click only selects the key. If a click secretly repopulated the
+    // pane content, folded/virtualized sections could never be shown.
+    useThinkingPaneStore
+      .getState()
+      .setSections("conv-1", [
+        { key: "reasoning:0", text: "From the list.", isStreaming: false, duration: 1 },
+      ]);
+    render(
       <ReasoningView
-        text="Thinking step 1"
-        isStreaming={true}
-        duration={undefined}
+        text="Different text"
+        isStreaming={false}
+        duration={2.5}
         conversationId="conv-1"
         sectionKey="reasoning:0"
       />,
     );
-    useThinkingPaneStore.getState().open("conv-1", "reasoning:0");
-    rerender(
-      <ReasoningView
-        text="Thinking step 1 step 2"
-        isStreaming={true}
-        duration={undefined}
-        conversationId="conv-1"
-        sectionKey="reasoning:0"
-      />,
-    );
-    expect(useThinkingPaneStore.getState().section?.text).toBe("Thinking step 1 step 2");
-  });
-
-  it("never publishes content from a section the pane is not showing", () => {
-    // Positional keys repeat across bubbles — only the selected section
-    // may write into the pane, or a sibling reasoning block's stream
-    // would clobber what the user is reading.
-    useThinkingPaneStore.getState().open("conv-1", "reasoning:0");
-    const { rerender } = render(
-      <ReasoningView
-        text="Other section"
-        isStreaming={true}
-        duration={undefined}
-        conversationId="conv-1"
-        sectionKey="reasoning:3"
-      />,
-    );
-    // Force a second effect pass; the unselected section must still not write.
-    rerender(
-      <ReasoningView
-        text="Other section updated"
-        isStreaming={true}
-        duration={undefined}
-        conversationId="conv-1"
-        sectionKey="reasoning:3"
-      />,
-    );
-    expect(useThinkingPaneStore.getState().section).toBeNull();
+    fireEvent.click(screen.getByRole("button"));
+    const state = useThinkingPaneStore.getState();
+    expect(state.sections[0]?.text).toBe("From the list.");
   });
 });

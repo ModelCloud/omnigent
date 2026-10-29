@@ -10,14 +10,14 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RenderItem } from "@/lib/renderItems";
+import type { Bubble, RenderItem } from "@/lib/renderItems";
 import { ConversationScrollLockContext } from "@/components/ai-elements/conversation";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FileViewerContext } from "@/shell/FileViewerContext";
 import { normalizeExplicitMathDelimiters } from "@/components/ai-elements/mathMarkdown";
 import { useThinkingPaneStore } from "@/store/thinkingPane";
 import { useTurnTpsStore } from "@/store/turnTps";
-import { BlockRenderer, rendersOnlyWorkedFold } from "./BlockRenderer";
+import { BlockRenderer, collectReasoningSections, rendersOnlyWorkedFold } from "./BlockRenderer";
 
 afterEach(cleanup);
 
@@ -1960,9 +1960,8 @@ describe("BlockRenderer dispatch", () => {
 
     it("scopes thinking-pane section keys to the turn", () => {
       // Positional fallback keys (reasoning:0) repeat across bubbles in
-      // one conversation — without the responseId prefix, a reasoning
-      // section in one turn could publish into the pane a sibling turn
-      // opened, showing the wrong trace.
+      // one conversation — without the responseId prefix, a click in one
+      // turn could select a sibling turn's section in the pane.
       useThinkingPaneStore.getState().close();
       const items: RenderItem[] = [
         { kind: "reasoning", itemId: null, text: "First thought", duration: 1 },
@@ -1983,7 +1982,9 @@ describe("BlockRenderer dispatch", () => {
       fireEvent.click(screen.getByText(/Thought/));
       const state = useThinkingPaneStore.getState();
       expect(state.sectionKey).toBe("resp_A:reasoning:0");
-      expect(state.section?.text).toBe("First thought");
+      // A transcript click is a manual pick — the pane stays on it until
+      // the user returns to auto mode.
+      expect(state.mode).toBe("manual");
       useThinkingPaneStore.getState().close();
     });
 
@@ -2675,5 +2676,97 @@ describe("BlockRenderer inline file-path linkification", () => {
     const url = fetchMock.mock.calls[0][0] as string;
     expect(url).toContain("/filesystem/etc?");
     expect(url).toContain("base=host");
+  });
+});
+
+describe("collectReasoningSections", () => {
+  const assistantBubble = (
+    responseId: string,
+    items: RenderItem[],
+    lifecycle = "completed",
+  ): Bubble =>
+    ({
+      kind: "assistant",
+      responseId,
+      stableId: responseId,
+      lifecycle,
+      error: null,
+      items,
+    }) as Bubble;
+
+  const idleOpts = { sessionStatus: "idle" as const, lastAssistantIndex: -1 };
+
+  it("lists sections in transcript order with turn-scoped keys", () => {
+    // The pane's prev/next walks this exact list — ordering and keys must
+    // match the rendered transcript (itemId key when present, positional
+    // otherwise, always prefixed by the turn's responseId).
+    const bubbles: Bubble[] = [
+      assistantBubble("resp_A", [
+        { kind: "reasoning", itemId: "r1", text: "first", duration: 1 },
+        { kind: "reasoning", itemId: null, text: "second", duration: 2 },
+      ]),
+      { kind: "user", itemId: "u1", content: [] },
+      assistantBubble("resp_B", [
+        { kind: "text", itemId: "m1", text: "answer", final: true },
+        { kind: "reasoning", itemId: null, text: "third", duration: 3 },
+      ]),
+    ];
+    const sections = collectReasoningSections(bubbles, idleOpts);
+    expect(sections.map((s) => s.key)).toEqual([
+      "resp_A:reasoning:r1",
+      "resp_A:reasoning:1",
+      "resp_B:reasoning:1",
+    ]);
+    expect(sections.map((s) => s.text)).toEqual(["first", "second", "third"]);
+    expect(sections.every((s) => !s.isStreaming)).toBe(true);
+  });
+
+  it("marks only the trailing reasoning of a live turn as streaming", () => {
+    // Auto-follow must not jump to a trace that is still emitting — the
+    // flag mirrors renderSequence's live-edge rule (trailing work item
+    // of a live turn).
+    const bubbles: Bubble[] = [
+      assistantBubble(
+        "resp_A",
+        [
+          { kind: "reasoning", itemId: null, text: "settled", duration: 1 },
+          { kind: "text", itemId: "m1", text: "…", final: true },
+          { kind: "reasoning", itemId: null, text: "in flight", duration: undefined },
+        ],
+        "streaming",
+      ),
+    ];
+    const sections = collectReasoningSections(bubbles, {
+      sessionStatus: "running",
+      lastAssistantIndex: 0,
+    });
+    expect(sections.map((s) => [s.text, s.isStreaming])).toEqual([
+      ["settled", false],
+      ["in flight", true],
+    ]);
+  });
+
+  it("skips empty settled sections but keeps a streaming one", () => {
+    // An empty settled section renders as a flat unclickable header in
+    // the transcript — including it would give prev/next a dead stop.
+    const bubbles: Bubble[] = [
+      assistantBubble("resp_A", [
+        { kind: "reasoning", itemId: null, text: "  \n", duration: 0 },
+        { kind: "reasoning", itemId: null, text: "real", duration: 1 },
+      ]),
+      assistantBubble(
+        "resp_B",
+        [{ kind: "reasoning", itemId: null, text: "", duration: undefined }],
+        "streaming",
+      ),
+    ];
+    const sections = collectReasoningSections(bubbles, {
+      sessionStatus: "running",
+      lastAssistantIndex: 1,
+    });
+    expect(sections.map((s) => [s.key, s.isStreaming])).toEqual([
+      ["resp_A:reasoning:1", false],
+      ["resp_B:reasoning:0", true],
+    ]);
   });
 });
