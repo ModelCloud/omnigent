@@ -129,9 +129,7 @@ async def test_probe_provider_rtt_records_latest_and_average(monkeypatch):
     monkeypatch.setattr(
         "omnigent.host.provider_health.httpx.AsyncClient", lambda **kw: _client(get)()
     )
-    monkeypatch.setattr(
-        "omnigent.host.provider_health.time.monotonic", lambda: clock["now"]
-    )
+    monkeypatch.setattr("omnigent.host.provider_health.time.monotonic", lambda: clock["now"])
     cache: dict = {}
     for _ in range(2):
         online, latest, average = await probe_provider_rtt(
@@ -159,16 +157,17 @@ async def test_probe_provider_rtt_failed_probe_keeps_prior_samples(monkeypatch):
     monkeypatch.setattr(
         "omnigent.host.provider_health.httpx.AsyncClient", lambda **kw: _client(get)()
     )
-    monkeypatch.setattr(
-        "omnigent.host.provider_health.time.monotonic", lambda: clock["now"]
-    )
+    monkeypatch.setattr("omnigent.host.provider_health.time.monotonic", lambda: clock["now"])
     cache: dict = {}
     await probe_provider_rtt("p", "https://api.openai.com/v1", None, cache=cache)
     online, latest, average = await probe_provider_rtt(
         "p", "https://api.openai.com/v1", None, cache=cache
     )
     assert online is False
-    assert (latest, average) == (pytest.approx(0.05), pytest.approx(0.05))  # failed probe adds no sample
+    assert (latest, average) == (
+        pytest.approx(0.05),
+        pytest.approx(0.05),
+    )  # failed probe adds no sample
 
 
 def test_annotate_provider_speed_stamps_relative_speed_per_combo():

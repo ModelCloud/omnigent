@@ -1495,13 +1495,15 @@ describe("model picker hotkey", () => {
 
   it("cycles the full Pi catalog after searching the model menu", () => {
     mockAgents([testAgent("a_pi", "pi-native-ui", { display_name: "Pi", harness: "pi-native" })]);
+    // Long enough for the menu to offer search.
     mockModelQueries(() => ({
       ...SUCCESS_QUERY_STATE,
-      data: [
-        { id: "model-a", model: "model-a", displayName: "Model A", isDefault: true },
-        { id: "model-b", model: "model-b", displayName: "Model B" },
-        { id: "model-c", model: "model-c", displayName: "Model C" },
-      ],
+      data: [..."abcdefghij"].map((letter) => ({
+        id: `model-${letter}`,
+        model: `model-${letter}`,
+        displayName: `Model ${letter.toUpperCase()}`,
+        isDefault: letter === "a",
+      })),
     }));
     renderLanding();
     fireEvent.keyDown(window, { code: "KeyM", ctrlKey: true, shiftKey: true });
@@ -7020,7 +7022,7 @@ describe("NewChatLandingScreen", () => {
     expect(fixDialogProps).toMatchObject({
       mode,
       harness: "codex-native",
-      harnessLabel: "Codex",
+      harnessLabel: "MultiDex",
       host: { host_id: "host_1" },
     });
     expect(screen.getByTestId("new-chat-landing-input")).toHaveValue("Harness readiness changed");
@@ -7044,7 +7046,7 @@ describe("NewChatLandingScreen", () => {
     renderLanding({ harness_install_enabled: true });
     breakSelectedHarness("custom", "codex-native", "needs-auth");
     fireEvent.click(screen.getByTestId("new-chat-landing-harness-setup"));
-    expect(fixDialogProps?.harnessLabel).toBe("Codex");
+    expect(fixDialogProps?.harnessLabel).toBe("MultiDex");
   });
 
   it("keeps the setup checklist for an SDK Claude agent needing authentication", () => {

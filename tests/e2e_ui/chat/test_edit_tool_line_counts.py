@@ -1,6 +1,6 @@
 """E2E: real ``sys_os_edit`` outcomes cross the server and runner into edit rows.
 
-An applied edit shows line counts; a missed edit shows its error only when expanded.
+An applied edit shows line counts after its title; a missed edit shows its error when expanded.
 """
 
 from __future__ import annotations
@@ -115,13 +115,13 @@ _VIEWPORT = {"width": 1280, "height": 720}
 
 
 @pytest.mark.timeout(300)
-# A recording at full viewport size keeps the one-line results legible.
+# A recording at full viewport size keeps the rows' counts legible.
 @pytest.mark.browser_context_args(viewport=_VIEWPORT, record_video_size=_VIEWPORT)
 def test_edit_rows_show_line_counts_and_diff(
     request: pytest.FixtureRequest,
     edit_session: tuple[str, str, Path],
 ) -> None:
-    """Applied edits read as line counts; a failed edit keeps its error."""
+    """An applied edit shows its line counts; a failed edit's error waits behind the expand."""
     base_url, session_id, workspace = edit_session
     # Open the recorded page only after the session and runner are ready.
     page: Page = request.getfixturevalue("page")
@@ -144,18 +144,17 @@ def test_edit_rows_show_line_counts_and_diff(
     run.click()
 
     applied = page.locator('[data-slot="collapsible-trigger"]', has_text="greet.py").first
-    applied_result = applied.get_by_test_id("tool-result-line")
-    expect(applied_result).to_have_text("Updated with 2 additions and 3 removals")
+    counts = applied.get_by_test_id("tool-line-counts")
+    expect(counts).to_have_text("+2 -3")
     failed = page.locator('[data-slot="collapsible-trigger"]', has_text="settings.py").first
-    expect(failed.get_by_test_id("tool-result-line")).to_have_count(0)
+    expect(failed.get_by_test_id("tool-line-counts")).to_have_count(0)
+    expect(failed).not_to_contain_text("Could not find")
     color = "el => getComputedStyle(el).color"
-    plain = applied_result.evaluate(color)
-    added = applied_result.get_by_text("2", exact=True).evaluate(color)
-    removed = applied_result.get_by_text("3", exact=True).evaluate(color)
-    noun = applied_result.get_by_text("additions", exact=True).evaluate(color)
-    # The counts use diff colors; the words around them keep the line's plain color.
+    plain = applied.evaluate(color)
+    added = counts.get_by_text("+2", exact=True).evaluate(color)
+    removed = counts.get_by_text("-3", exact=True).evaluate(color)
+    # The counts use diff colors, not the row's muted text.
     assert len({plain, added, removed}) == 3
-    assert noun == plain
 
     applied.click()
     card = applied.locator("xpath=..")

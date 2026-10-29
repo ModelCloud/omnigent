@@ -497,7 +497,7 @@ describe("ChatHeader — conversation breadcrumb", () => {
   it.each([
     ["claude-native-ui", "claude-code-native-ui", "Claude Code"],
     ["claude-native-ui", null, "Claude Code"],
-    ["codex-native-ui", "codex-native-ui", "Codex"],
+    ["codex-native-ui", "codex-native-ui", "MultiDex"],
   ] as const)("uses the product name for %s with wrapper %s", (name, wrapperLabel, displayName) => {
     renderHeader({
       sidebarOpen: true,

@@ -238,7 +238,7 @@ describe("smartRoutingDroppedMessage", () => {
 
   it("blames registration when a wrapper agent is missing", () => {
     expect(smartRoutingDroppedMessage({ kind: "wrappers-missing" }, context)).toBe(
-      "Smart Routing needs the Claude Code and Codex agents registered on this server — switched to Claude Code.",
+      "Smart Routing needs the Claude Code and MultiDex agents registered on this server — switched to Claude Code.",
     );
   });
 
@@ -248,7 +248,7 @@ describe("smartRoutingDroppedMessage", () => {
         { kind: "harnesses-unready", harnesses: ["codex-native"] },
         context,
       ),
-    ).toBe("Smart Routing needs Codex ready on machine-2 — switched to Claude Code.");
+    ).toBe("Smart Routing needs MultiDex ready on machine-2 — switched to Claude Code.");
   });
 
   it("names both arms when both are missing", () => {
@@ -258,7 +258,7 @@ describe("smartRoutingDroppedMessage", () => {
         context,
       ),
     ).toBe(
-      "Smart Routing needs Claude Code and Codex ready on machine-2 — switched to Claude Code.",
+      "Smart Routing needs Claude Code and MultiDex ready on machine-2 — switched to Claude Code.",
     );
   });
 
@@ -269,7 +269,7 @@ describe("smartRoutingDroppedMessage", () => {
         context,
       ),
     ).toBe(
-      "Smart Routing needs Codex running on the workspace Unity Gateway on machine-2 — switched to Claude Code.",
+      "Smart Routing needs MultiDex running on the workspace Unity Gateway on machine-2 — switched to Claude Code.",
     );
   });
 
@@ -280,13 +280,13 @@ describe("smartRoutingDroppedMessage", () => {
         context,
       ),
     ).toBe(
-      "Smart Routing needs Claude Code and Codex running on the workspace Unity Gateway on machine-2 — switched to Claude Code.",
+      "Smart Routing needs Claude Code and MultiDex running on the workspace Unity Gateway on machine-2 — switched to Claude Code.",
     );
   });
 
   it("drops the host clause for a sandbox and falls back on the agent name", () => {
     expect(
       smartRoutingDroppedMessage({ kind: "harnesses-unready", harnesses: ["codex-native"] }),
-    ).toBe("Smart Routing needs Codex ready — switched to the default agent.");
+    ).toBe("Smart Routing needs MultiDex ready — switched to the default agent.");
   });
 });
