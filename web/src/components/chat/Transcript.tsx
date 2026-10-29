@@ -23,6 +23,8 @@ import {
   liveCandidateAssistantIndex,
 } from "@/lib/renderItems";
 import { useChatStore } from "@/store/chatStore";
+import { useThinkingPaneStore } from "@/store/thinkingPane";
+import { collectReasoningSections } from "@/components/blocks/BlockRenderer";
 import { TranscriptScrollbar } from "@/pages/TranscriptScrollbar";
 import { TurnRail, type Turn } from "@/pages/TurnRail";
 import { FloatingBannerStack, StreamBudgetBanner } from "@/components/StreamBudgetBanner";
@@ -302,6 +304,31 @@ function TranscriptImpl({
     () => liveCandidateAssistantIndex(display.streamBubbles),
     [display.streamBubbles],
   );
+
+  // The thinking pane's section list, derived from the same bubbles the
+  // transcript renders so section keys match ReasoningView clicks and
+  // folded/off-screen traces stay reachable. `setSections` shares the
+  // list identity while nothing reasoning-relevant changed, so text
+  // streaming frames don't repaint the pane.
+  const reasoningSections = useMemo(
+    () =>
+      collectReasoningSections(display.streamBubbles, {
+        sessionStatus,
+        lastAssistantIndex,
+        showsWorking: display.showsWorking,
+        hasPendingElicitation: display.pendingElicitations.length > 0,
+      }),
+    [
+      display.streamBubbles,
+      sessionStatus,
+      lastAssistantIndex,
+      display.showsWorking,
+      display.pendingElicitations.length,
+    ],
+  );
+  useEffect(() => {
+    useThinkingPaneStore.getState().setSections(display.conversationId ?? null, reasoningSections);
+  }, [display.conversationId, reasoningSections]);
 
   // Cmd+Alt+↑/↓ (Ctrl+Alt on win/linux) user-turn navigation.
   useEffect(() => {

@@ -24,7 +24,8 @@ import { ChevronRightIcon } from "lucide-react";
 import { LIVE_ITEM_PREFIX } from "@/lib/blocks";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ConversationScrollLockContext } from "@/components/ai-elements/conversation";
-import type { RenderItem } from "@/lib/renderItems";
+import type { Bubble, RenderItem } from "@/lib/renderItems";
+import type { ThinkingPaneSection } from "@/store/thinkingPane";
 import type { SessionStatus } from "@/lib/types";
 import type { ActiveResponse } from "@/store/types";
 import { cn } from "@/lib/utils";
@@ -1073,4 +1074,57 @@ function keyFor(item: RenderItem, index: number): string {
   if (item.kind === "tool") return `tool:${item.execution.callId}`;
   if (item.kind === "elicitation") return `elicitation:${item.elicitationId}`;
   return `${item.kind}:${index}`;
+}
+
+/**
+ * Every reasoning section of a transcript, in order, for the thinking
+ * pane. Built from the same `streamBubbles` the transcript renders, so
+ * section keys match what a mounted ReasoningView opens on click and
+ * folded/virtualized sections are still addressable.
+ *
+ * `isStreaming` mirrors `renderSequence`: the trailing work item of a
+ * live turn. Settled sections with no text (a `reasoning_start` that
+ * never streamed chunks — unclickable in the transcript) are skipped.
+ */
+export function collectReasoningSections(
+  bubbles: Bubble[],
+  {
+    sessionStatus,
+    lastAssistantIndex,
+    showsWorking = false,
+    hasPendingElicitation = false,
+  }: {
+    sessionStatus: SessionStatus;
+    lastAssistantIndex: number;
+    showsWorking?: boolean;
+    hasPendingElicitation?: boolean;
+  },
+): ThinkingPaneSection[] {
+  const sections: ThinkingPaneSection[] = [];
+  for (let i = 0; i < bubbles.length; i += 1) {
+    const bubble = bubbles[i]!;
+    if (bubble.kind !== "assistant") continue;
+    const { isTurnLive } = turnLiveness({
+      sessionStatus,
+      turnLifecycle: bubble.lifecycle,
+      isLastAssistant: i === lastAssistantIndex,
+      hasPendingElicitation,
+      showsWorking,
+    });
+    const lastIdx = isTurnLive ? lastWorkIndex(bubble.items) : -1;
+    const streamingIdx = lastIdx >= 0 && bubble.items[lastIdx]!.kind === "reasoning" ? lastIdx : -1;
+    for (let j = 0; j < bubble.items.length; j += 1) {
+      const item = bubble.items[j]!;
+      if (item.kind !== "reasoning") continue;
+      const isStreaming = j === streamingIdx;
+      if (!isStreaming && item.text.trim().length === 0) continue;
+      sections.push({
+        key: `${bubble.responseId}:${keyFor(item, j)}`,
+        text: item.text,
+        isStreaming,
+        duration: item.duration,
+      });
+    }
+  }
+  return sections;
 }

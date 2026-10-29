@@ -1,22 +1,31 @@
-// Right-side pane that displays a reasoning section selected from the
-// transcript. Clicking a "Thought for Ns"/"Thinking..." header selects
-// the section here instead of expanding it inline, so older thinking
-// stays readable while a live thought streams at the bottom edge. The
-// selected section's ReasoningView keeps republishing its content, so
-// the pane stays live while the section streams.
+// Right-side pane that displays a reasoning section of the transcript.
+// Clicking a "Thought for Ns"/"Thinking..." header selects the section
+// here instead of expanding it inline, so older thinking stays readable
+// while a live thought streams at the bottom edge.
+//
+// Two modes: "auto" follows the newest settled trace — every completed
+// reasoning section opens here as it lands — and "manual" browses a
+// pinned trace via the transcript's headers or the prev/next controls.
+// Any user pick pauses auto-follow until the Auto control resumes it.
+// Section content comes from the store's `sections` list (published by
+// the Transcript from the rendered bubbles), so the pane stays live
+// while a section streams and works for folded/off-screen traces.
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { CopyIcon, SparklesIcon, XIcon } from "lucide-react";
+import { ChevronLeftIcon, ChevronRightIcon, CopyIcon, SparklesIcon, XIcon } from "lucide-react";
 import { ReasoningMarkdown } from "@/components/ai-elements/reasoning";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Button } from "@/components/ui/button";
 import { showToast } from "@/components/ui/toast";
 import { copyText } from "@/lib/clipboard";
-import { useThinkingPaneStore } from "@/store/thinkingPane";
+import { cn } from "@/lib/utils";
+import { useThinkingPaneStore, type ThinkingPaneSection } from "@/store/thinkingPane";
 
 const DEFAULT_WIDTH_PERCENT = 50;
 const MIN_WIDTH_PERCENT = 25;
 const MAX_WIDTH_PERCENT = 75;
+
+const EMPTY_SECTIONS: ThinkingPaneSection[] = [];
 
 interface ThinkingPaneProps {
   /** Conversation this pane belongs to; selections from other conversations never render. */
@@ -27,13 +36,34 @@ export function ThinkingPane({ conversationId }: ThinkingPaneProps) {
   const isSelected = useThinkingPaneStore(
     (s) => s.conversationId === conversationId && s.sectionKey !== null,
   );
-  const section = useThinkingPaneStore((s) =>
-    s.conversationId === conversationId ? s.section : null,
+  const sectionKey = useThinkingPaneStore((s) =>
+    s.conversationId === conversationId ? s.sectionKey : null,
   );
+  const sections = useThinkingPaneStore((s) =>
+    s.sectionsConversationId === conversationId ? s.sections : EMPTY_SECTIONS,
+  );
+  const mode = useThinkingPaneStore((s) => s.mode);
+  const open = useThinkingPaneStore((s) => s.open);
+  const follow = useThinkingPaneStore((s) => s.follow);
+  const toggleAuto = useThinkingPaneStore((s) => s.toggleAuto);
   const close = useThinkingPaneStore((s) => s.close);
   const paneRef = useRef<HTMLElement>(null);
   const [widthPercent, setWidthPercent] = useState(DEFAULT_WIDTH_PERCENT);
   const drag = useRef<{ pointerId: number; x: number; widthPercent: number } | null>(null);
+
+  const index = sectionKey === null ? -1 : sections.findIndex((s) => s.key === sectionKey);
+  const section = index >= 0 ? sections[index]! : null;
+  const prevKey = index > 0 ? sections[index - 1]!.key : null;
+  const nextKey = index >= 0 && index + 1 < sections.length ? sections[index + 1]!.key : null;
+
+  // Auto mode: the selection is always the newest settled trace. When a
+  // streaming section completes or a new trace lands, follow moves here.
+  // Nothing to follow yet → the pane stays closed.
+  const latestSettledKey = sections.findLast((s) => !s.isStreaming)?.key ?? null;
+  useEffect(() => {
+    if (mode !== "auto") return;
+    if (latestSettledKey !== sectionKey) follow(conversationId, latestSettledKey);
+  }, [mode, latestSettledKey, sectionKey, conversationId, follow]);
 
   const resize = (width: number) => {
     setWidthPercent(Math.max(MIN_WIDTH_PERCENT, Math.min(MAX_WIDTH_PERCENT, width)));
@@ -119,6 +149,58 @@ export function ThinkingPane({ conversationId }: ThinkingPaneProps) {
           size="icon-sm"
           variant="ghost"
           className="shrink-0"
+          aria-label="Previous reasoning trace"
+          title="Previous reasoning trace"
+          disabled={prevKey === null}
+          onClick={() => {
+            if (prevKey !== null) open(conversationId, prevKey);
+          }}
+        >
+          <ChevronLeftIcon className="size-4" />
+        </Button>
+        <Button
+          type="button"
+          size="icon-sm"
+          variant="ghost"
+          className="shrink-0"
+          aria-label="Next reasoning trace"
+          title="Next reasoning trace"
+          disabled={nextKey === null}
+          onClick={() => {
+            if (nextKey !== null) open(conversationId, nextKey);
+          }}
+        >
+          <ChevronRightIcon className="size-4" />
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          data-testid="thinking-pane-mode"
+          className={cn(
+            "h-6 shrink-0 px-2 text-xs",
+            mode === "auto" ? "text-foreground" : "text-muted-foreground",
+          )}
+          aria-label={
+            mode === "auto"
+              ? "Auto mode — showing the latest completed trace"
+              : "Manual mode — click to resume auto-follow"
+          }
+          aria-pressed={mode === "auto"}
+          title={
+            mode === "auto"
+              ? "Auto mode: showing the latest completed trace"
+              : "Manual mode: click to resume auto mode"
+          }
+          onClick={toggleAuto}
+        >
+          {mode === "auto" ? "Auto" : "Manual"}
+        </Button>
+        <Button
+          type="button"
+          size="icon-sm"
+          variant="ghost"
+          className="shrink-0"
           aria-label="Copy reasoning trace"
           title="Copy entire reasoning trace"
           disabled={!section?.text.trim()}
@@ -143,12 +225,17 @@ export function ThinkingPane({ conversationId }: ThinkingPaneProps) {
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2 text-ui text-foreground chat-markdown">
         {section !== null && section.text.trim().length > 0 ? (
-          <ReasoningMarkdown>{section.text}</ReasoningMarkdown>
+          // Remount per trace: streamdown defers block updates in
+          // streaming mode, so switching sections could otherwise paint
+          // the previous trace's markdown until the transition settles.
+          <ReasoningMarkdown key={section.key}>{section.text}</ReasoningMarkdown>
         ) : (
           <p className="text-muted-foreground">
-            {section?.isStreaming
-              ? "Reasoning is streaming — deltas appear here as they arrive."
-              : "No reasoning content was recorded for this section."}
+            {section === null
+              ? "This reasoning section is no longer available."
+              : section.isStreaming
+                ? "Reasoning is streaming — deltas appear here as they arrive."
+                : "No reasoning content was recorded for this section."}
           </p>
         )}
       </div>
