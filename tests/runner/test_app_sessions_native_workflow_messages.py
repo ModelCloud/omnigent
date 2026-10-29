@@ -674,6 +674,8 @@ async def test_codex_native_midturn_message_is_steered_and_consumed() -> None:
     """
     import asyncio as _aio
 
+    from tests._helpers.polling import poll_until_async
+
     gate = _aio.Event()
     app, _pm, hc = _build_handshake_app(gate)
     session_id = "a4d2e5cf7bb14e5aa0a1359fdc93f1bb"
@@ -697,7 +699,7 @@ async def test_codex_native_midturn_message_is_steered_and_consumed() -> None:
             },
         )
         assert first.status_code == 202
-        await _aio.sleep(0.05)
+        await poll_until_async(lambda: bool(hc.posted_bodies), timeout_s=2.0)
 
         second = await client.post(
             f"/v1/sessions/{session_id}/events",
