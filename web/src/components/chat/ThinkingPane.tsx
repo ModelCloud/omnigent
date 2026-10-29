@@ -217,7 +217,10 @@ export function ThinkingPane({ conversationId }: ThinkingPaneProps) {
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2 text-ui text-foreground chat-markdown">
         {section !== null && section.text.trim().length > 0 ? (
-          <ReasoningMarkdown>{section.text}</ReasoningMarkdown>
+          // Remount per trace: streamdown defers block updates in
+          // streaming mode, so switching sections could otherwise paint
+          // the previous trace's markdown until the transition settles.
+          <ReasoningMarkdown key={section.key}>{section.text}</ReasoningMarkdown>
         ) : (
           <p className="text-muted-foreground">
             {section === null
