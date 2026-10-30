@@ -319,9 +319,11 @@ describe("agent picker readiness (needs-setup badges)", () => {
   });
 
   it("merges readiness across all online hosts so harnesses configured anywhere stay offered", () => {
-    // With no host pinned the task resolves one at fire time, so a harness that
-    // is configured on ANY online host must stay a first-class pick — gating on
+    // An older unpinned task still resolves its host at fire time, so a harness
+    // configured on ANY online host must stay a first-class pick — gating on
     // the first online host alone would hide it ("MultiDex is the only option").
+    // New tasks auto-pin the first online host (upstream #12278), so this
+    // merge only applies to an existing task saved without a host.
     vi.mocked(hostsHook.useHosts).mockReturnValue({
       data: [
         {
@@ -340,7 +342,13 @@ describe("agent picker readiness (needs-setup badges)", () => {
         },
       ],
     } as unknown as ReturnType<typeof hostsHook.useHosts>);
-    renderDialog();
+    render(
+      <CreateScheduledTaskDialog
+        open
+        onOpenChange={vi.fn()}
+        editingTask={scheduledTask({ hostId: null })}
+      />,
+    );
     const picker = screen.getByTestId("agent-picker-stub");
     expect(picker.getAttribute("data-badge-host")).toBe("host_1");
     // Best availability wins per harness: codex ready on host_1 outranks
