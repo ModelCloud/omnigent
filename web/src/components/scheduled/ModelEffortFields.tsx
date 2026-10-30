@@ -35,10 +35,12 @@ import {
   CLAUDE_NATIVE_EFFORTS,
   EFFORT_SELECT_NONE,
   MODEL_SELECT_DEFAULT,
-  PI_NATIVE_EFFORTS,
+  nativeEffortOptions,
 } from "@/components/HarnessConfigControls";
+import { NativeModelSelectors } from "@/components/NativeModelSelectors";
 import { CLAUDE_NATIVE_MODELS } from "@/lib/claudeNativeModels";
 import { CLAUDE_NATIVE_PERMISSION_MODES } from "@/lib/claudePermissionMode";
+import { findNativeModelOption } from "@/lib/codexNativeModels";
 import { useHostModelOptions } from "@/hooks/useHosts";
 
 /** Sentinel Select value for "no permission override" (use the agent default).
@@ -92,7 +94,48 @@ export function ModelEffortFields({
     hostModelOptions && hostModelOptions.length > 0
       ? hostModelOptions.map((o) => ({ id: o.id, label: o.displayName ?? o.id }))
       : staticFallback.map((m) => ({ id: m.id, label: m.label }));
-  const effortOptions = harness === "pi-native" ? PI_NATIVE_EFFORTS : CLAUDE_NATIVE_EFFORTS;
+  // Codex resolves a per-model ladder from the catalog; an empty result (no
+  // catalog, or the row names no efforts) falls back to the generic ladder.
+  const catalogEfforts = nativeEffortOptions(harness, hostModelOptions ?? [], model || null);
+  const effortOptions = catalogEfforts?.length ? catalogEfforts : CLAUDE_NATIVE_EFFORTS;
+
+  // Codex/MultiDex catalogs carry provider + serving-variant axes the flat
+  // picker can't express: dependent Model → Provider → Speed → Reasoning
+  // selectors (the same component the interactive picker uses) drive one
+  // model-override id, with liveness dots and speed bolts on the options.
+  const codexGrouped =
+    harness === "codex-native" && (hostModelOptions?.some((row) => row.modelFamily) ?? false);
+  const handleCodexModelChange = (id: string) => {
+    onModelChange(id);
+    // An effort that the newly resolved row doesn't advertise can't be sent
+    // with it — drop it back to the agent default rather than save a pair the
+    // harness would reject.
+    const row =
+      findNativeModelOption(hostModelOptions ?? [], id) ??
+      // "" picks "Default": the launch resolves to the catalog's own default.
+      (id === "" ? (hostModelOptions ?? []).find((option) => option.isDefault) : null);
+    if (
+      effort !== "" &&
+      !(row?.supportedReasoningEfforts ?? []).some((e) => e.reasoningEffort === effort)
+    ) {
+      onEffortChange("");
+    }
+  };
+  if (codexGrouped) {
+    return (
+      <div className="flex flex-col gap-3 sm:gap-4">
+        <NativeModelSelectors
+          options={hostModelOptions ?? []}
+          selectedModel={model === "" ? null : model}
+          effort={effort === "" ? null : effort}
+          modelDefaultLabel="Default"
+          onModelChange={handleCodexModelChange}
+          onEffortChange={(e) => onEffortChange(e ?? "")}
+          onSelectOpenChange={onSelectOpenChange}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-3 sm:gap-4">
