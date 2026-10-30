@@ -5,6 +5,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { MODEL_SELECT_DEFAULT } from "@/components/HarnessConfigControls";
 import { findNativeModelOption } from "@/lib/codexNativeModels";
 import { familyId, providerId, resolveModelSelection, variantId } from "@/lib/modelSelection";
 import { cn } from "@/lib/utils";
@@ -37,6 +38,8 @@ export function NativeModelSelectors({
   disabled,
   onModelChange,
   onEffortChange,
+  modelDefaultLabel,
+  onSelectOpenChange,
 }: {
   options: readonly NativeModelOption[];
   selectedModel: string | null;
@@ -44,22 +47,40 @@ export function NativeModelSelectors({
   disabled?: boolean;
   onModelChange: (id: string) => void;
   onEffortChange: (effort: string | null) => void;
+  /**
+   * When set, the Model field gains a "no override" entry ahead of the
+   * families: picking it calls `onModelChange("")` and shows while
+   * `selectedModel` is empty. Dependent fields then resolve against the
+   * catalog's `isDefault` row so Provider/Speed/Reasoning still pick from the
+   * model the default launches as.
+   */
+  modelDefaultLabel?: string;
+  /** Forwarded to each Select's onOpenChange (nested-dropdown dismiss guards). */
+  onSelectOpenChange?: (open: boolean) => void;
 }) {
   const selected = findNativeModelOption(options, selectedModel);
+  // No explicit pick under a "Default" entry still needs dependent rows: they
+  // read off the catalog's own default, which is what launching with no
+  // override resolves to.
+  const effectiveSelected =
+    selected ??
+    (modelDefaultLabel !== undefined && !selectedModel
+      ? (options.find((row) => row.isDefault) ?? null)
+      : null);
   const families = [
     ...new Map(
       options.map((row) => [familyId(row), row.modelLabel ?? row.displayName ?? row.id]),
     ).entries(),
   ];
-  const family = selected ? familyId(selected) : undefined;
+  const family = effectiveSelected ? familyId(effectiveSelected) : undefined;
   const familyRows = options.filter((row) => familyId(row) === family);
   const providers = [...new Set(familyRows.map(providerId))];
-  const provider = selected ? providerId(selected) : undefined;
+  const provider = effectiveSelected ? providerId(effectiveSelected) : undefined;
   const variants = [
     ...new Set(familyRows.filter((row) => providerId(row) === provider).map(variantId)),
   ];
-  const variant = selected ? variantId(selected) : undefined;
-  const efforts = selected?.supportedReasoningEfforts ?? [];
+  const variant = effectiveSelected ? variantId(effectiveSelected) : undefined;
+  const efforts = effectiveSelected?.supportedReasoningEfforts ?? [];
   const choose = (nextFamily: string, nextProvider?: string, nextVariant?: string) => {
     const row = resolveModelSelection(options, nextFamily, nextProvider, nextVariant);
     if (row) onModelChange(row.id);
@@ -119,7 +140,12 @@ export function NativeModelSelectors({
     return (
       <div className="grid grid-cols-[5rem_minmax(0,1fr)] items-center gap-2">
         <span className="text-xs text-muted-foreground">{label}</span>
-        <Select value={value ?? ""} onValueChange={change} disabled={disabled}>
+        <Select
+          value={value ?? ""}
+          onValueChange={change}
+          disabled={disabled}
+          onOpenChange={onSelectOpenChange}
+        >
           <SelectTrigger aria-label={label} className="w-full">
             <SelectValue placeholder="—" />
           </SelectTrigger>
@@ -154,12 +180,26 @@ export function NativeModelSelectors({
   }
   return (
     <div className="min-w-72 space-y-2 p-2" data-testid="native-model-selectors">
-      {field("Model", family, families, (v) => {
-        const sameProvider = options.some(
-          (row) => familyId(row) === v && providerId(row) === provider,
-        );
-        choose(v, sameProvider ? provider : undefined);
-      })}
+      {field(
+        "Model",
+        modelDefaultLabel !== undefined && !selectedModel ? MODEL_SELECT_DEFAULT : family,
+        [
+          ...(modelDefaultLabel !== undefined
+            ? [[MODEL_SELECT_DEFAULT, modelDefaultLabel] as const]
+            : []),
+          ...families,
+        ],
+        (v) => {
+          if (v === MODEL_SELECT_DEFAULT && modelDefaultLabel !== undefined) {
+            onModelChange("");
+            return;
+          }
+          const sameProvider = options.some(
+            (row) => familyId(row) === v && providerId(row) === provider,
+          );
+          choose(v, sameProvider ? provider : undefined);
+        },
+      )}
       {field(
         "Provider",
         provider,
@@ -183,8 +223,8 @@ export function NativeModelSelectors({
           ? [
               [
                 "__default__",
-                selected?.defaultReasoningEffort
-                  ? `Default (${labels[selected.defaultReasoningEffort] ?? selected.defaultReasoningEffort})`
+                effectiveSelected?.defaultReasoningEffort
+                  ? `Default (${labels[effectiveSelected.defaultReasoningEffort] ?? effectiveSelected.defaultReasoningEffort})`
                   : "Default",
               ],
               ...efforts.map(
