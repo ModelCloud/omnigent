@@ -35,7 +35,11 @@ from omnigent.native.native_coding_agents import CLAUDE_NATIVE_AGENT_NAME
 from tests._helpers.compat import compat_server_cwd, server_executable, server_pythonpath
 from tests._helpers.live_server import isolated_local_server
 from tests.e2e_ui.conftest import _BUILD_OUTPUT, _REPO_ROOT
-from tests.e2e_ui.scheduled.test_scheduled_tasks_page import _create_task, _row_by_name
+from tests.e2e_ui.scheduled.test_scheduled_tasks_page import (
+    _create_task,
+    _open_automations_page,
+    _row_by_name,
+)
 
 
 @pytest.fixture(scope="module")
@@ -84,7 +88,7 @@ def test_scheduled_task_detail_page_run_now_records_run_row(
         "FREQ=DAILY;BYHOUR=9;BYMINUTE=0",
     )
 
-    page.goto(f"{base_url}/tasks")
+    _open_automations_page(page, base_url)
     row = _row_by_name(page, "Detail run-now test")
     expect(row).to_be_visible(timeout=30_000)
     row.get_by_test_id("task-row-open").click()
@@ -97,7 +101,7 @@ def test_scheduled_task_detail_page_run_now_records_run_row(
     expect(page.get_by_test_id("task-detail-schedule")).to_contain_text(
         "Every day at 9:00 AM", timeout=15_000
     )
-    expect(page.get_by_test_id("task-detail-host")).to_contain_text("Resolve at fire time")
+    expect(page.get_by_test_id("task-detail-host")).to_contain_text("Most recently active host")
     expect(page.get_by_test_id("task-detail-runs-empty")).to_be_visible()
 
     # Run now returns 202; the page polls its run history until the run lands.

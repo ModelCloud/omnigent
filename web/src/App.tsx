@@ -6,6 +6,8 @@ import { useOmnigentPageView } from "@/lib/analytics";
 import { PageLoading } from "@/components/PageLoading";
 import { Spinner } from "@/components/ui/spinner";
 import { ChunkLoadErrorBoundary } from "@/components/ChunkLoadErrorBoundary";
+import { RenderErrorBoundary } from "@/components/RenderErrorBoundary";
+import { useLocation } from "@/lib/routing";
 import { isFeatureEnabled, type FeatureKey } from "@/lib/capabilities";
 import { useServerInfo } from "@/lib/CapabilitiesContext";
 import { AppShell } from "@/shell/AppShell";
@@ -200,6 +202,10 @@ function AppRoutes({ basename }: AppProps) {
           />
           <Route path={`${prefix}/tasks`} element={<TasksPage />} />
           <Route
+            path={`${prefix}/tasks/templates`}
+            element={<TasksPage key="templates" templatesOnly />}
+          />
+          <Route
             path={`${prefix}/tasks/:taskId`}
             element={
               <FeatureGatedPage feature="automations_v2">
@@ -249,9 +255,12 @@ function AppRoutes({ basename }: AppProps) {
 }
 
 export default function App(props: AppProps = {}) {
+  const { pathname } = useLocation();
   return (
     <ChunkLoadErrorBoundary>
-      <AppRoutes {...props} />
+      <RenderErrorBoundary name="this page" resetKey={pathname}>
+        <AppRoutes {...props} />
+      </RenderErrorBoundary>
     </ChunkLoadErrorBoundary>
   );
 }
