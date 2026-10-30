@@ -796,6 +796,33 @@ Cross-harness journeys:
   After a greeting, run `!echo "hi"`, `!ls`, and `!echo "hi"` again. Each shell
   prompt must remain a separate user turn outside the assistant's folded work,
   including after reload. This browser contract does not launch the Claude CLI.
+- **`chat-render`, `steer`, Codex shell commands from the web composer:**
+  A standalone `!command` runs in the session's shell. Its pending bubble settles
+  and its output appears below it; attachments, multiple content blocks and `!!`
+  text remain model input. On shared servers, direct Codex shell messages require
+  owner access (`LEVEL_OWNER`), including API and automated messages. Codex runs
+  these commands as the host process user, outside its thread sandbox and
+  model-tool approval path. Collaborators with edit access can still send model
+  prompts. Each shell delivery carries trusted owner authorization from the
+  server, bound to the exact command at runner ingress. An older server cannot
+  authorize direct shell execution: the runner reports an undelivered upgrade
+  error and preserves the native session.
+  `tests/e2e_ui/messages/test_native_codex_shell_input.py::test_web_shell_input_runs_in_codex_shell_not_as_prompt`
+  covers both a first message and an existing session, including rendered output.
+  Run it through the repro environment with `--ui-skip-build --video=on` after
+  building the SPA. It requires real Codex and tmux with the mock model provider.
+  `tests/e2e/test_codex_native_shell_followup_e2e.py::test_web_prompt_during_standalone_shell_gets_model_reply`
+  (own environment; real server, runner, Codex and tmux, local mock model) checks
+  that a prompt sent during the command receives an answer after it finishes,
+  and that an unresolved submission with no running command allows the next
+  question through without resubmitting the shell command.
+  `tests/e2e/test_codex_native_shell_followup_e2e.py::test_editor_bang_input_cannot_execute_through_an_older_server`
+  covers editor rejection and ordinary-prompt recovery with current peers or an
+  older server selected by `OMNIGENT_COMPAT_SERVER_PYTHON`.
+  Manually, send `!echo hi`, expand its output and check for `hi`. Then send
+  `!sleep 5` followed immediately by a question; the question must receive an
+  answer. Upload a text file containing `!echo file-content` with an empty
+  composer and verify that it reaches the model without running a shell command.
 - **`codex-plugin-skills`:** use the
   [Composer recipe](./composer.md#driving-it-with-the-repro-environment) for the
   real CLI catalog regression and recorded browser journey across both
