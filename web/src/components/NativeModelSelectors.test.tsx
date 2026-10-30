@@ -272,3 +272,62 @@ it.each([
   expect(onModelChange).not.toHaveBeenCalled();
   expect(onEffortChange).not.toHaveBeenCalled();
 });
+
+it("shows the Default entry and resolves dependents off the catalog default", async () => {
+  const catalog = options.map((row) =>
+    row.id === "local-1017" ? { ...row, isDefault: true } : row,
+  );
+  const onModelChange = vi.fn();
+  const props = {
+    options: catalog,
+    effort: null,
+    modelDefaultLabel: "Default",
+    onModelChange,
+    onEffortChange: vi.fn(),
+  };
+  const { rerender } = render(<NativeModelSelectors {...props} selectedModel={null} />);
+  expect(screen.getByRole("combobox", { name: "Model" })).toHaveTextContent("Default");
+  // Provider/Speed/Reasoning read off the catalog's isDefault row (local-1017),
+  // which is what launching with no override resolves to.
+  expect(screen.getByRole("combobox", { name: "Provider" })).toHaveTextContent("Local");
+  expect(screen.getByRole("combobox", { name: "Reasoning" })).toHaveTextContent("Max");
+  // Pick a concrete family (keeps the effective provider, so it resolves the
+  // local row), then switch back: "Default" emits "" (no override).
+  fireEvent.keyDown(screen.getByRole("combobox", { name: "Model" }), { key: "ArrowDown" });
+  fireEvent.click(await screen.findByRole("option", { name: "DeepSeek v4.1 Flash" }));
+  expect(onModelChange).toHaveBeenLastCalledWith("local-1017");
+  rerender(<NativeModelSelectors {...props} selectedModel="local-1017" />);
+  fireEvent.keyDown(screen.getByRole("combobox", { name: "Model" }), { key: "ArrowDown" });
+  fireEvent.click(await screen.findByRole("option", { name: "Default" }));
+  expect(onModelChange).toHaveBeenLastCalledWith("");
+});
+
+it("omits the Default entry when modelDefaultLabel is unset", () => {
+  render(
+    <NativeModelSelectors
+      options={options}
+      selectedModel={null}
+      effort={null}
+      onModelChange={vi.fn()}
+      onEffortChange={vi.fn()}
+    />,
+  );
+  // With no default affordance an empty selection has no dependents either.
+  expect(screen.queryAllByRole("combobox")).toHaveLength(1);
+});
+
+it("forwards select open/close to onSelectOpenChange (dialog dismiss guard)", async () => {
+  const onOpenChange = vi.fn();
+  render(
+    <NativeModelSelectors
+      options={options}
+      selectedModel="local-1017"
+      effort={null}
+      onModelChange={vi.fn()}
+      onEffortChange={vi.fn()}
+      onSelectOpenChange={onOpenChange}
+    />,
+  );
+  fireEvent.keyDown(screen.getByRole("combobox", { name: "Provider" }), { key: "ArrowDown" });
+  expect(onOpenChange).toHaveBeenLastCalledWith(true);
+});

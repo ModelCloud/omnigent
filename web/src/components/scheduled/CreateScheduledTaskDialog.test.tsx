@@ -11,7 +11,7 @@ import type * as NativeCodingAgentsModule from "@/lib/nativeCodingAgents";
 import type * as ScheduledTasksApiModule from "@/lib/scheduledTasksApi";
 
 import type React from "react";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CreateScheduledTaskDialog,
@@ -22,6 +22,7 @@ import * as agentsHook from "@/hooks/useAvailableAgents";
 import * as hostsHook from "@/hooks/useHosts";
 import * as scheduledHooks from "@/hooks/useScheduledTasks";
 import type { AvailableAgent } from "@/hooks/useAvailableAgents";
+import type { NativeModelOption } from "@/lib/types";
 import { CapabilitiesProvider } from "@/lib/CapabilitiesContext";
 import { SERVER_INFO_OFFLINE_FALLBACK } from "@/lib/bootCapabilities";
 
@@ -180,6 +181,44 @@ const AGENTS: AvailableAgent[] = [
   }),
 ];
 
+// A codex-native model-options catalog like the runner serves on a pinned
+// host: one family across providers, Lithos carrying serving variants, speed
+// multipliers the picker renders as bolts.
+const MULTIDEX_CATALOG: NativeModelOption[] = [
+  {
+    id: "local-1017",
+    modelFamily: "ds",
+    modelLabel: "DeepSeek v4.1 Flash",
+    providerId: "multidex",
+    providerHealth: "online",
+    speed: 1.0,
+    isDefault: true,
+    supportedReasoningEfforts: [{ reasoningEffort: "none" }, { reasoningEffort: "max" }],
+    defaultReasoningEffort: "max",
+  },
+  {
+    id: "openrouter-1017",
+    modelFamily: "ds",
+    modelLabel: "DeepSeek v4.1 Flash",
+    providerId: "openrouter",
+    providerHealth: "online",
+    speed: 1.25,
+    supportedReasoningEfforts: [{ reasoningEffort: "none" }, { reasoningEffort: "max" }],
+    defaultReasoningEffort: "max",
+  },
+  ...(["regular", "fast", "ultra"] as const).map((variant, i): NativeModelOption => ({
+    id: `lithos-${variant}`,
+    modelFamily: "ds",
+    modelLabel: "DeepSeek v4.1 Flash",
+    providerId: "lithos",
+    variant,
+    providerHealth: "online",
+    speed: [1.25, 1.5, 2.0][i],
+    supportedReasoningEfforts: [{ reasoningEffort: "none" }, { reasoningEffort: "max" }],
+    defaultReasoningEffort: "max",
+  })),
+];
+
 const mutateAsync = vi.fn();
 const updateMutateAsync = vi.fn();
 
@@ -194,6 +233,12 @@ beforeEach(() => {
   vi.mocked(hostsHook.useHosts).mockReturnValue({
     data: [{ host_id: "host_1", name: "laptop", owner: "me", status: "online" }],
   } as unknown as ReturnType<typeof hostsHook.useHosts>);
+  // Per-test catalog mocks are reset here so they can't leak across tests.
+  vi.mocked(hostsHook.useHostModelOptions)
+    .mockReset()
+    .mockReturnValue({
+      data: undefined,
+    } as unknown as ReturnType<typeof hostsHook.useHostModelOptions>);
   vi.mocked(scheduledHooks.useCreateScheduledTask).mockReturnValue({
     mutateAsync,
     isPending: false,
@@ -372,6 +417,69 @@ describe("agent picker readiness (needs-setup badges)", () => {
       reasoningEffort: "high",
     });
     expect(payload).not.toHaveProperty("permissionMode");
+  });
+
+  it("groups a codex catalog into Model/Provider/Speed with bolts, submitting the variant's row id", async () => {
+    vi.mocked(hostsHook.useHostModelOptions).mockReturnValue({
+      data: MULTIDEX_CATALOG,
+    } as unknown as ReturnType<typeof hostsHook.useHostModelOptions>);
+    renderDialog();
+    fireEvent.click(screen.getByTestId("pick-harness-codex"));
+    // The grouped selectors replace the flat model/effort controls.
+    const grouped = screen.getByTestId("native-model-selectors");
+    expect(grouped).toBeInTheDocument();
+    expect(
+      within(grouped)
+        .getAllByRole("combobox")
+        .map((n) => n.getAttribute("aria-label")),
+    ).toEqual(["Model", "Provider", "Reasoning"]);
+    // "Default" is the selected model until the user picks a concrete row.
+    expect(screen.getByRole("combobox", { name: "Model" })).toHaveTextContent("Default");
+    // Provider options advertise speed as bolt glyphs (no numeric values).
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Provider" }), {
+      key: "ArrowDown",
+    });
+    expect(screen.getAllByRole("option").some((o) => o.textContent?.includes("⚡"))).toBe(true);
+    fireEvent.click(await screen.findByRole("option", { name: /Lithos/ }));
+    // The Speed axis appears once a multi-variant provider is resolved.
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Speed" }), { key: "ArrowDown" });
+    expect(screen.getAllByRole("option").some((o) => o.textContent?.includes("⚡"))).toBe(true);
+    fireEvent.click(await screen.findByRole("option", { name: /Ultra/ }));
+
+    fireEvent.change(screen.getByTestId("task-name-input"), {
+      target: { value: "Nightly review" },
+    });
+    fireEvent.change(screen.getByTestId("task-prompt-input"), {
+      target: { value: "Review the branch" },
+    });
+    fireEvent.click(screen.getByTestId("create-scheduled-task-submit"));
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalled());
+    // The wire encodes provider+variant inside the chosen row's model id.
+    expect(mutateAsync.mock.calls[0][0]).toMatchObject({ modelOverride: "lithos-ultra" });
+  });
+
+  it("omits modelOverride when 'Default' is picked in the grouped picker", async () => {
+    vi.mocked(hostsHook.useHostModelOptions).mockReturnValue({
+      data: MULTIDEX_CATALOG,
+    } as unknown as ReturnType<typeof hostsHook.useHostModelOptions>);
+    renderDialog();
+    fireEvent.click(screen.getByTestId("pick-harness-codex"));
+    // Pick the family, then switch back to "Default" — emits "" so the create
+    // omits the override entirely.
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Model" }), { key: "ArrowDown" });
+    fireEvent.click(await screen.findByRole("option", { name: "DeepSeek v4.1 Flash" }));
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Model" }), { key: "ArrowDown" });
+    fireEvent.click(await screen.findByRole("option", { name: "Default" }));
+    expect(screen.getByRole("combobox", { name: "Model" })).toHaveTextContent("Default");
+    fireEvent.change(screen.getByTestId("task-name-input"), {
+      target: { value: "Nightly review" },
+    });
+    fireEvent.change(screen.getByTestId("task-prompt-input"), {
+      target: { value: "Review the branch" },
+    });
+    fireEvent.click(screen.getByTestId("create-scheduled-task-submit"));
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalled());
+    expect(mutateAsync.mock.calls[0][0]).not.toHaveProperty("modelOverride");
   });
 
   it("embeds the agent dropdown in non-modal mode so inside-dialog clicks only close the menu", () => {
