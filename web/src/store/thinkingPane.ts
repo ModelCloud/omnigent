@@ -55,6 +55,12 @@ interface ThinkingPaneState {
   /** Flip between auto-follow and manual browsing. */
   toggleAuto: () => void;
   /**
+   * Menu-driven open: clears any manual selection and switches to auto
+   * mode — the pane's follow effect lands on the newest settled trace,
+   * so a session with no completed reasoning simply stays closed.
+   */
+  openAuto: (conversationId: string) => void;
+  /**
    * Closing is a user pick too: it pauses auto-follow (manual mode),
    * otherwise the pane would reopen on the next settled trace.
    */
@@ -95,6 +101,7 @@ export const useThinkingPaneStore = create<ThinkingPaneState>((set) => ({
         : { conversationId, sectionKey },
     ),
   toggleAuto: () => set((s) => ({ mode: s.mode === "auto" ? "manual" : "auto" })),
+  openAuto: (conversationId) => set({ conversationId, sectionKey: null, mode: "auto" }),
   close: () => set({ conversationId: null, sectionKey: null, mode: "manual" }),
   setSections: (conversationId, sections) =>
     set((s) =>

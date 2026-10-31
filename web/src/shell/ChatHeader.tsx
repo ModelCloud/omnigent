@@ -15,6 +15,7 @@ import {
   PanelRightCloseIcon,
   PanelRightIcon,
   ShareIcon,
+  SparklesIcon,
   TerminalIcon,
   UserPlusIcon,
   XIcon,
@@ -25,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
@@ -43,6 +45,7 @@ import { PresenceAvatars } from "@/components/PresenceAvatars";
 import type { Agent } from "@/hooks/useAgents";
 import type { Conversation } from "@/hooks/useConversations";
 import { useIsMobileViewport } from "@/hooks/useIsMobileViewport";
+import { useThinkingPaneStore } from "@/store/thinkingPane";
 import { useOmnigentAnalytics } from "@/lib/analytics";
 import { cn } from "@/lib/utils";
 import { MOBILE_GLASS_SURFACE } from "./mobileGlass";
@@ -358,12 +361,46 @@ export function ChatHeader({
   const isMobile = useIsMobileViewport();
   const canvas = useCanvasWorkspace();
   const { trackClick } = useOmnigentAnalytics();
+  const thinkingPaneOpen = useThinkingPaneStore(
+    (s) =>
+      conversationId !== undefined && s.conversationId === conversationId && s.sectionKey !== null,
+  );
+  const hasSettledTrace = useThinkingPaneStore(
+    (s) =>
+      conversationId !== undefined &&
+      s.sectionsConversationId === conversationId &&
+      s.sections.some((section) => !section.isStreaming),
+  );
+  const openAutoThinking = useThinkingPaneStore((s) => s.openAuto);
+  const closeThinking = useThinkingPaneStore((s) => s.close);
   // Workspace-rail entries (Files · Changes · Agents · Shells · Logs), each
   // opening the matching rail tab as a full-screen drawer. Mobile only: they
   // ride in the header's single kebab rather than a second trigger of their
   // own. Suppressed while a push panel already owns the right side — except in
   // a terminal-first session, where `panelOpen` means the terminal renders
   // inline in main and no drawer is mounted.
+  // Menu entry for the right-side thinking pane: a checkbox toggling it
+  // open/closed. Opening always lands in auto mode (the newest settled
+  // trace), so the item stays disabled until one exists — auto-follow
+  // never selects a still-streaming trace.
+  const thinkingItem =
+    conversationId && !pending ? (
+      <DropdownMenuCheckboxItem
+        data-testid="menu-thinking-pane"
+        checked={thinkingPaneOpen}
+        disabled={!thinkingPaneOpen && !hasSettledTrace}
+        title={
+          !thinkingPaneOpen && !hasSettledTrace ? "No completed reasoning trace yet" : undefined
+        }
+        onCheckedChange={(checked) =>
+          checked ? openAutoThinking(conversationId) : closeThinking()
+        }
+        className={cn(isMobile && "py-2 text-ui")}
+      >
+        <SparklesIcon className="size-4" />
+        Thinking
+      </DropdownMenuCheckboxItem>
+    ) : null;
   const workspaceItems =
     conversationId &&
     !pending &&
@@ -375,8 +412,9 @@ export function ChatHeader({
     !mobileMenu.shellsPanelOpen &&
     !mobileMenu.githubPanelOpen &&
     !mobileMenu.sideChatsPanelOpen &&
-    (hasRailContent || mobileMenu.debugMode) ? (
+    (hasRailContent || mobileMenu.debugMode || thinkingItem) ? (
       <>
+        {thinkingItem}
         {showFilesPanel && (
           <DropdownMenuItem
             onSelect={mobileMenu.onOpenFiles}
@@ -492,7 +530,7 @@ export function ChatHeader({
         hasAgentInfo={isMobile && hasAgentInfo}
         onAgentInfo={onAgentInfo}
         viewItems={isMobile ? <ViewModeMenuItems /> : null}
-        workspaceItems={isMobile ? workspaceItems : null}
+        workspaceItems={isMobile ? workspaceItems : thinkingItem}
       />
     ) : null;
   // Slack-style "Move to…" shortcut on the breadcrumb's folder tag: click it to
