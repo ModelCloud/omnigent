@@ -77,6 +77,7 @@ const { createBrowserViewRegistry } = require("./browserViewRegistry");
 const { createBrowserViewBoundsController } = require("./browserViewBounds");
 const { registerBrowserIpc } = require("./browserIpc");
 const { arcaTarget, createArcaIdentityStore, isArcaAgentContext } = require("./arcaIdentity");
+const { isHostThisMachine, SESSION_HOST_PROTOCOL } = require("./hostIdentity");
 const { isDeveloperModeEnabled } = require("./developer_mode");
 const { DEV_DOMAIN, getDevUserDefault } = require("./dev_preferences");
 const {
@@ -121,6 +122,7 @@ const {
   settingsMenuItem,
 } = require("./settingsNavigation");
 const omnigentCli = require("./omnigent_cli");
+
 const serverManager = require("./server_manager");
 const { diagnostics } = require("./diagnostics");
 
@@ -3785,15 +3787,13 @@ function hardenAgentPartition(partition, win, canPrompt, getAnchorBounds) {
 // the registry attribute each request to its view.
 const guardedAgentSessions = new WeakSet();
 
-/** Enforce the agent navigation policy on document requests at the network layer. */
+/** Enforce the agent network policy on documents, subresources, and workers. */
 function guardAgentPartitionRequests(partition, registry) {
   const ses = session.fromPartition(partition);
   if (guardedAgentSessions.has(ses)) return;
   guardedAgentSessions.add(ses);
-  // Documents only: frames plus <object>/<embed> content, which also renders.
   const filter = {
-    urls: ["http://*/*", "https://*/*"],
-    types: ["mainFrame", "subFrame", "object"],
+    urls: ["http://*/*", "https://*/*", "ws://*/*", "wss://*/*"],
   };
   const answer = (decision, callback) =>
     decision.then(
@@ -3801,13 +3801,13 @@ function guardAgentPartitionRequests(partition, registry) {
       () => callback({ cancel: true }),
     );
   ses.webRequest.onBeforeRequest(filter, (details, callback) =>
-    answer(registry.shouldCancelAgentRequest(details), callback),
+    answer(registry.shouldCancelAgentRequest(details, partition), callback),
   );
   ses.webRequest.onBeforeSendHeaders(filter, (details, callback) =>
-    callback(registry.agentRequestHeaders(details)),
+    callback(registry.agentRequestHeaders(details, partition)),
   );
   ses.webRequest.onHeadersReceived(filter, (details, callback) =>
-    answer(registry.shouldCancelAgentResponse(details), callback),
+    answer(registry.shouldCancelAgentResponse(details, partition), callback),
   );
 }
 
@@ -3921,15 +3921,18 @@ function createBrowserRegistryForWindow(win) {
     onSuppressionChange: (suppressed) => {
       if (suppressed) browserPermissionPrompt.dismiss(win);
     },
-    isArcaAgentContext: (context) => {
+    allowsLocalhost: (context) => {
+      if (context?.revoked || win.isDestroyed() || !pinnedOrigin(win)) return false;
       const target = windowArcaServerUrl(win);
-      return isArcaAgentContext(arcaIdentities.get(target), context, {
-        enabled: !win.isDestroyed() && !!pinnedOrigin(win) && databricksInternalFeaturesEnabled(),
-        managed:
-          isDatabricksManagedServerUrl(windows.get(win)?.serverUrl) &&
-          isDatabricksManagedServerUrl(target),
-        serverTarget: target,
-      });
+      return (
+        isArcaAgentContext(arcaIdentities.get(target), context, {
+          enabled: !win.isDestroyed() && !!pinnedOrigin(win) && databricksInternalFeaturesEnabled(),
+          managed:
+            isDatabricksManagedServerUrl(windows.get(win)?.serverUrl) &&
+            isDatabricksManagedServerUrl(target),
+          serverTarget: target,
+        }) || context?.hostIsThisMachine === true
+      );
     },
     createBoundsController: createBrowserViewBoundsController,
     attachToHost: (view) => {
@@ -5067,10 +5070,21 @@ function registerIpc() {
     isPinnedOriginSender,
     getRegistryForEvent: browserRegistryForSender,
     getWindowForEvent: (event) => BrowserWindow.fromWebContents(event.sender),
-    getAgentContextForEvent: (event, sourceHostId) => ({
-      serverTarget: arcaTarget(windowArcaServerUrl(BrowserWindow.fromWebContents(event.sender))),
-      sourceHostId: typeof sourceHostId === "string" ? sourceHostId : null,
-    }),
+    getAgentContextForEvent: (event, opts) => {
+      const win = BrowserWindow.fromWebContents(event.sender);
+      const sourceHostId = typeof opts?.sourceHostId === "string" ? opts.sourceHostId : null;
+      // Main derives the server target and local-machine eligibility; the page only routes.
+      return {
+        serverTarget: arcaTarget(windowArcaServerUrl(win)),
+        sourceHostId,
+        hostIsThisMachine:
+          opts?.sessionHostProtocol === SESSION_HOST_PROTOCOL &&
+          isHostThisMachine({
+            hostId: sourceHostId,
+            serverUrl: windows.get(win)?.serverUrl,
+          }),
+      };
+    },
     recoverAgentNavigationForEvent: async (
       event,
       url,
