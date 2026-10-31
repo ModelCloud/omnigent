@@ -152,3 +152,37 @@ def test_reasoning_done_does_not_remount_or_jump(
         f"scrollTop moved backwards {len(down_scrolls)} times during the stream: "
         f"{down_scrolls}"
     )
+
+
+def test_thinking_pane_left_strip_swallows_taps_and_closes(
+    page: Page, chat_session_contract: Any
+) -> None:
+    """On mobile the pane overlays ~85vw; the uncovered strip must eat taps
+    (never reaching the chat UI) and close the pane."""
+    from playwright.sync_api import expect
+
+    from tests.browser_ui.chat.test_thinking_pane import _seed_turn_with_thought
+
+    chat = chat_session_contract
+    turn, _ = _seed_turn_with_thought(1, "Mobile scrim trace.")
+    chat.set_items(list(reversed(turn)))
+    page.goto(chat.url)
+    chat.wait_for_stream()
+
+    pane = page.get_by_test_id("thinking-pane")
+    expect(pane).to_be_visible(timeout=20_000)
+    expect(page.get_by_test_id("thinking-pane-scrim")).to_be_attached()
+
+    # Any click reaching the chat surface under the overlay is a miss.
+    page.evaluate(
+        """() => {
+          window.__stray = 0;
+          document.querySelector('[data-chat-surface]')
+            .addEventListener('click', () => window.__stray += 1, true);
+        }"""
+    )
+    page.touchscreen.tap(10, 400)
+    expect(pane).to_be_hidden(timeout=5_000)
+    assert page.evaluate("() => window.__stray") == 0, (
+        "tap on the uncovered strip reached the chat UI under the thinking pane"
+    )
