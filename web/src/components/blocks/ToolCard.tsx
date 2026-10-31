@@ -102,6 +102,28 @@ export function isFileChangeToolCall(name: string, args: Record<string, unknown>
   return name === "apply_patch" && fileChangesFromArguments(args).length > 0;
 }
 
+function formatFileChangePatch(changes: FileChange[]): string {
+  return changes
+    .map(({ path, kind, diff, movePath }) => {
+      const before = kind === "add" ? "/dev/null" : path;
+      const after = kind === "delete" ? "/dev/null" : (movePath ?? path);
+      const body =
+        kind === "add"
+          ? diff
+              .split("\n")
+              .map((line) => `+${line}`)
+              .join("\n")
+          : kind === "delete"
+            ? diff
+                .split("\n")
+                .map((line) => `-${line}`)
+                .join("\n")
+            : diff;
+      return `--- ${before}\n+++ ${after}${body.length > 0 ? `\n${body}` : ""}`;
+    })
+    .join("\n\n");
+}
+
 /**
  * If the string is valid JSON, return its 2-space-indented form.
  * Otherwise return the string verbatim. The code block renders inside a
@@ -184,6 +206,12 @@ export function ToolCard({
     [view, name, args],
   );
   const lineCounts = useMemo(() => view?.lineCounts?.(call) ?? null, [view, call]);
+  const fileChanges = useMemo(() => fileChangesFromArguments(args), [args]);
+  const fileChangePatch = useMemo(
+    () =>
+      name === "apply_patch" && fileChanges.length > 0 ? formatFileChangePatch(fileChanges) : null,
+    [fileChanges, name],
+  );
   const elapsedDuration = useElapsedDuration(state === "input-available" ? startedAt : null);
   const displayDuration = duration ?? elapsedDuration;
 
@@ -196,8 +224,9 @@ export function ToolCard({
       : (resolveChatFilePath(title.filePath, root, home)?.path ?? null);
   const onBodyClick = openFile && linkPath ? () => openFile(linkPath) : undefined;
 
+  const showFileChangePatch = fileChangePatch !== null && view?.Body === undefined;
   return (
-    <Collapsible defaultOpen={false} className="group not-prose w-full">
+    <Collapsible defaultOpen={showFileChangePatch} className="group not-prose w-full">
       <ToolTriggerRow
         title={title}
         displayPath={linkPath}
@@ -210,7 +239,17 @@ export function ToolCard({
       />
       {/* The whole body, code panels included, sits on the Interface font's caption step. */}
       <CollapsibleContent className="mt-1 ml-2 space-y-2 border-l pl-3 py-1 text-sm [&_code]:text-sm [&_pre]:text-sm data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:animate-out data-[state=open]:animate-in">
-        <DefaultToolBody call={call} duration={displayDuration} view={view} />
+        {showFileChangePatch ? (
+          <CodePanel
+            title="Patch"
+            text={fileChangePatch}
+            copyText={fileChangePatch}
+            copyLabel="Copy patch"
+            language="diff"
+          />
+        ) : (
+          <DefaultToolBody call={call} duration={displayDuration} view={view} />
+        )}
       </CollapsibleContent>
     </Collapsible>
   );

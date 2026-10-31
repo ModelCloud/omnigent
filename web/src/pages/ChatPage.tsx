@@ -2858,6 +2858,22 @@ function ComposerImpl(
     };
   }, [conversationId, replaceText]);
 
+  // An Arca send waits in the queue for the host, so typing reopens; other gates stay.
+  const inputDisabled =
+    ((disabled || (unreachable && !sendReconnectsArca)) && sendDisabledReason === null) ||
+    isReadOnly ||
+    composerLockedByBtw;
+  // A disabled textarea can't take focus, so the focus above is lost while the
+  // session starts. Focus it once it enables, unless the user focused something else.
+  const inputDisabledRef = useRef(inputDisabled);
+  useEffect(() => {
+    const wasDisabled = inputDisabledRef.current;
+    inputDisabledRef.current = inputDisabled;
+    if (!wasDisabled || inputDisabled || isMobileRef.current) return;
+    if (document.activeElement !== null && document.activeElement !== document.body) return;
+    textareaRef.current?.focus();
+  }, [inputDisabled]);
+
   // Publish edits as they happen so the open sidebar updates immediately,
   // rather than only learning about a draft when this composer unmounts.
   useEffect(() => {
@@ -2869,6 +2885,7 @@ function ComposerImpl(
   const hostOnline = useSessionHostOnline(composerSessionId ?? undefined);
   const {
     skills,
+    skillsWarnings,
     skillsStatus,
     refetch: refreshSkills,
   } = useSkills({
@@ -4005,6 +4022,8 @@ function ComposerImpl(
             prCount={composerGit.prCount}
             prNumber={composerGit.prNumber}
             prNumberPrefix={composerGit.prNumberPrefix}
+            prs={composerGit.prs}
+            prStatus={composerGit.prStatus}
             onOpen={openComposerGithubTab}
           />
           <div className="ml-auto flex min-w-0 shrink-0 items-center gap-1">
@@ -4069,11 +4088,7 @@ function ComposerImpl(
                         ? "Send a follow-up (queued) — Esc to stop"
                         : readyPlaceholder,
           rows: 1,
-          // An Arca send waits in the queue for the host, so typing reopens; other gates stay.
-          disabled:
-            ((disabled || (unreachable && !sendReconnectsArca)) && sendDisabledReason === null) ||
-            isReadOnly ||
-            composerLockedByBtw,
+          disabled: inputDisabled,
           "data-slash-command": composerIsCommand ? "true" : undefined,
           "data-has-draft": hasDraft ? "true" : undefined,
           className: cn(
@@ -4127,6 +4142,7 @@ function ComposerImpl(
                   builtinNames={slashCompletion.builtinNames}
                   labels={slashCompletion.labels}
                   skillsStatus={skillsStatus}
+                  skillsWarnings={skillsWarnings}
                   onRetrySkills={() => void refreshSkills()}
                   showMcpServers={showMcpServers}
                   mcpServers={mcpServers}

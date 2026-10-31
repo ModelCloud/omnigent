@@ -30,9 +30,7 @@ def _reasoning_item(item_id: str, text: str, *, response_id: str) -> dict[str, A
     }
 
 
-def _seed_turn_with_thought(
-    index: int, thought: str
-) -> tuple[list[dict[str, Any]], str]:
+def _seed_turn_with_thought(index: int, thought: str) -> tuple[list[dict[str, Any]], str]:
     """Build a completed turn (user + reasoning + assistant) as wire items."""
     response_id = f"pane-response-{index}"
     return (
