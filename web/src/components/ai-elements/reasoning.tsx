@@ -263,7 +263,10 @@ export const ReasoningContent = memo(({ className, children, ...props }: Reasoni
     <CollapsibleContent
       className={cn(
         "mt-1 ml-2 border-l pl-3 py-1 text-ui",
-        "data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 text-foreground outline-none data-[state=closed]:animate-out data-[state=open]:animate-in",
+        // Measured-height open/close like the worked fold: an instant
+        // appear/disappear plus translate makes each streamed reasoning
+        // section pop the transcript's height mid-turn.
+        "turn-fold-content text-foreground outline-none",
         className,
       )}
       {...props}
