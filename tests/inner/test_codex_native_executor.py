@@ -4032,3 +4032,48 @@ def test_interrupt_reraises_unrelated_rejections(
     assert state is not None and state.active_turn_id == "turn_active", (
         f"an unexplained rejection must not clear the recorded turn; bridge={state!r}"
     )
+
+
+async def test_unanswered_turn_start_fails_bounded_as_delivery_unconfirmed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A wedged app-server must fail the turn bounded, not park it forever.
+
+    A backend that stays connected but never answers ``turn/start`` used to
+    hang the turn task indefinitely — every later prompt queued behind it and
+    the session never woke. The delivery RPC is bounded; the failure stays
+    ambiguous because the input may have landed before the stall.
+    """
+    monkeypatch.setattr(codex_native_executor, "_DELIVERY_RPC_TIMEOUT_SECONDS", 0.05)
+
+    async def handle(websocket: ServerConnection) -> None:
+        async for raw in websocket:
+            request = json.loads(raw)
+            if request.get("method") in {"turn/start", "turn/steer"}:
+                continue  # wedged: never acknowledge
+            if "id" in request:
+                await websocket.send(json.dumps({"id": request["id"], "result": {}}))
+
+    async with serve(handle, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        _seed_bridge(tmp_path)
+        state = read_bridge_state(tmp_path)
+        assert state is not None
+        write_bridge_state(
+            tmp_path, replace(state, socket_path=f"ws://127.0.0.1:{port}")
+        )
+        executor = CodexNativeExecutor(bridge_dir=tmp_path)
+        async with asyncio.timeout(30):
+            events = [
+                event
+                async for event in executor.run_turn(
+                    [{"role": "user", "content": "synthetic input"}], [], ""
+                )
+            ]
+
+    assert [type(event) for event in events] == [ExecutorError]
+    error = events[0]
+    assert error.code == "codex_delivery_unconfirmed"
+    assert error.undelivered is False
+    assert error.preserve_session is True

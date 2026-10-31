@@ -97,6 +97,12 @@ _BRIDGE_STATE_FAST_POLL_SECONDS = 0.05
 _BRIDGE_STATE_FAST_POLL_WINDOW_SECONDS = 2.0
 _BRIDGE_STATE_SLOW_POLL_SECONDS = 0.25
 _COMPACTION_WAIT_TIMEOUT_SECONDS = 60.0
+# turn/start and turn/steer are accepted-or-refused RPCs: a healthy app-server
+# answers in milliseconds (it defers execution rather than the ack). Without a
+# bound, a wedged-but-connected backend parks the turn task forever and every
+# later prompt queues behind it — the session never wakes. A bound surfaces a
+# bounded ambiguous error instead of a silent permanent wedge.
+_DELIVERY_RPC_TIMEOUT_SECONDS = 30.0
 _CODEX_COMPACTING_FAILURE = CodexStartupFailure(
     message="Codex is still compacting, so this message was not delivered.",
     code="codex_compacting",
@@ -298,11 +304,16 @@ async def _native_delivery_request_once(
         requested_native_turn_id=requested_turn_id,
     )
     try:
-        response = await client.request(method, params)
+        response = await asyncio.wait_for(
+            client.request(method, params),
+            timeout=_DELIVERY_RPC_TIMEOUT_SECONDS,
+        )
     except BaseException as exc:
         outcome = "rpc_error"
         if isinstance(exc, asyncio.CancelledError):
             outcome = "cancelled"
+        elif isinstance(exc, asyncio.TimeoutError):
+            outcome = "rpc_timeout"
         elif isinstance(exc, CodexAppServerResponseError) and is_server_draining_error(exc):
             outcome = "rpc_rejected_draining"
         elif isinstance(exc, CodexAppServerResponseError) and is_compaction_steer_refusal(exc):
@@ -322,6 +333,13 @@ async def _native_delivery_request_once(
         )
         if isinstance(exc, (OSError, WebSocketException)):
             raise InjectionDeliveryAmbiguous(str(exc)) from exc
+        if isinstance(exc, asyncio.TimeoutError):
+            # No ack either way: the input may have landed. Ambiguous (not
+            # undelivered) keeps the sender from resubmitting blindly.
+            raise InjectionDeliveryAmbiguous(
+                f"Codex app-server did not respond to {method} within "
+                f"{_DELIVERY_RPC_TIMEOUT_SECONDS:g}s"
+            ) from exc
         raise
     result = _json_object(response.get("result"))
     if method == "turn/start":

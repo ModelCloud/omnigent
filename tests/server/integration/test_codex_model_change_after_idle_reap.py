@@ -473,7 +473,9 @@ async def test_goal_mutations_keep_refusal_after_idle_reap(
     assert session.codex.requests == []
 
 
-@pytest.mark.parametrize("backend", ["running", "exited", "forwarder-ended", "unowned"])
+@pytest.mark.parametrize(
+    "backend", ["running", "exited", "forwarder-ended", "unowned", "stale-listener"]
+)
 async def test_new_turn_recovers_stopped_backend_behind_live_codex_pane(
     native_session: _NativeSession,
     backend: str,
@@ -489,6 +491,11 @@ async def test_new_turn_recovers_stopped_backend_behind_live_codex_pane(
         bridge.write_bridge_startup_error(
             session.codex.bridge_dir, failure.message, code=failure.code
         )
+    elif backend == "stale-listener":
+        # The backend died without a witness (SIGKILL, OOM reap, host
+        # suspend): no registry entry and no saved startup error remain —
+        # only the dead listener betrays the pane can no longer carry turns.
+        native_runtime._AUTO_CODEX_APP_SERVERS.pop(session.session_id)
     elif backend == "unowned":
         session.resources._terminal_roles.pop(
             (session.session_id, terminal_resource_id("codex", "main"))
@@ -513,7 +520,9 @@ async def test_new_turn_recovers_stopped_backend_behind_live_codex_pane(
     assert response.status_code == 202, response.text
     await poll_until_async(lambda: harness.posted_bodies, timeout_s=budget(5))
 
-    expected_launches = 2 if backend in {"exited", "forwarder-ended"} else 1
+    expected_launches = (
+        2 if backend in {"exited", "forwarder-ended", "stale-listener"} else 1
+    )
     assert session.codex.launches == expected_launches
     if backend in {"running", "unowned"}:
         assert session.terminals.get(session.session_id, "codex", "main") is pane

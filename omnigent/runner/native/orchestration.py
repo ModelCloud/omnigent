@@ -18,6 +18,7 @@ import math
 import os
 import shlex
 import shutil
+import socket
 import sys
 import time
 import urllib.parse
@@ -7989,7 +7990,10 @@ def _is_runner_owned_codex_terminal(
     :returns: ``True`` when the resource is marked as Codex native and can
         still carry chat turns.
     """
-    from omnigent.harnesses.codex_native.bridge import read_bridge_startup_error
+    from omnigent.harnesses.codex_native.bridge import (
+        read_bridge_startup_error,
+        read_bridge_state,
+    )
 
     if (
         resource_registry.terminal_resource_role(resource.session_id, resource.id)
@@ -8000,7 +8004,37 @@ def _is_runner_owned_codex_terminal(
     if app_server is not None:
         process = getattr(app_server, "proc", None)
         return process is None or process.returncode is None
-    return read_bridge_startup_error(codex_native_bridge_dir(resource.session_id)) is None
+    bridge_dir = codex_native_bridge_dir(resource.session_id)
+    if read_bridge_startup_error(bridge_dir) is not None:
+        return False
+    state = read_bridge_state(bridge_dir)
+    if state is None:
+        # Nothing recorded yet — e.g. a pane still waiting on a sign-in
+        # prompt. With no backend on record there is nothing to distrust.
+        return True
+    # The process registry only tracks backends this runner spawned. A
+    # persisted bridge can outlive its app-server (SIGKILL, an OOM reap, a
+    # host suspend): the pane and its state stay behind while the listener
+    # is gone, so every later turn would fail on the stopped-backend error.
+    return _codex_app_server_listener_alive(state.socket_path)
+
+
+def _codex_app_server_listener_alive(socket_path: str) -> bool:
+    """Return whether a recorded app-server transport still accepts connections.
+
+    A refused or timed-out loopback connect means the recorded backend is
+    gone even though its bridge state and pane survived. Transports that are
+    not TCP URLs cannot be probed this way and stay reusable.
+    """
+    parsed = urllib.parse.urlparse(socket_path)
+    host, port = parsed.hostname, parsed.port
+    if host is None or port is None:
+        return True
+    try:
+        with socket.create_connection((host, port), timeout=1.5):
+            return True
+    except OSError:
+        return False
 
 
 def _is_runner_owned_antigravity_terminal(
