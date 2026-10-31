@@ -12,6 +12,7 @@ import { setOmnigentHostConfig } from "@/lib/host";
 import * as sessionsApi from "@/lib/sessionsApi";
 import type { Session } from "@/lib/types";
 import { ChatHeader } from "./ChatHeader";
+import { useThinkingPaneStore, type ThinkingPaneSection } from "@/store/thinkingPane";
 import {
   TerminalFirstContextProvider,
   type TerminalFirstContextValue,
@@ -148,6 +149,13 @@ afterEach(() => {
   isIOSShellMock.mockReturnValue(false);
   isAndroidShellMock.mockReturnValue(false);
   isMobileMock.mockReturnValue(false);
+  useThinkingPaneStore.setState({
+    conversationId: null,
+    sectionKey: null,
+    mode: "auto",
+    sections: [],
+    sectionsConversationId: null,
+  });
 });
 
 it.each([false, true])("links the creating session (mobile=%s)", async (mobile) => {
@@ -1109,5 +1117,100 @@ describe("ChatHeader — title-adjacent conversation actions", () => {
     expect(screen.queryByRole("button", { name: "Conversation actions" })).toBeNull();
     expect(screen.getByRole("link", { name: "Back to parent session" })).toBeInTheDocument();
     expect(screen.getByText("reviewer")).toBeInTheDocument();
+  });
+});
+
+describe("ChatHeader — Thinking pane menu entry", () => {
+  const menuConversation: Conversation = {
+    object: "conversation",
+    id: "conv-menu",
+    title: "Menu session",
+    created_at: 1_700_000_000,
+    updated_at: 1_700_000_100,
+    labels: {},
+    permission_level: 3,
+  } as Conversation;
+
+  const settled = (key: string): ThinkingPaneSection => ({
+    key,
+    text: "Considered the options.",
+    isStreaming: false,
+    duration: 2.5,
+  });
+
+  const publishSections = (sections: ThinkingPaneSection[]) =>
+    act(() => useThinkingPaneStore.getState().setSections(menuConversation.id, sections));
+
+  const openMenu = (mobile: boolean) =>
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Conversation actions" }), {
+      button: 0,
+    });
+
+  it("toggles the pane open in auto mode and closed from the mobile kebab", () => {
+    isMobileMock.mockReturnValue(true);
+    renderHeader({
+      sidebarOpen: true,
+      conversationId: menuConversation.id,
+      conversationTitle: menuConversation.title,
+      actionConversation: menuConversation,
+      hasRailContent: true,
+    });
+    publishSections([settled("reasoning:0")]);
+
+    openMenu(true);
+    const item = screen.getByRole("menuitemcheckbox", { name: "Thinking" });
+    expect(item).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(item);
+
+    expect(useThinkingPaneStore.getState().mode).toBe("auto");
+    expect(useThinkingPaneStore.getState().conversationId).toBe(menuConversation.id);
+
+    // The mounted pane's follow effect would land the selection; emulate it
+    // so the checkbox reflects the open pane.
+    act(() => useThinkingPaneStore.getState().follow(menuConversation.id, "reasoning:0"));
+
+    openMenu(true);
+    const checked = screen.getByRole("menuitemcheckbox", { name: "Thinking" });
+    expect(checked).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(checked);
+    expect(useThinkingPaneStore.getState().conversationId).toBeNull();
+    expect(useThinkingPaneStore.getState().sectionKey).toBeNull();
+  });
+
+  it("stays disabled until a reasoning trace settles", () => {
+    isMobileMock.mockReturnValue(true);
+    renderHeader({
+      sidebarOpen: true,
+      conversationId: menuConversation.id,
+      conversationTitle: menuConversation.title,
+      actionConversation: menuConversation,
+      hasRailContent: true,
+    });
+    publishSections([
+      { key: "reasoning:0", text: "mid-thought", isStreaming: true, duration: undefined },
+    ]);
+
+    openMenu(true);
+    expect(screen.getByRole("menuitemcheckbox", { name: "Thinking" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(useThinkingPaneStore.getState().conversationId).toBeNull();
+  });
+
+  it("reaches the desktop conversation menu with the same auto-mode toggle", () => {
+    renderHeader({
+      sidebarOpen: true,
+      conversationId: menuConversation.id,
+      conversationTitle: menuConversation.title,
+      actionConversation: menuConversation,
+    });
+    publishSections([settled("reasoning:0")]);
+
+    openMenu(false);
+    const item = screen.getByRole("menuitemcheckbox", { name: "Thinking" });
+    fireEvent.click(item);
+    expect(useThinkingPaneStore.getState().mode).toBe("auto");
+    expect(useThinkingPaneStore.getState().conversationId).toBe(menuConversation.id);
   });
 });
