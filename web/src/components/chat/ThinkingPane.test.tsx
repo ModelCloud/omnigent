@@ -256,6 +256,26 @@ describe("ThinkingPane", () => {
       );
       expect(screen.queryByTestId("thinking-pane")).toBeNull();
     });
+
+    it("opens on the latest settled trace via the menu action, resuming auto-follow", () => {
+      publish("conv-1", [section("reasoning:0", "first"), section("reasoning:1", "latest")]);
+      render(<ThinkingPane conversationId="conv-1" />);
+      // Closed state after a manual close — menu reopen must restore auto.
+      act(() => useThinkingPaneStore.getState().close());
+      expect(useThinkingPaneStore.getState().mode).toBe("manual");
+      act(() => useThinkingPaneStore.getState().openAuto("conv-1"));
+      expect(useThinkingPaneStore.getState().mode).toBe("auto");
+      expect(screen.getByText("latest")).toBeTruthy();
+    });
+
+    it("stays closed through the menu action while only a streaming trace exists", () => {
+      publish("conv-1", [
+        section("reasoning:0", "streaming", { isStreaming: true, duration: undefined }),
+      ]);
+      render(<ThinkingPane conversationId="conv-1" />);
+      act(() => useThinkingPaneStore.getState().openAuto("conv-1"));
+      expect(screen.queryByTestId("thinking-pane")).toBeNull();
+    });
   });
 
   describe("prev/next navigation", () => {
