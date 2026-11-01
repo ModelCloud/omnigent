@@ -4601,6 +4601,64 @@ def _codex_provider_launch(entry: ProviderEntry, model: str | None) -> NativeCod
     )
 
 
+_OPENAI_NATIVE_HOST = "api.openai.com"
+# Model-id prefixes that name an OpenAI-vendor model MultiDex serves natively.
+# ``gpt-*`` / ``chatgpt-*`` / ``o<digit>`` are OpenAI's own shapes; the
+# ``openai/`` namespace is the gateway spelling of the same vendor
+# (``openai/gpt-6-astra``). GLM and Kimi ids are codex-*compatible* but are
+# not OpenAI-vendor models, so they legitimately live on a gateway.
+_OPENAI_VENDOR_MODEL = re.compile(
+    r"^(?:openai/)?(?:gpt-|chatgpt-|codex-|o\d(?:-|$))", re.IGNORECASE
+)
+
+
+def _is_openai_vendor_model(model: str | None) -> bool:
+    """Report whether *model* is an OpenAI-vendor id rather than a gateway model.
+
+    MultiDex is a Codex fork, so it speaks OpenAI's Responses API natively: an
+    OpenAI-vendor id is served by the built-in ``openai`` provider against
+    ``api.openai.com``. Routing one to a third-party gateway (OpenRouter,
+    Lithos) is wrong twice over — the gateway may not carry that vendor at all
+    (``No allowed providers are available for the selected model``) and, even
+    when it does, it adds a proxy hop and a resale margin to a call Codex can
+    make directly.
+
+    :param model: Model id in any vocabulary, e.g. ``"gpt-6-astra"`` or
+        ``"openai/gpt-6-astra"``. ``None`` is not an OpenAI-vendor pin.
+    :returns: ``True`` for OpenAI's own id shapes.
+    """
+    if not model:
+        return False
+    return _OPENAI_VENDOR_MODEL.match(model.strip()) is not None
+
+
+def _serves_openai_vendor_natively(entry: object) -> bool:
+    """Whether *entry* talks to OpenAI's own endpoint for the ``openai`` family.
+
+    A third-party gateway (``gateway`` / ``local`` kind) never does, however
+    OpenAI-shaped its base URL looks. A ``key`` entry does only when its
+    ``base_url`` points at OpenAI itself — a keyed OpenRouter-compatible proxy
+    is still a proxy.
+
+    :param entry: A ``ProviderEntry`` from the ``providers:`` block.
+    :returns: ``True`` when this entry is OpenAI's native endpoint.
+    """
+    from urllib.parse import urlparse
+
+    from omnigent.onboarding.provider_config import KEY_KIND
+
+    if getattr(entry, "kind", None) != KEY_KIND:
+        return False
+    try:
+        family = entry.family("openai")  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001 - an unroutable entry is simply not native
+        return False
+    if family is None or not family.base_url:
+        return False
+    host = (urlparse(family.base_url).hostname or "").lower()
+    return host == _OPENAI_NATIVE_HOST
+
+
 def _first_routable_codex_provider(
     config: dict[str, object], *, exclude: str, model: str | None
 ) -> NativeCodexLaunch | None:
@@ -4639,10 +4697,17 @@ def _first_routable_codex_provider(
     ordered = list(explicit_providers.items()) + [
         (name, entry) for name, entry in merged_providers.items() if name not in explicit_providers
     ]
+    openai_vendor_pin = _is_openai_vendor_model(model)
     for name, candidate in ordered:
         if name == exclude:
             continue
         if OPENAI_FAMILY not in provider_families(candidate):
+            continue
+        if openai_vendor_pin and not _serves_openai_vendor_natively(candidate):
+            # MultiDex serves OpenAI-vendor ids on OpenAI's own endpoint.
+            # A gateway fallback would either 404 (the gateway need not
+            # carry that vendor) or add a proxy hop to a call Codex can
+            # make directly, so never substitute one here.
             continue
         launch = _codex_provider_launch(candidate, model)
         if launch is not None:
