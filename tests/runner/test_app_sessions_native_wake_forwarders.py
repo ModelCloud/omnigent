@@ -17,6 +17,7 @@ from omnigent.harnesses.claude_native import bridge as claude_native_bridge
 from omnigent.harnesses.codex_native import bridge as codex_native_bridge
 from omnigent.runner import app as runner_app_mod
 from omnigent.runner import subagent_work
+from omnigent.runner.resource_registry import SessionResourceRegistry
 from omnigent.spec.types import AgentSpec, ExecutorSpec
 from tests.runner.helpers import NullServerClient
 
@@ -839,7 +840,7 @@ async def test_auto_create_claude_terminal_recreate_cancels_prior_forwarder(
         _parking_forwarder,
     )
 
-    class _FakeResourceRegistry:
+    class _FakeResourceRegistry(SessionResourceRegistry):
         """Captures terminal launches; no live terminal registry."""
 
         terminal_registry = None
@@ -1062,7 +1063,7 @@ async def test_auto_create_codex_terminal_recovers_without_restarting_healthy_se
 
     launched_specs: list[Any] = []
 
-    class _FakeResourceRegistry:
+    class _FakeResourceRegistry(SessionResourceRegistry):
         """Returns a terminal resource view without launching tmux."""
 
         async def launch_auxiliary_terminal(
@@ -1378,7 +1379,7 @@ async def test_auto_create_codex_terminal_refused_resume_closes_app_server(
         del transport, terminal_launch_args
         raise RuntimeError(f"thread {loaded_thread_id} already has an active writer")
 
-    class _UnreachableResourceRegistry:
+    class _UnreachableResourceRegistry(SessionResourceRegistry):
         """Terminal launcher the failing path must never reach."""
 
         async def launch_auxiliary_terminal(self, **kwargs: Any) -> SessionResourceView:
@@ -1575,7 +1576,7 @@ async def test_auto_create_codex_terminal_retries_resume_until_rollout_is_found(
 
     launched_args: list[list[str]] = []
 
-    class _FakeResourceRegistry:
+    class _FakeResourceRegistry(SessionResourceRegistry):
         """Captures the TUI argv instead of launching tmux."""
 
         async def launch_auxiliary_terminal(
@@ -1825,7 +1826,7 @@ async def test_auto_create_codex_terminal_unreadable_thread_starts_fresh(
 
     launched_args: list[list[str]] = []
 
-    class _FakeResourceRegistry:
+    class _FakeResourceRegistry(SessionResourceRegistry):
         """Captures the TUI argv instead of launching tmux."""
 
         async def launch_auxiliary_terminal(

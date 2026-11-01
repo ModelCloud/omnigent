@@ -9,6 +9,7 @@ animation, which on a narrow mobile viewport reads as the pane contents
 jumping up and down.
 """
 
+import itertools
 import json
 import time
 from typing import Any
@@ -37,9 +38,7 @@ def _emit_delta(chat, response_id: str, text: str) -> None:
     )
 
 
-def test_reasoning_done_does_not_remount_or_jump(
-    page: Page, chat_session_contract: Any
-):
+def test_reasoning_done_does_not_remount_or_jump(page: Page, chat_session_contract: Any):
     chat = chat_session_contract
     chat.seed_transcript(turns=8)
     page.goto(chat.url)
@@ -55,7 +54,11 @@ def test_reasoning_done_does_not_remount_or_jump(
           const el = document.querySelector('.transcript-hide-native-scrollbar');
           window.__samples = [];
           window.__anims = [];
-          el.addEventListener('animationstart', e => window.__anims.push([performance.now(), (e.target.className||'').toString().slice(0,120), e.animationName]), true);
+          el.addEventListener('animationstart', e => window.__anims.push([
+            performance.now(),
+            (e.target.className||'').toString().slice(0,120),
+            e.animationName,
+          ]), true);
           let raf = 0;
           const tick = () => {
             const rows = el.querySelectorAll('[data-index]');
@@ -111,14 +114,14 @@ def test_reasoning_done_does_not_remount_or_jump(
                     "status": "completed",
                     "model": "mock-model",
                     "summary": [],
-                    "content": [
-                        {"type": "reasoning_text", "text": "done reasoning " * 40}
-                    ],
+                    "content": [{"type": "reasoning_text", "text": "done reasoning " * 40}],
                 }
             },
         }
     )
-    page.wait_for_timeout(500)
+    # Fixed sampling window: every frame for half a second is measured, so the
+    # oscillation check needs a full window rather than a condition to wait on.
+    page.wait_for_timeout(500)  # custom-lint: disable=sleep-then-assert -- sampling window
     page.evaluate("() => window.__stop()")
 
     # 1) The DOM node must be the same element — a React key swap remounts it.
@@ -141,16 +144,13 @@ def test_reasoning_done_does_not_remount_or_jump(
     # 2) scrollTop may drop once (the collapse itself) but must not oscillate.
     samples = page.evaluate("() => window.__samples")
     down_scrolls = [
-        cur[1] - prev[1]
-        for prev, cur in zip(samples, samples[1:])
-        if cur[1] - prev[1] < -4
+        cur[1] - prev[1] for prev, cur in itertools.pairwise(samples) if cur[1] - prev[1] < -4
     ]
     anims = page.evaluate("() => window.__anims")
     print(json.dumps({"n": len(samples), "down_scrolls": down_scrolls}))
     print("ANIMS", json.dumps([a[1:] for a in anims]))
     assert len(down_scrolls) <= 1, (
-        f"scrollTop moved backwards {len(down_scrolls)} times during the stream: "
-        f"{down_scrolls}"
+        f"scrollTop moved backwards {len(down_scrolls)} times during the stream: {down_scrolls}"
     )
 
 
