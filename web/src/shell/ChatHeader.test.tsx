@@ -1141,7 +1141,7 @@ describe("ChatHeader — Thinking pane menu entry", () => {
   const publishSections = (sections: ThinkingPaneSection[]) =>
     act(() => useThinkingPaneStore.getState().setSections(menuConversation.id, sections));
 
-  const openMenu = (mobile: boolean) =>
+  const openMenu = (_mobile: boolean) =>
     fireEvent.pointerDown(screen.getByRole("button", { name: "Conversation actions" }), {
       button: 0,
     });
