@@ -520,9 +520,7 @@ async def test_new_turn_recovers_stopped_backend_behind_live_codex_pane(
     assert response.status_code == 202, response.text
     await poll_until_async(lambda: harness.posted_bodies, timeout_s=budget(5))
 
-    expected_launches = (
-        2 if backend in {"exited", "forwarder-ended", "stale-listener"} else 1
-    )
+    expected_launches = 2 if backend in {"exited", "forwarder-ended", "stale-listener"} else 1
     assert session.codex.launches == expected_launches
     if backend in {"running", "unowned"}:
         assert session.terminals.get(session.session_id, "codex", "main") is pane

@@ -4614,9 +4614,7 @@ async def test_unanswered_turn_start_fails_bounded_as_delivery_unconfirmed(
         _seed_bridge(tmp_path)
         state = read_bridge_state(tmp_path)
         assert state is not None
-        write_bridge_state(
-            tmp_path, replace(state, socket_path=f"ws://127.0.0.1:{port}")
-        )
+        write_bridge_state(tmp_path, replace(state, socket_path=f"ws://127.0.0.1:{port}"))
         executor = CodexNativeExecutor(bridge_dir=tmp_path)
         async with asyncio.timeout(30):
             events = [
