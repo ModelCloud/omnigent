@@ -722,6 +722,32 @@ def read_codex_home_config_provider_names(codex_home: Path) -> frozenset[str]:
     return frozenset(name for name in providers if isinstance(name, str) and name)
 
 
+def read_codex_home_config_provider_table(
+    codex_home: Path, provider: str
+) -> dict[str, object] | None:
+    """Return one ``[model_providers.<provider>]`` table from a session config.
+
+    The companion to :func:`read_codex_home_config_provider_names` for callers
+    that must compare *what* two provider ids route to before treating them as
+    interchangeable -- for example reconciling a resumed thread's saved
+    provider against the one its launch re-resolved.
+
+    :param codex_home: Session-private Codex home directory.
+    :param provider: Provider id, e.g. ``"openrouter"``.
+    :returns: A shallow copy of the table, or ``None`` when the config is
+        unreadable or defines no such table.
+    """
+    try:
+        data = tomllib.loads((codex_home / "config.toml").read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return None
+    providers = data.get("model_providers")
+    if not isinstance(providers, dict):
+        return None
+    table = providers.get(provider)
+    return dict(table) if isinstance(table, dict) else None
+
+
 def read_codex_config_provider_endpoint(
     bridge_dir: Path,
 ) -> tuple[str, str, str | None] | None:
