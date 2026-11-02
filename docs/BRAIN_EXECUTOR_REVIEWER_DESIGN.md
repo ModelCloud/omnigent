@@ -1,4 +1,4 @@
-# Brain, executors, and independent reviewers
+# BGR: brain, grunts, and reviewers
 
 Status: **design proposal only**. This document introduces no runtime behavior,
 configuration keys, API endpoints, UI, or automation. All interfaces below are
@@ -8,19 +8,22 @@ Companion: [MultiDex execution contract](https://github.com/ModelCloud/MultiDex/
 
 ## Goal and ownership
 
-Provide an opt-in Polly mode with one persistent brain, a configurable executor
-pool, and one or two independent review slots. The brain plans and interprets
-evidence; executors carry out bounded instructions; reviewers inspect published
-revisions with fresh context. Omnigent owns orchestration and durable lifecycle.
-MultiDex is an execution backend, not a second scheduler for the same task.
+Provide BGR (brain-grunt-reviewers) as a separate opt-in mode, selectable
+alongside Polly in the Omnigent server/host UI. Selecting BGR does not silently
+change or replace existing Polly behavior. BGR has one persistent brain,
+dynamically spawned bounded grunts, and one or two independent review slots.
+The brain plans and interprets evidence; grunts carry out bounded instructions;
+reviewers inspect published revisions with fresh context. Omnigent owns BGR
+configuration, orchestration, and durable lifecycle. MultiDex is an execution
+backend, not a second scheduler for the same task.
 
 | Role | Responsibility | Restrictions |
 | --- | --- | --- |
 | Brain | Investigate for design, plan, assign tasks, evaluate test evidence, integrate changes, publish checkpoints, adjudicate findings | Cannot treat worker summaries as verified evidence or silently change selected profiles |
-| Executor | Implement the task contract, run assigned checks, return a revision and evidence | No scope expansion, architecture decisions, nested delegation, remote pushes, PR creation, or self-approval |
+| Grunt | Implement the task contract, run assigned checks, return a revision and evidence | No scope expansion, architecture decisions, nested delegation, remote pushes, PR creation, or self-approval |
 | Reviewer | Independently inspect the frozen revision and return findings | No inherited conversation, implementation edits, nested delegation, publication credentials, or access to the other reviewer's findings |
 
-Executors may make routine local choices within the plan. Contradictions,
+Grunts may make routine local choices within the plan. Contradictions,
 missing prerequisites, and design decisions become blockers returned to the
 brain. Lower reasoning effort is a configurable preference, not a guarantee of
 correctness or a substitute for escalation.
@@ -33,8 +36,8 @@ sandbox, or branch-protection requirements. Automatic merging is out of scope.
 
 - [Polly's bundle](../examples/polly/config.yaml) already delegates through
   child sessions and receives inbox results. Its present prompt delegates
-  substantive investigation and gives each implementer its own PR; the proposed
-  mode instead keeps design investigation and integration with the brain.
+  substantive investigation and gives each implementer its own PR; BGR instead
+  keeps design investigation and integration with the brain.
 - [Cross-review](../examples/polly/skills/cross-review/SKILL.md) already uses a
   frozen diff and acceptance contract. It is a prompt procedure, not a durable
   post-publication scheduler or an unconditional fresh-session guarantee.
@@ -49,29 +52,40 @@ abstractions. Keep framework lifecycle instructions in their owning runtime
 module and compose them through the existing prompt boundary, rather than
 copying lifecycle policy into each harness adapter.
 
-## Session configuration
+## BGR selection and session configuration
 
-The CLI and session launcher should expose the same versioned, saved preset:
+The Omnigent server/host UI presents BGR as a distinct, opt-in selection
+alongside Polly. Its versioned, saved configuration exposes:
 
 | Setting | Proposed semantics |
 | --- | --- |
-| Brain profile | Harness, credential/profile reference, provider, model, supported reasoning effort |
-| Executor profiles | Named profiles with the same selection fields; bounded concurrency |
-| Reviewer slots | Exactly one or two profiles when this mode is enabled |
-| Diversity | With two slots, require distinct resolved model families/vendors; warn about independence from implementer models |
+| Active mode | BGR or Polly; selecting BGR is explicit and never changes existing Polly sessions |
+| Brain default profile | Provider, model, variant, speed, reasoning, and execution-compatible harness |
+| Grunt default profile | Provider, model, variant, speed, reasoning, and execution-compatible harness |
+| Per-grunt profiles | Optional profile defaults; no configured static worker pool |
+| Max concurrent grunt workers | Dynamic upper bound on in-flight grunts; the brain starts only workers needed for tasks, up to this cap |
+| Active reviewers | Exactly one or two reviewers |
+| Reviewer profiles | Each active reviewer independently selects provider, model, variant, speed, reasoning, and execution-compatible harness |
+| Diversity | With two reviewers, require distinct resolved model families/vendors; warn about independence from implementer models |
 | Review policy | Post-publication trigger, deadlines, retry budget, bounded fix rounds |
-| Context policy | Persistent brain; task-scoped executor continuation; fresh review session on every round |
+| Context policy | Persistent brain; task-scoped grunt continuation; fresh reviewer session on every round |
 
 Provider endpoint, model family/vendor, and harness are separate identities:
 two harnesses may run the same model, and one gateway may serve different
-vendors. Resolve diversity from catalog metadata; unknown metadata needs
-explicit acknowledgement, not guessed diversity.
-
-Validate credentials, model availability, role isolation, structured results,
-and reasoning capabilities before dispatch. Do not silently reroute an explicit
-selection. Unsupported settings or unavailable profiles produce a visible
-configuration error. Profile edits apply to future tasks/rounds and are recorded
-as new configuration revisions; running work retains its resolved snapshot.
+vendors. Harness identifies execution compatibility under a profile; it does
+not substitute for provider or model settings. Resolve each profile's supported
+variant, speed, and reasoning choices from the capability catalog, show only
+supported values, and validate combinations against that catalog. Resolve
+reviewer diversity from catalog metadata; unknown model-family/vendor metadata
+requires explicit acknowledgement, not guessed diversity. Validate credentials,
+model availability, role isolation, structured results, and reasoning
+capabilities before dispatch. An explicit invalid choice or unsupported
+combination is a visible error, never a silent remap or reroute.
+Resolve and pin the brain default when a BGR session is created, recording its
+profile revision with the session. Changes to that default apply to future
+sessions, not by silently mutating an active brain. Grunt and reviewer profile
+edits apply to future jobs/rounds and carry recorded configuration revisions;
+in-flight work retains its resolved snapshot.
 
 The single main session is named `brain`. All execution sub-agents are named
 `grunt-<uniquename>` and all review sub-agents `reviewer-<uniquename>`. The
@@ -81,14 +95,22 @@ metadata, not name prefixes. Names never determine context reuse: grunt
 continuation uses its task/session ID, and each fresh reviewer session gets a
 new unique name and session ID on every round.
 
-Keep current Polly behavior as the default until this mode is explicitly
-enabled. Illustrative fields in this document are not a patch to AgentSpec.
+The brain spawns grunts only as tasks require them, up to the configured dynamic
+concurrency cap; the cap is not a static pool size or pre-spawn count. The cap
+applies only to in-flight grunts, never reviewers. Omnigent persists and
+enforces it across brain turns and restarts. When the cap is occupied, excess
+work is queued or rejected. Lowering the cap does not terminate active grunts;
+new grunts remain blocked until the in-flight count drops below the new cap.
+The brain may explicitly assign a permitted per-grunt profile within user
+policy; assignments never trigger implicit task-based auto-routing.
 
-## Executor task contract
+Illustrative fields in this document are not a patch to AgentSpec.
+
+## Grunt task contract
 
 The brain supplies a versioned contract containing:
 
-- Task ID, attempt ID, parent session, role, display name, and executor profile
+- Task ID, attempt ID, parent session, role, display name, and grunt profile
   revision.
 - Repository identity, exact starting SHA, and isolated worktree identity.
 - Objective, implementation direction, allowed scope, acceptance criteria,
@@ -103,7 +125,7 @@ and size-bounded.
 An exit code or a worker's "passed" label is evidence for the brain to evaluate,
 not an automatic acceptance decision.
 
-Executors work in separate worktrees. The brain serializes integration onto
+Grunts work in separate worktrees. The brain serializes integration onto
 its publication branch and resolves conflicts deliberately. Tests run before
 integration do not establish that the integrated head passes; the brain orders
 appropriate checks on the final revision before marking the checkpoint ready.
@@ -158,7 +180,7 @@ contradictory results to the user.
 
 Reviewer slots are persistent configuration, not persistent conversations.
 Every job, including a re-review, creates a new session with no parent history,
-executor transcript, prior review conversation, or sibling review results.
+grunt transcript, prior review conversation, or sibling review results.
 
 Give each reviewer the exact base/head, immutable diff, acceptance criteria,
 and access to surrounding source in an isolated checkout. A branch name alone
@@ -190,15 +212,17 @@ events after reconnect; persistence must not rely on an in-memory notification.
 The brain merges duplicate findings while preserving provenance, resolves
 disagreements by inspecting evidence rather than majority vote, and records
 accepted, dismissed-with-reason, or needs-user decisions. Only brain-approved
-fix tasks go to executors. Brain adjudication can update the same PR note without
+fix tasks go to grunts. Brain adjudication can update the same PR note without
 erasing the independent reviewer findings.
 
 ## Omnigent / MultiDex boundary
 
-Omnigent owns configuration UX, task/round persistence, integration/publication,
-review scheduling, GitHub delivery, and parent inbox correlation.
+Omnigent owns BGR selection and configuration UX, profile revisions, dynamic
+grunt-cap enforcement, task/round persistence, integration/publication, review
+scheduling, GitHub delivery, and parent inbox correlation.
 MultiDex owns executing a role-constrained job with an explicitly selected
-provider/model, context mode, tool policy, cancellation, and structured result.
+provider/model, resolved variant/speed/reasoning, compatible harness, context
+mode, tool policy, cancellation, and structured result.
 Native harness adapters translate the contract; they must not start an inner
 orchestrator that competes with Omnigent.
 
@@ -209,21 +233,40 @@ role isolation or fresh-review guarantees.
 
 ## Delivery stages and future acceptance tests
 
-1. Runtime and CLI: typed roles/contracts, capability checks, bounded executors,
-   publication checkpoint, durable fan-out, structured results, dual delivery.
-2. Session UI: profile pickers, saved presets, task/round status, revision labels,
-   incomplete/stale indicators, and brain decisions.
+1. Runtime and CLI: typed roles/contracts, capability checks, dynamic grunt
+   concurrency enforcement, publication checkpoint, durable fan-out, structured
+   results, dual delivery.
+2. Server/host UI: separate Polly and BGR selection; active reviewer count;
+   independent reviewer profiles; brain/grunt defaults; dynamic grunt cap;
+   task/round status, revision labels, incomplete/stale indicators, and brain
+   decisions.
 3. Reliability and security: restart reconciliation, duplicate events,
    concurrent pushes, cancellation, reviewer failure, and untrusted-code isolation.
 
 Acceptance tests for implementation (not tests performed by this design PR):
 
-- One brain, multiple bounded executors, and two distinct reviewer selections
-  retain their exact configured provider/model identities.
-- Both reviewers inspect the same SHA with empty conversation histories;
-  another push creates fresh sessions with newly allocated unique reviewer
-  display names.
-- Role policies reject nested delegation, executor publication, reviewer source
+- Polly remains available alongside opt-in BGR; existing Polly sessions and
+  defaults do not change. BGR exposes all required reviewer, profile, and
+  dynamic-cap controls in the server/host UI.
+- BGR exposes one or two active reviewers, each with independent
+  provider/model/variant/speed/reasoning settings.
+- The brain default resolves at session creation; config revisions apply to
+  future grunt jobs/review rounds without silently mutating active sessions.
+- Capability-aware profiles expose supported variants, speeds, and reasoning;
+  invalid explicit combinations fail rather than remapping. Harness selection
+  does not replace provider/model settings.
+- The brain starts only needed grunts up to a dynamic cap enforced across
+  turns/restarts; reviewers do not consume it. Excess work queues or is rejected,
+  and a lowered cap never terminates in-flight grunts.
+- Grunt default selection is used unless the brain explicitly assigns a
+  permitted profile within user policy; no implicit auto-routing or required
+  static worker pool.
+- Grunts and two distinct reviewers retain their exact resolved
+  provider/model/variant/speed/reasoning selections and configuration revisions.
+- When two reviewers are active, they inspect the same SHA with empty
+  conversation histories; another push creates fresh sessions with newly
+  allocated unique reviewer display names.
+- Role policies reject nested delegation, grunt publication, reviewer source
   writes, credential access, and attempts to weaken inherited restrictions.
 - Test evidence refers to the tested revision; integration requires revalidation.
 - Duplicate checkpoints/restarts do not create duplicate logical jobs or PR
