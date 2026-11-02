@@ -231,6 +231,87 @@ Negotiate a protocol version and capabilities before dispatch. An older backend
 can continue serving ordinary sessions, but must fail closed for unsupported
 role isolation or fresh-review guarantees.
 
+## Cross-provider team messaging
+
+BGR must support communication among OpenAI-backed, MultiDex/Codex-native, and
+Claude-backed brain, grunt, and reviewer sessions. MultiDex is a harness and
+execution backend, not an LLM vendor. Model APIs do not communicate directly:
+harness adapters expose host messaging tools, and Omnigent routes authenticated
+envelopes. Agents receive no messaging credentials and make no TCP, shared
+filesystem, or same-host assumptions.
+
+Reuse the existing child-dispatch, inbox, session-event, and host-routing
+primitives, but do not treat peer messaging as a correlated request/reply
+mailbox. `sys_session_send` dispatches only to direct children; same-session
+nudge/continuation and completion use the inbox path, including
+`sys_read_inbox`. `runner/subagent_work.py` supplies result receipts, recovery,
+and parent-wake retries. `sys_session_message` uses an authenticated HTTP POST
+to `/v1/sessions/{target}/events` with type `session_message` for queue/steer
+delivery and host/replica rerouting. Queueing is not execution; replies are not
+automatically forwarded, and uncertain deliveries are not automatically resent.
+These are source observations, not live validation. Preserve the existing
+[messaging tool and approval boundary](session-messaging-tool-boundary.md).
+
+Add BGR team send, receive, and acknowledgement semantics at runtime; exact
+tool and API names remain deferred. Do not broaden `sys_session_send` to peers
+or silently apply its child-tool approval exemption to peer sends. Preserve
+native approvals and the existing server gates: `SESSION_ORCHESTRATION`, same
+ownership, a private source after accounting for inherited sharing, and the
+bound runner. Peer sends from shared sessions are unsupported until a
+separately reviewed authorization change; fail visibly during preflight rather
+than bypassing the gate.
+
+A team roster binds immutable team and session IDs to each role and visible
+`brain`, `grunt-*`, or `reviewer-*` name. A scoped team ACL controls permitted
+communication edges. Brain-to-grunt, brain-to-reviewer, grunt-to-grunt, and
+reviewer/grunt or reviewer/reviewer communication are supported only where
+role and phase policy allow. Communication grants no planning, spawning,
+editing, or publication authority. The brain observes task communications and
+remains the sole assigner and adjudicator.
+
+Preserve independent review. A reviewer starts with only the frozen code and
+contract. Route factual clarification requests through the brain; responses
+contain minimal source-grounded facts, never implementation transcripts or
+another reviewer's findings. During independent review, block or defer lateral
+reviewer messages that expose findings or deliberation. Enable findings
+exchange only after both independent outputs are sealed; later discussion
+cannot rewrite those results. A new revision always gets fresh review context.
+
+Each conceptual envelope carries `protocol_version`, `message_id` and
+`idempotency_key`, `team_id`, `source_session_id`/role/display name,
+`destination_session_id`, `task_id` or `round_id`, optional reviewed head SHA,
+kind (`task`, `question`, `answer`, `progress`, `result`, or `cancel`),
+`correlation_id`/`in_reply_to`, payload or artifact references, sequence, and
+creation/expiry timestamps. The runtime stamps the authenticated source; text
+labels are not authorization. Validate same-team membership, source
+permissions, and payload bounds; strip secrets and scope artifact access to the
+team.
+
+Persist a message before accepting it. Use a durable per-recipient mailbox and
+delivery outbox with consume/ack cursors, at-least-once transport, deduplication,
+and ordering per recipient (no global ordering promise). Distinguish accepted,
+delivered, consumed, and replied states. Combine push wake notifications with
+pull/drain catch-up after reconnect. Retry known IDs only through the new
+idempotent broker contract, never by blindly resending existing
+`sys_session_message` calls. Make timeouts, backpressure, expiry, dead-letter
+state, cancellation, and stale-SHA rejection visible to the brain. An arbitrary
+incoming message must not resurrect a completed job; require explicit task
+continuation.
+
+The MVP uses existing Omnigent persistence and event transport behind a mailbox
+interface; Redis is not mandatory. If measured load or multi-host operation
+demonstrates a need, an optional Redis Streams/consumer-groups adapter may
+provide pending/ack/reclaim, retention, and backpressure under the same durable
+envelope, ACL, and recovery contract. Plain Redis Pub/Sub is insufficient for
+offline/restart durability. Agents never connect to Redis directly. These
+design proposals implement no messaging service.
+
+Future acceptance tests cover cross-provider brain-to-grunt-to-brain round
+trips, grunt peer question/reply, reviewer factual clarification, and
+post-seal reviewer exchange; offline/restart replay, duplicate IDs, unavailable
+hosts, denied native approval, wrong-team or spoofed senders, shared-source
+preflight, stale rounds, and review isolation. These tests have not been run.
+
 ## Delivery stages and future acceptance tests
 
 1. Runtime and CLI: typed roles/contracts, capability checks, dynamic grunt
