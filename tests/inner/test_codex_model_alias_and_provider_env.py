@@ -50,9 +50,9 @@ def test_normalize_rewrites_only_top_level_model(tmp_path: Path) -> None:
     config.write_text(
         'model = "QB/DSV4.1-Flash"\n'
         'model_reasoning_effort = "high"\n'
-        "[model_providers.localdex]\n"
+        "[model_providers.multidex]\n"
         'base_url = "http://10.0.13.33:2120/v1"\n'
-        'env_key = "LOCALDEX_API_KEY"\n'
+        'env_key = "MULTIDEX_API_KEY"\n'
         # A provider-level key named model must not be rewritten.
         "[profiles.other]\n"
         'model = "QB/DSV4.1-Flash"\n',
@@ -68,7 +68,7 @@ def test_normalize_rewrites_only_top_level_model(tmp_path: Path) -> None:
 
 def test_normalize_is_noop_for_canonical_config(tmp_path: Path) -> None:
     config = tmp_path / "config.toml"
-    original = 'model = "DS v4.1 Flash 1017"\nmodel_provider = "localdex"\n'
+    original = 'model = "DS v4.1 Flash 1017"\nmodel_provider = "multidex"\n'
     config.write_text(original, encoding="utf-8")
     _normalize_copied_codex_model(config)
     assert config.read_text(encoding="utf-8") == original
@@ -85,15 +85,15 @@ def test_normalize_survives_missing_file(tmp_path: Path) -> None:
 def test_collects_env_keys_from_every_provider(tmp_path: Path) -> None:
     config = tmp_path / "config.toml"
     config.write_text(
-        "[model_providers.localdex]\n"
+        "[model_providers.multidex]\n"
         'base_url = "http://10.0.13.33:2120/v1"\n'
-        'env_key = "LOCALDEX_API_KEY"\n'
+        'env_key = "MULTIDEX_API_KEY"\n'
         "[model_providers.openrouter]\n"
         'base_url = "https://openrouter.ai/api/v1"\n'
         'env_key = "OPENROUTER_API_KEY"\n',
         encoding="utf-8",
     )
-    assert codex_config_env_key_names(config) == ("LOCALDEX_API_KEY", "OPENROUTER_API_KEY")
+    assert codex_config_env_key_names(config) == ("MULTIDEX_API_KEY", "OPENROUTER_API_KEY")
 
 
 def test_ignores_invalid_env_key_and_missing_file(tmp_path: Path) -> None:
@@ -112,16 +112,16 @@ def test_terminal_env_forwards_provider_key_for_multidex(tmp_path: Path) -> None
     app = _FakeAppServer(
         env={
             "OPENROUTER_API_KEY": "sk-or-secret",
-            "LOCALDEX_API_KEY": "babayaga",
+            "MULTIDEX_API_KEY": "babayaga",
             "UNRELATED_SECRET": "nope",
             "CODEX_HOME": "/tmp/ignored",
         },
         codex_home=tmp_path,
-        provider_env_keys=("OPENROUTER_API_KEY", "LOCALDEX_API_KEY"),
+        provider_env_keys=("OPENROUTER_API_KEY", "MULTIDEX_API_KEY"),
     )
     env = codex_terminal_env(app)
     assert env["OPENROUTER_API_KEY"] == "sk-or-secret"
-    assert env["LOCALDEX_API_KEY"] == "babayaga"
+    assert env["MULTIDEX_API_KEY"] == "babayaga"
     # Non-declared variables still stay out of the child.
     assert "UNRELATED_SECRET" not in env
     assert env["CODEX_HOME"] == str(tmp_path)
@@ -185,7 +185,7 @@ def test_resume_normalizes_existing_private_home(tmp_path: Path) -> None:
     home = tmp_path / "codex-home"
     home.mkdir()
     config = home / "config.toml"
-    config.write_text('model = "QB/DSV4.1-Flash"\nmodel_provider = "localdex"\n', encoding="utf-8")
+    config.write_text('model = "QB/DSV4.1-Flash"\nmodel_provider = "multidex"\n', encoding="utf-8")
     # Mirrors what start() does for an existing (resumed) private home.
     _normalize_copied_codex_model(home / "config.toml")
     assert config.read_text(encoding="utf-8").startswith('model = "DS v4.1 Flash 1017"')
