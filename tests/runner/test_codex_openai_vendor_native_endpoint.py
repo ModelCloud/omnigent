@@ -268,3 +268,38 @@ def test_explicit_openai_key_default_serves_openai_vendor_models(
 
     assert launch.summary.startswith("provider 'openai-key'")
     assert "api.openai.com" in " ".join(launch.config_overrides)
+
+
+def test_gateway_default_model_pin_is_judged_on_the_effective_model(
+    config_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no explicit override, the provider's own ``default_model`` decides.
+
+    The host log for agent-4090-xl recorded ``provider 'openrouter' (model=None)``:
+    the session passed no override and ``_codex_provider_launch`` pinned the
+    provider's ``default_model`` instead. If that default is an OpenAI-vendor id
+    the launch still lands on the gateway, so the pin must be judged on the
+    effective model rather than on the absent override.
+    """
+    _write(
+        config_home,
+        """
+providers:
+  openrouter:
+    kind: gateway
+    default: openai
+    openai:
+      api_key_ref: env:OPENROUTER_API_KEY
+      base_url: https://openrouter.ai/api/v1
+      wire_api: responses
+      models:
+        default: openai/gpt-6-astra
+""",
+    )
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    from omnigent.harnesses.codex_native import app_server
+
+    launch = app_server.resolve_native_codex_launch(model=None)
+
+    assert "openrouter.ai" not in " ".join(launch.config_overrides)
+    assert launch.config_overrides == ['model_provider="openai"']

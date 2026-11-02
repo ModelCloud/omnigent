@@ -4686,7 +4686,21 @@ def _openai_vendor_pin_forbids(entry: object, model: str | None) -> bool:
     # the proxy transports this pin exists to keep OpenAI-vendor ids off.
     if getattr(entry, "kind", None) in (DATABRICKS_KIND, CLI_CONFIG_KIND, BEDROCK_KIND):
         return False
-    return _is_openai_vendor_model(model) and not _serves_openai_vendor_natively(entry)
+    effective_model = model
+    if not effective_model:
+        # No explicit override: the launch pins the provider's own default
+        # model (:func:`_codex_provider_launch`), so that is the id that will
+        # actually be requested. Judge the pin on that, not on the absent
+        # override, or a gateway whose ``models.default`` is ``openai/gpt-*``
+        # slips past. ``family_default_model`` deliberately does not resolve
+        # credentials, so this stays a pure predicate.
+        try:
+            effective_model = entry.family_default_model("openai")  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001 - an unroutable entry is judged below
+            effective_model = None
+    return _is_openai_vendor_model(effective_model) and not _serves_openai_vendor_natively(
+        entry
+    )
 
 
 def _codex_login_launch(model: str | None, *, summary: str) -> NativeCodexLaunch:
