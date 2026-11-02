@@ -55,6 +55,7 @@ export function ModelEffortFields({
   harness,
   supportsPermissionMode,
   hostId,
+  disabled = false,
   onModelChange,
   onEffortChange,
   onPermissionModeChange,
@@ -72,6 +73,7 @@ export function ModelEffortFields({
   supportsPermissionMode: boolean;
   /** Pinned host id, or "" when unset (task resolves a host at fire time). */
   hostId: string;
+  disabled?: boolean;
   onModelChange: (model: string) => void;
   onEffortChange: (effort: string) => void;
   onPermissionModeChange: (mode: string) => void;
@@ -129,6 +131,7 @@ export function ModelEffortFields({
           options={hostModelOptions ?? []}
           selectedModel={model === "" ? null : model}
           effort={effort === "" ? null : effort}
+          disabled={disabled}
           modelDefaultLabel="Default"
           onModelChange={handleCodexModelChange}
           onEffortChange={(e) => onEffortChange(e ?? "")}
@@ -145,6 +148,7 @@ export function ModelEffortFields({
           <Label htmlFor="task-model">Model</Label>
           {modelOptions.length > 0 ? (
             <Select
+              disabled={disabled}
               value={model === "" ? MODEL_SELECT_DEFAULT : model}
               componentId="tasks.scheduled.model"
               valueHasNoPii
@@ -174,6 +178,7 @@ export function ModelEffortFields({
             <Input
               id="task-model"
               data-testid="task-model-trigger"
+              disabled={disabled}
               value={model}
               placeholder="Default"
               componentId="tasks.scheduled.model"
@@ -185,6 +190,7 @@ export function ModelEffortFields({
         <div className="flex w-full min-w-0 flex-col gap-1.5" data-testid="task-effort-control">
           <Label htmlFor="task-effort">Effort</Label>
           <Select
+            disabled={disabled}
             value={effort === "" ? EFFORT_SELECT_NONE : effort}
             componentId="tasks.scheduled.effort"
             valueHasNoPii
@@ -214,6 +220,7 @@ export function ModelEffortFields({
         <div className="flex w-full min-w-0 flex-col gap-1.5" data-testid="task-permission-control">
           <Label htmlFor="task-permission">Permission mode</Label>
           <Select
+            disabled={disabled}
             value={permissionMode === "" ? PERMISSION_SELECT_DEFAULT : permissionMode}
             componentId="tasks.scheduled.permission_mode"
             valueHasNoPii
