@@ -89,6 +89,186 @@ async def test_start_reuses_initialized_readiness_client_for_hook_trust(
         await server.close()
 
 
+async def test_official_model_session_repairs_stale_empty_auth_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``{}`` marker left by an earlier local-model run is re-pointed at the login.
+
+    Sequence this covers (agent-4090-xl): a local-model session wrote the empty
+    marker, the user then logged in via ``codex login``, and an official-model
+    session reused the same session home. Codex read the ``{}`` and failed every
+    turn with *"Your access token could not be refreshed because you have since
+    logged out or signed in to another account"*.
+    """
+    from omnigent.harnesses.codex_native import app_server as codex_native_app_server
+
+    source_home = tmp_path / "source-codex-home"
+    source_home.mkdir()
+    source_auth = source_home / "auth.json"
+    source_auth.write_text(
+        '{"auth_mode":"chatgpt","tokens":{"refresh_token":"r","access_token":"a"}}\n',
+        encoding="utf-8",
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(source_home))
+
+    async def _supported_version(_codex_path: str) -> tuple[int, int, int]:
+        return (0, 147, 0)
+
+    async def _ready(_self: CodexNativeAppServer) -> _FakeStartupClient:
+        return _FakeStartupClient()
+
+    async def _trust(
+        _self: CodexNativeAppServer, *, client: CodexAppServerClient | None = None
+    ) -> None:
+        return None
+
+    monkeypatch.setattr(codex_native_app_server, "_codex_cli_version", _supported_version)
+    monkeypatch.setattr(CodexNativeAppServer, "_wait_until_ready", _ready)
+    monkeypatch.setattr(CodexNativeAppServer, "_trust_policy_hooks", _trust)
+    server = _test_app_server(tmp_path, tmp_path / "codex-home", tmp_path / "bridge", workspace)
+
+    # The stale marker exactly as the isolated-credential path writes it.
+    server.codex_home.mkdir(parents=True, exist_ok=True)
+    marker = server.codex_home / "auth.json"
+    marker.write_text("{}\n", encoding="utf-8")
+
+    server.bridge_openai_auth = False
+    server.isolated_env_keys = ()
+
+    await server.start()
+    try:
+        repaired = server.codex_home / "auth.json"
+        assert repaired.is_symlink()
+        assert repaired.resolve() == source_auth.resolve()
+    finally:
+        await server.close()
+
+
+async def test_official_model_session_keeps_a_real_session_auth_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A session home that already holds a usable login is left untouched."""
+    from omnigent.harnesses.codex_native import app_server as codex_native_app_server
+
+    source_home = tmp_path / "source-codex-home"
+    source_home.mkdir()
+    (source_home / "auth.json").write_text(
+        '{"tokens":{"refresh_token":"other","access_token":"other"}}\n', encoding="utf-8"
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(source_home))
+
+    async def _supported_version(_codex_path: str) -> tuple[int, int, int]:
+        return (0, 147, 0)
+
+    async def _ready(_self: CodexNativeAppServer) -> _FakeStartupClient:
+        return _FakeStartupClient()
+
+    async def _trust(
+        _self: CodexNativeAppServer, *, client: CodexAppServerClient | None = None
+    ) -> None:
+        return None
+
+    monkeypatch.setattr(codex_native_app_server, "_codex_cli_version", _supported_version)
+    monkeypatch.setattr(CodexNativeAppServer, "_wait_until_ready", _ready)
+    monkeypatch.setattr(CodexNativeAppServer, "_trust_policy_hooks", _trust)
+    server = _test_app_server(tmp_path, tmp_path / "codex-home", tmp_path / "bridge", workspace)
+
+    server.codex_home.mkdir(parents=True, exist_ok=True)
+    session_auth = server.codex_home / "auth.json"
+    session_auth.write_text(
+        '{"tokens":{"refresh_token":"own","access_token":"own"}}\n', encoding="utf-8"
+    )
+
+    server.bridge_openai_auth = False
+    server.isolated_env_keys = ()
+
+    await server.start()
+    try:
+        assert not session_auth.is_symlink()
+        assert "own" in session_auth.read_text(encoding="utf-8")
+    finally:
+        await server.close()
+
+
+async def test_empty_marker_is_not_repaired_without_a_real_login(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no shared login the marker stays, so Codex still prompts to sign in."""
+    from omnigent.harnesses.codex_native import app_server as codex_native_app_server
+
+    source_home = tmp_path / "source-codex-home"
+    source_home.mkdir()
+    (source_home / "auth.json").write_text("{}\n", encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(source_home))
+
+    async def _supported_version(_codex_path: str) -> tuple[int, int, int]:
+        return (0, 147, 0)
+
+    async def _ready(_self: CodexNativeAppServer) -> _FakeStartupClient:
+        return _FakeStartupClient()
+
+    async def _trust(
+        _self: CodexNativeAppServer, *, client: CodexAppServerClient | None = None
+    ) -> None:
+        return None
+
+    monkeypatch.setattr(codex_native_app_server, "_codex_cli_version", _supported_version)
+    monkeypatch.setattr(CodexNativeAppServer, "_wait_until_ready", _ready)
+    monkeypatch.setattr(CodexNativeAppServer, "_trust_policy_hooks", _trust)
+    server = _test_app_server(tmp_path, tmp_path / "codex-home", tmp_path / "bridge", workspace)
+
+    server.codex_home.mkdir(parents=True, exist_ok=True)
+    marker = server.codex_home / "auth.json"
+    marker.write_text("{}\n", encoding="utf-8")
+
+    server.bridge_openai_auth = False
+    server.isolated_env_keys = ()
+
+    await server.start()
+    try:
+        assert not marker.is_symlink()
+        assert marker.read_text(encoding="utf-8").strip() == "{}"
+    finally:
+        await server.close()
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ("{}", True),
+        ("{}\n", True),
+        ('{"tokens":{"refresh_token":"r"}}', False),
+        ('{"OPENAI_API_KEY":"sk-x"}', False),
+        ("not json", False),
+    ],
+)
+def test_is_empty_auth_marker(body: str, expected: bool, tmp_path: Path) -> None:
+    from omnigent.harnesses.codex_native.app_server import _is_empty_auth_marker
+
+    path = tmp_path / "auth.json"
+    path.write_text(body, encoding="utf-8")
+
+    assert _is_empty_auth_marker(path) is expected
+
+
+def test_is_empty_auth_marker_ignores_symlinks(tmp_path: Path) -> None:
+    """A symlink to a real login must never read as the empty marker."""
+    from omnigent.harnesses.codex_native.app_server import _is_empty_auth_marker
+
+    real = tmp_path / "real.json"
+    real.write_text("{}", encoding="utf-8")
+    link = tmp_path / "link.json"
+    link.symlink_to(real)
+
+    assert _is_empty_auth_marker(link) is False
+
+
 @dataclass
 class _RespawnHarness:
     """A start()-ready server whose spawn, readiness and teardown are mocked."""
