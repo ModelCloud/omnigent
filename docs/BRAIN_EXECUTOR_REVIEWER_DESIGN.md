@@ -313,11 +313,132 @@ post-seal reviewer exchange; offline/restart replay, duplicate IDs, unavailable
 hosts, denied native approval, wrong-team or spoofed senders, shared-source
 preflight, stale rounds, and review isolation. These tests have not been run.
 
+## Resumption after individual or collective failure
+
+Recovery is a BGR requirement, not a promise to checkpoint every agent's
+conversation or internal reasoning. Persist a compact **team recovery ledger**
+in Omnigent's durable database, with content-addressed artifacts in durable
+storage. Model context receives a bounded projection of that ledger; it is not
+the source of truth. Runner memory, local worktrees, and optional Redis delivery
+queues must not be the only copies. Reuse existing stores and session recovery
+primitives rather than introducing a separate orchestration database.
+
+### Minimum durable state
+
+| Record | Recovery data |
+| --- | --- |
+| Team | Team ID, user/ownership policy, configuration revision, grunt cap, lifecycle state, active brain session ID, coordinator epoch |
+| Plan | Goal, current plan/contract revision, acceptance criteria, dependencies, brain decisions and explicit unresolved questions |
+| Assignment | Task ID, role, display name, logical agent ID, backend session/thread ID, host ID, attempt ID, assignment contract and profile snapshot |
+| Progress | Coarse phase, last acknowledged checkpoint, blocker, lease/heartbeat time, intended next action, retry budget |
+| Workspace | Repository and base/result SHAs, branch/worktree identity, durable patch/checkpoint reference and checksum, dirty/lost/available status |
+| Evidence | Exact tested revision, check commands and exit codes, bounded log/artifact references, completed findings and adjudication decisions |
+| Delivery/publication | Message IDs and acknowledgement cursors, pending outbox entries, publication intent and verified remote SHA/PR, review round/slot states |
+
+Keep the immutable assignment contract or a durable reference to it, not merely
+"task assigned to agent X." A fresh worker needs the instructions to reconstruct
+the work. Backend resume handles are optional and access-controlled; secrets
+never enter the ledger or prompt projection. Preserve logical task identity
+across attempts, but allocate a new attempt/session identity when replacing a
+worker. Names remain presentation metadata with the specified role prefixes.
+
+Checkpoint at meaningful boundaries: plan/assignment accepted, launch
+acknowledged, implementation artifact available, checks completed, result
+accepted, publication intended/confirmed, review sealed, and delivery
+acknowledged. Heartbeats record liveness only, not continuous context snapshots.
+A grunt may publish a bounded work-in-progress patch/checkpoint at a safe
+milestone; this is a private recovery artifact, not permission to push a remote
+branch or open a PR. Do not copy every tool output or token into recovery state.
+
+### Recovery protocol
+
+1. Load the ledger and acquire a coordinator lease with an incrementing fencing
+   epoch. Only one active `brain` and coordinator may issue accepted assignments
+   or publication operations for a team. Persist assignment intent and its
+   outbox entry transactionally before dispatch.
+2. Reconcile recorded attempts with reachable backends, artifact checksums, and
+   actual repository/remote state. A missing heartbeat means **unknown or
+   disconnected**, not definitely dead. Launch acknowledgement loss must not
+   cause an unconditional second launch.
+3. Reattach to an existing live session when its identity, profile, role policy,
+   workspace, and attempt match. If its durable completion exists, consume that
+   result instead of rerunning the task. Resume the provider's own session only
+   when available and compatible; BGR does not require copying its transcript.
+4. For confirmed loss, start a replacement attempt from the latest verified
+   durable code artifact and task contract. The brain decides whether to salvage
+   partial work, rerun a safe check, or revise the plan. Missing uncheckpointed
+   work is explicitly reported as lost, never represented as recovered.
+5. Restore mailbox cursors, reconcile pending external side effects, recompute
+   in-flight grunt reservations, and then dispatch only eligible pending work.
+   Unresolved attempts retain reservations until fenced or confirmed stopped.
+   Old attempt/epoch results are retained for diagnosis but cannot advance the
+   current task or publish a revision.
+
+Fencing must apply at runner command and publication boundaries, not just to
+database writes. During a partition a worker may finish an already-running
+local command, but cannot gain new work after lease expiry. Before replacement
+writes begin, confirm termination/isolation of the old attempt or allocate a
+separate worktree and revoke its authority. Never let two attempts concurrently
+write one workspace. If the backend cannot establish safe isolation, pause and
+escalate instead of guessing that the old worker died.
+
+### Failure cases
+
+| Failure | Recovery behavior |
+| --- | --- |
+| Grunt disconnects but process survives | Reconcile and reattach by attempt/session ID; do not duplicate its work |
+| Grunt/session/host is lost | Fresh attempt from contract plus last durable patch/commit; retain completed evidence only for matching code and environment |
+| One reviewer is lost | Preserve other sealed outputs; retry only that slot with fresh context at the same frozen revision/configuration, never seed it with partial or sibling findings |
+| Brain fails while workers live | Allow already authorized bounded work to checkpoint/finish while leases permit; persist results; no new assignments or publication until one recovered brain owns the epoch |
+| All agents or the server restart | Recover team/plan/assignments from the ledger, restore available artifacts, reconcile backends and outboxes, then rebuild the brain's bounded recovery context |
+| Push or PR-note acknowledgement is lost | Query remote SHA or stable note marker and reconcile intent; do not blindly repeat externally visible actions |
+| Storage/artifact is unavailable or corrupt | Pause affected work; expose missing checkpoint and available restart point rather than fabricate a successful resume |
+
+An interrupted reviewer may reconnect to the same still-live attempt, but a
+replacement reviewer is always a new session/name. A changed head or review
+configuration requires a new round, not reuse of a sealed result. Successful
+completion of one slot is not approval while another is missing.
+
+Do not automatically replay arbitrary tool commands: tests may themselves
+have side effects. Unknown side-effect outcomes enter a reconciliation state
+and require evidence or a brain/user decision. A cancellation remains durable;
+restarting the team must not resurrect cancelled work.
+
+### Brain recovery context and user controls
+
+Resume the brain's existing provider session when valid. Otherwise create a
+replacement physical session for the same logical `brain`, with a compact
+recovery packet: goal and plan revision, decisions, task-to-agent/attempt map,
+completed outputs, current revisions, pending reviews/messages, blockers,
+budgets, and next eligible steps. Attach durable references for details.
+This recovers orchestration intent, not the prior model's hidden reasoning.
+Existing roster/child links must be reconciled to the new active brain binding;
+preserve ownership/approval checks rather than spoofing old session parentage.
+
+Expose team Resume/Pause/Cancel, per-agent reconnect/retry status, and the last
+durable checkpoint in the BGR UI. Resume reconciles before dispatch; Retry
+creates a new attempt only after the old one is safely fenced. Show whether
+work was reattached, reconstructed, restarted, or lost. Configuration changes
+and manual recovery decisions become new ledger revisions.
+
+Durable storage still has finite retention and backup guarantees. If both the
+ledger and backups are lost, reliable reconstruction is not promised. Artifact
+retention must cover active/recoverable tasks; cleanup must not discard the only
+checkpoint while an attempt or review can still resume.
+
+Future crash-injection tests should cover loss before/after dispatch
+acknowledgement, one grunt, one reviewer, brain-only and whole-team restarts,
+partitioned workers, duplicate recovery coordinators, missing worktrees,
+corrupt artifacts, and lost push/comment acknowledgements. Assert one active
+brain, no duplicate workspace writers/publications, preserved task ownership
+and concurrency limits, fresh replacement reviewers, and explicit accounting
+for lost progress. These tests are proposed, not executed by this design PR.
+
 ## Delivery stages and future acceptance tests
 
 1. Runtime and CLI: typed roles/contracts, capability checks, dynamic grunt
    concurrency enforcement, publication checkpoint, durable fan-out, structured
-   results, dual delivery.
+   results, dual delivery, and the durable recovery ledger with safe resumption.
 2. Server/host UI: separate Polly and BGR selection; active reviewer count;
    independent reviewer profiles; brain/grunt defaults; dynamic grunt cap;
    task/round status, revision labels, incomplete/stale indicators, and brain
