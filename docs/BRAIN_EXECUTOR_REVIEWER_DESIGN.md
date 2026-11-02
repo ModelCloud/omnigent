@@ -281,7 +281,8 @@ review context.
 Each conceptual envelope carries `protocol_version`, `message_id` and
 `idempotency_key`, `team_id`, `source_session_id`/role/display name,
 `destination_session_id`, `task_id` or `round_id`, optional reviewed head SHA,
-kind (`task`, `question`, `answer`, `progress`, `result`, or `cancel`),
+kind (`task`, `question`, `answer`, `progress`, `status_query`, `status_reply`,
+`result`, or `cancel`),
 `correlation_id`/`in_reply_to`, payload or artifact references, sequence, and
 creation/expiry timestamps. The runtime stamps the authenticated source; text
 labels are not authorization. Validate same-team membership, source
@@ -312,6 +313,83 @@ trips, grunt peer question/reply, reviewer factual clarification, and
 post-seal reviewer exchange; offline/restart replay, duplicate IDs, unavailable
 hosts, denied native approval, wrong-team or spoofed senders, shared-source
 preflight, stale rounds, and review isolation. These tests have not been run.
+
+### Two-way progress ping/pong without replacing the task
+
+The brain must be able to ask any assigned grunt or reviewer:
+
+- "What are you doing now?"
+- "Summarize your work since timestamp T."
+- "Summarize your work since commit C."
+
+This is a correlated control exchange over the team mailbox, not a new task,
+task completion, cancellation, or generic steering instruction. The worker
+answers and continues its existing assignment with the same session, attempt,
+workspace, and task contract. A status request never starts a replacement
+agent, consumes another grunt slot, or resets the worker's context.
+
+| Message | Required content |
+| --- | --- |
+| `status_query` | Query/correlation ID, team/task/attempt and destination IDs, requested scope (`now`, `since_time`, or `since_commit`), optional UTC timestamp or full commit SHA, deadline |
+| `status_reply` | Matching query/attempt IDs, observation time and evidence watermark, current phase/action, completed work within scope, pending work/blockers, current head and dirty-work status, check progress/results, artifact references, coverage/freshness limits |
+
+The mailbox acknowledges acceptance promptly. At the next safe execution
+boundary the worker reads the query, produces a bounded factual summary,
+sends its reply to the brain's mailbox, and continues from its saved execution
+position. The summary is an agent response, not just a transport heartbeat.
+Deliver it mid-task: do not wait for normal task completion or route it through
+the terminal-result handler. Keep it distinct from the worker's final result.
+
+Do not run a concurrent model turn against the same conversation or edit
+workspace while the worker is active. Harness adapters must support a safe
+control-message boundary or report that capability as unavailable. Existing
+queue/steer tools are building blocks, not proof that non-destructive status
+queries already work on every harness.
+
+If a long tool call is still executing, the runtime can immediately return
+separately labelled observed status (for example, command running, last
+checkpoint, or last heartbeat), with the agent-authored reply marked pending.
+Wait for a safe yield; do not kill a test/build just to answer. A wedged,
+disconnected, or unavailable agent yields a timeout/unavailable status with
+the last observed time, never invented current activity. Cancellation or a
+change of task remains an explicit separate brain action.
+
+For time-scoped queries, summarize recorded work events after the requested
+UTC timestamp up to the reply's watermark, using stable event sequence IDs
+to handle clock skew. For commit-scoped queries, resolve and verify the exact
+commit in the assigned repository and summarize relevant changes from that
+anchor to observed HEAD; report uncommitted work separately. Include the
+observed head SHA, comparison relationship, and limitations. A missing,
+ambiguous, non-ancestor, or out-of-retention anchor returns an explicit
+unsupported/partial answer; never silently substitute another anchor or infer
+when work happened from commit author timestamps.
+
+Use existing task events, bounded checkpoint summaries, code diffs, and test
+artifacts to answer. Continuous minute-by-minute transcripts or hidden reasoning
+capture are not required. A reply states what is observed, what the worker
+reports, and what cannot be reconstructed; "exactly now" means an observation
+at a disclosed timestamp, not a guarantee that activity has not since changed.
+
+Persist query/reply IDs and delivery acknowledgements so retries deduplicate
+without re-running work. Bound query frequency and response size; coalesce
+redundant pending queries while acknowledging every correlation ID. Late
+replies retain their original attempt/revision and cannot resurrect cancelled
+work or satisfy a query addressed to a replacement attempt. Brain reconnection
+can drain pending replies without repeating the assignment.
+
+Reviewers may report their current inspection phase, files/checks covered,
+remaining scope, and blockers. Status traffic does not carry sibling findings,
+implementation transcripts, or instructions to change the independent verdict.
+Findings stay in the sealed review-result path; requesting status must not
+invalidate clean-context review.
+
+Future acceptance tests should send a status ping during implementation and
+during review, receive a correlated worker-authored pong before completion,
+and verify the original task continues without a new session or lost work.
+Also cover timestamp/commit scopes, dirty changes, invalid anchors, long-running
+tools, duplicate queries, timeout, disconnect/reconnect, stale-attempt replies,
+and reviewer isolation across the supported provider/harness combinations.
+These are proposed tests, not executed behavior.
 
 ## Resumption after individual or collective failure
 
