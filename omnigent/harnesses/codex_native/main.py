@@ -11,7 +11,6 @@ import re
 import secrets
 import shutil
 import socket
-import sqlite3
 import time
 import uuid
 from collections import Counter
@@ -1756,67 +1755,6 @@ def _find_codex_rollout(codex_home: Path, thread_id: str) -> Path | None:
         return None
     matches.sort(key=lambda path: path.stat().st_mtime, reverse=True)
     return matches[0]
-
-
-def read_codex_thread_saved_provider(codex_home: Path, thread_id: str) -> str | None:
-    """Return the model provider Codex saved for a thread, if it recorded one.
-
-    ``thread/resume`` admits a thread only while its saved provider still
-    equals the configured one, so callers that re-resolve a launch from
-    ambient host state must be able to read what the thread was actually
-    created under. The rollout's ``session_meta.model_provider`` is
-    authoritative -- it is what codex's thread-store backfill reads and what
-    :func:`omnigent.harnesses.codex_native.main._codex_rollout_records_from_session_items`
-    re-stamps on every cold resume. The ``threads`` table in the state db is
-    the fallback for a thread whose rollout has not been written yet.
-
-    :param codex_home: Per-session private ``CODEX_HOME``.
-    :param thread_id: Codex thread id, e.g.
-        ``"019e96aa-0be2-7343-8d3b-6f914d60936b"``.
-    :returns: Provider id, e.g. ``"omnigent_provider"``, or ``None`` when the
-        thread is unknown, unreadable, or recorded no provider.
-    """
-    rollout = _find_codex_rollout(codex_home, thread_id)
-    if rollout is not None:
-        try:
-            with rollout.open("r", encoding="utf-8") as handle:
-                for line in handle:
-                    if not line.strip():
-                        continue
-                    try:
-                        record = json.loads(line)
-                    except ValueError:
-                        break
-                    if not isinstance(record, dict) or record.get("type") != "session_meta":
-                        break
-                    payload = record.get("payload")
-                    provider = payload.get("model_provider") if isinstance(payload, dict) else None
-                    if isinstance(provider, str) and provider:
-                        return provider
-                    break
-        except (OSError, UnicodeDecodeError):
-            pass
-    return _read_codex_thread_store_provider(codex_home, thread_id)
-
-
-def _read_codex_thread_store_provider(codex_home: Path, thread_id: str) -> str | None:
-    """Read a thread's provider from codex's state-db ``threads`` row.
-
-    :param codex_home: Per-session private ``CODEX_HOME``.
-    :param thread_id: Codex thread id.
-    :returns: The recorded provider id, or ``None`` when unavailable.
-    """
-    for db_path in sorted(codex_home.glob("state_*.sqlite")):
-        try:
-            with contextlib.closing(sqlite3.connect(db_path, timeout=1.0)) as conn:
-                row = conn.execute(
-                    "select model_provider from threads where id = ?", (thread_id,)
-                ).fetchone()
-        except sqlite3.Error:
-            continue
-        if row and isinstance(row[0], str) and row[0]:
-            return row[0]
-    return None
 
 
 def _copy_rollout_with_cwd(

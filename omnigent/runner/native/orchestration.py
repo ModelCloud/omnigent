@@ -38,7 +38,6 @@ if TYPE_CHECKING:
     from omnigent.harnesses.codex_native.app_server import (
         CodexAppServerClient,
         CodexNativeAppServer,
-        NativeCodexLaunch,
     )
     from omnigent.harnesses.opencode_native.app_server import OpenCodeNativeServer
     from omnigent.harnesses.opencode_native.client import OpenCodeClient, OpenCodeSession
@@ -5496,16 +5495,11 @@ async def _auto_create_codex_terminal(
                     _codex_launch = dataclasses.replace(_codex_launch, model=_default_id)
         if _codex_catalog and not _codex_catalog_was_stale:
             _fresh_codex_catalog = _codex_catalog
-    # A resume must launch on the provider its thread was saved under: codex
-    # rejects every turn of a thread whose saved provider differs from the
-    # configured one (-32600 modelProviderMismatch), and no resume override can
-    # bypass that validation. This launch just re-resolved its provider from
-    # ambient host state, so reconcile the two before anything is spawned.
-    _codex_launch, _saved_thread_provider = _align_launch_provider_with_thread(
-        _codex_launch,
-        initial_thread_id=original_external_session_id,
-        codex_home=codex_home,
-    )
+    # A resume keeps the provider this launch resolved. Codex admits a thread
+    # whose saved provider differs from the configured one, so there is nothing
+    # to reconcile: the thread's own route is authoritative for its turns, and
+    # a resume must not drag a provider the user has since switched to back to
+    # whatever the rollout first recorded.
     _session_meta_provider = codex_session_meta_model_provider(_codex_launch)
     # Cancel any surviving forwarder first so its teardown closes the OLD app-server,
     # not the one registered below — and so it can't mirror alongside the new one.
@@ -7774,116 +7768,6 @@ def _local_model_config_overrides(
         f"model_reasoning_summary={json.dumps('none')}",
         *preserved,
     ]
-
-
-def _align_launch_provider_with_thread(
-    launch: NativeCodexLaunch,
-    *,
-    initial_thread_id: str | None,
-    codex_home: Path,
-) -> tuple[NativeCodexLaunch, str | None]:
-    """Retarget a resume launch onto the provider its saved thread belongs to.
-
-    Codex admits a resumed thread only while its *saved* provider still equals
-    the *configured* one. ``ConfigManager::load_for_resume`` compares the
-    rollout's ``session_meta.model_provider`` against the provider loaded from
-    the app-server's config plus launch ``-c`` overrides and refuses every turn
-    with ``-32600 modelProviderMismatch`` ("This chat uses X, but your current
-    provider is Y") when they differ. That check runs on the *saved* route even
-    when the request names a different provider, so no resume override can
-    recover it: the launch itself has to agree.
-
-    The launch provider is re-resolved from ambient host state on each restart,
-    while the thread keeps whatever provider it was created under. The two ids
-    usually describe one upstream but are not stable across resolutions: the
-    configured-provider path registers the shared generic id, and the ambient
-    ``config.toml`` / detected-key fallbacks pin the detector's own name (e.g.
-    ``openrouter``). A host that gains or loses a rotating credential such as
-    ``OPENROUTER_API_KEY`` lands a later resume on an id the saved thread does
-    not use and its turns begin failing with the mismatch above.
-
-    Reconciliation is deliberately narrow:
-
-    - only a *resume* is retargeted -- a fresh thread saves whatever provider
-      it launches with, so there is nothing to conflict;
-    - both ids must be defined in the session's private ``config.toml`` and
-      must agree on ``base_url`` and ``wire_api``. This renames a routing
-      selection; it never redirects a thread to another endpoint;
-    - the saved table must carry no credential of its own, so the switch
-      cannot silently substitute a different secret for the live one.
-
-    Anything outside those bounds returns the launch untouched, leaving the
-    caller's existing mismatch diagnostics truthful.
-
-    :param launch: The resolved launch, e.g. from
-        :func:`resolve_native_codex_launch`.
-    :param initial_thread_id: Thread id being resumed, or ``None`` for a fresh
-        session.
-    :param codex_home: The session's private Codex home whose ``config.toml``
-        defines the provider tables.
-    :returns: ``(launch, saved_provider)`` -- the possibly-retargeted launch,
-        plus the provider the saved thread uses when one could be read.
-    """
-    from omnigent.harnesses.codex_native.app_server import (
-        _MODEL_PROVIDER_OVERRIDE_PREFIX,
-        _model_provider_override,
-    )
-
-    if initial_thread_id is None:
-        return launch, None
-    from omnigent.harnesses.codex_native.bridge import (
-        read_codex_home_config_provider_names,
-        read_codex_home_config_provider_table,
-    )
-    from omnigent.harnesses.codex_native.main import read_codex_thread_saved_provider
-
-    saved_provider = read_codex_thread_saved_provider(codex_home, initial_thread_id)
-    if saved_provider is None:
-        return launch, None
-    launch_provider = _model_provider_override(launch.config_overrides)
-    if launch_provider is None or launch_provider == saved_provider:
-        return launch, saved_provider
-    defined = read_codex_home_config_provider_names(codex_home)
-    if launch_provider not in defined or saved_provider not in defined:
-        # Renaming is only safe between two providers this config defines.
-        return launch, saved_provider
-    launch_table = read_codex_home_config_provider_table(codex_home, launch_provider) or {}
-    saved_table = read_codex_home_config_provider_table(codex_home, saved_provider) or {}
-    if (
-        launch_table.get("base_url"),
-        launch_table.get("wire_api"),
-    ) != (saved_table.get("base_url"), saved_table.get("wire_api")):
-        return launch, saved_provider
-    # Both tables must present the *same* credential. A generated table and a
-    # copied one carry their own ``auth``/``experimental_bearer_token``, so
-    # comparing only the endpoint would let a rename swap one secret for
-    # another. Codex resolves the token from the table, so compare what it
-    # would actually send.
-    from omnigent.onboarding.codex_auth_readiness import provider_table_auth_token
-
-    if provider_table_auth_token(launch_table) != provider_table_auth_token(saved_table):
-        return launch, saved_provider
-    _logger.info(
-        "native-codex routing: retargeting resume of thread %s from provider %r to its "
-        "saved provider %r (same endpoint)",
-        initial_thread_id,
-        launch_provider,
-        saved_provider,
-    )
-    return (
-        dataclasses.replace(
-            launch,
-            config_overrides=[
-                (
-                    f"model_provider={json.dumps(saved_provider)}"
-                    if override.startswith(_MODEL_PROVIDER_OVERRIDE_PREFIX)
-                    else override
-                )
-                for override in launch.config_overrides
-            ],
-        ),
-        saved_provider,
-    )
 
 
 def _codex_native_model_from_spec(agent_spec: AgentSpec | ResolvedSpec | None) -> str | None:
