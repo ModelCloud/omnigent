@@ -328,6 +328,32 @@ answers and continues its existing assignment with the same session, attempt,
 workspace, and task contract. A status request never starts a replacement
 agent, consumes another grunt slot, or resets the worker's context.
 
+**All brain/sub-agent communication is asynchronous by default.** Sending
+returns after durable acceptance with a message/query ID and delivery state,
+not after the recipient answers. The brain continues planning, assigning other
+eligible work, or handling other results; it does not synchronously wait or
+poll for the pong. Multiple questions may be outstanding and replies may
+arrive out of order. Only an actual task dependency can prevent dependent work
+from proceeding; the communication tool does not block the entire brain.
+
+Treat each reply like an email envelope: authenticated sender session/agent ID,
+role and display name; destination brain/team; message ID; `in_reply_to` and
+correlation ID identifying the original question; task/attempt/revision; typed
+payload; observation/creation timestamps; and status. Persist the original
+question or its durable reference so a recovered brain can understand a reply
+without remembering the question in model context.
+
+The channel delivers replies as asynchronous inbox events/callbacks, nudging an
+idle brain or making them available at its next safe boundary while busy.
+This is runtime event delivery, not an arbitrary executable callback or a
+second concurrent brain turn. The brain consumes and acknowledges each
+envelope, then decides what to do next. A resumed brain drains unacknowledged
+events; duplicate callbacks do not repeat decisions or task assignments.
+Delivery order is not question order, so match by IDs, never "the last ask."
+Timeout, refusal, cancellation, and unavailable-worker outcomes also arrive
+as correlated status events; silence must not be treated as success. Transport
+acceptance is distinct from an eventual agent reply.
+
 | Message | Required content |
 | --- | --- |
 | `status_query` | Query/correlation ID, team/task/attempt and destination IDs, requested scope (`now`, `since_time`, or `since_commit`), optional UTC timestamp or full commit SHA, deadline |
@@ -383,7 +409,10 @@ implementation transcripts, or instructions to change the independent verdict.
 Findings stay in the sealed review-result path; requesting status must not
 invalidate clean-context review.
 
-Future acceptance tests should send a status ping during implementation and
+Future acceptance tests should prove the brain makes useful progress after
+sending, receives multiple out-of-order replies matched to their original
+questions, and recovers callback envelopes after disconnect without polling or
+duplicate assignments. They should also send a status ping during implementation and
 during review, receive a correlated worker-authored pong before completion,
 and verify the original task continues without a new session or lost work.
 Also cover timestamp/commit scopes, dirty changes, invalid anchors, long-running
