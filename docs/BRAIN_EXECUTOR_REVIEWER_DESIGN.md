@@ -21,7 +21,7 @@ backend, not a second scheduler for the same task.
 | --- | --- | --- |
 | Brain | Investigate for design, plan, assign tasks, evaluate test evidence, integrate changes, publish checkpoints, adjudicate findings | Cannot treat worker summaries as verified evidence or silently change selected profiles |
 | Grunt | Implement the task contract, run assigned checks, return a revision and evidence | No scope expansion, architecture decisions, nested delegation, remote pushes, PR creation, or self-approval |
-| Reviewer | Independently inspect the frozen revision and return findings | No inherited conversation, implementation edits, nested delegation, publication credentials, or access to the other reviewer's findings |
+| Reviewer | Independently inspect the frozen revision and return findings | No inherited conversation, implementation edits, nested delegation, publication credentials, or access to another reviewer's findings before independent outputs are sealed |
 
 Grunts may make routine local choices within the plan. Contradictions,
 missing prerequisites, and design decisions become blockers returned to the
@@ -274,8 +274,9 @@ contract. Route factual clarification requests through the brain; responses
 contain minimal source-grounded facts, never implementation transcripts or
 another reviewer's findings. During independent review, block or defer lateral
 reviewer messages that expose findings or deliberation. Enable findings
-exchange only after both independent outputs are sealed; later discussion
-cannot rewrite those results. A new revision always gets fresh review context.
+exchange only after all configured reviewers' independent outputs are sealed;
+later discussion cannot rewrite those results. A new revision always gets fresh
+review context.
 
 Each conceptual envelope carries `protocol_version`, `message_id` and
 `idempotency_key`, `team_id`, `source_session_id`/role/display name,
