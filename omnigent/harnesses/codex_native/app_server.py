@@ -4659,6 +4659,56 @@ def _serves_openai_vendor_natively(entry: object) -> bool:
     return host == _OPENAI_NATIVE_HOST
 
 
+def _openai_vendor_pin_forbids(entry: object, model: str | None) -> bool:
+    """Whether an OpenAI-vendor pin forbids routing *model* through *entry*.
+
+    The single decision point shared by every native-Codex routing path: when
+    *model* names an OpenAI-vendor id, only a provider that is OpenAI's own
+    endpoint may carry it. A gateway/local entry — however OpenAI-shaped its
+    base URL — is refused, because MultiDex (a Codex fork) reaches that vendor
+    directly and a gateway hop either 404s on its provider allowlist or adds a
+    proxy hop and resale margin to a call Codex can make itself.
+
+    :param entry: A ``ProviderEntry`` candidate route.
+    :param model: The requested model id, or ``None``.
+    :returns: ``True`` when *entry* must be skipped for *model*.
+    """
+    from omnigent.onboarding.provider_config import (
+        BEDROCK_KIND,
+        CLI_CONFIG_KIND,
+        DATABRICKS_KIND,
+    )
+
+    # Non-proxy routes are not third-party hops and keep their precedence:
+    # Databricks Unity Gateway is a managed enterprise endpoint the operator
+    # opted into, and the CLI-config / Bedrock kinds are self-authenticating
+    # Codex-native layers. Only gateway / local / off-OpenAI key entries are
+    # the proxy transports this pin exists to keep OpenAI-vendor ids off.
+    if getattr(entry, "kind", None) in (DATABRICKS_KIND, CLI_CONFIG_KIND, BEDROCK_KIND):
+        return False
+    return _is_openai_vendor_model(model) and not _serves_openai_vendor_natively(entry)
+
+
+def _codex_login_launch(model: str | None, *, summary: str) -> NativeCodexLaunch:
+    """Build a launch that defers to Codex's own OpenAI login.
+
+    Used when a configured provider is refused for an OpenAI-vendor model: the
+    vendor id has to reach ``api.openai.com``, and Codex's built-in ``openai``
+    provider with its stored login is the only route that does.
+
+    :param model: The requested model id, or ``None``.
+    :param summary: Human-readable reason recorded on the launch.
+    :returns: The resolved :class:`NativeCodexLaunch`.
+    """
+    return NativeCodexLaunch(
+        config_overrides=['model_provider="openai"'],
+        model=model,
+        profile=None,
+        summary=summary,
+        login_required=not _codex_login_usable(),
+    )
+
+
 def _first_routable_codex_provider(
     config: dict[str, object], *, exclude: str, model: str | None
 ) -> NativeCodexLaunch | None:
@@ -4697,13 +4747,12 @@ def _first_routable_codex_provider(
     ordered = list(explicit_providers.items()) + [
         (name, entry) for name, entry in merged_providers.items() if name not in explicit_providers
     ]
-    openai_vendor_pin = _is_openai_vendor_model(model)
     for name, candidate in ordered:
         if name == exclude:
             continue
         if OPENAI_FAMILY not in provider_families(candidate):
             continue
-        if openai_vendor_pin and not _serves_openai_vendor_natively(candidate):
+        if _openai_vendor_pin_forbids(candidate, model):
             # MultiDex serves OpenAI-vendor ids on OpenAI's own endpoint.
             # A gateway fallback would either 404 (the gateway need not
             # carry that vendor) or add a proxy hop to a call Codex can
@@ -4864,6 +4913,14 @@ def resolve_native_codex_launch(
        (e.g. ``amazon-bedrock`` — Codex authenticates it itself);
     5. else the codex CLI's own login.
 
+    Every step above that would hand the launch to a *proxy* transport
+    (``gateway`` / ``local`` / a ``key`` entry not pointed at OpenAI) is gated
+    by :func:`_openai_vendor_pin_forbids`: an OpenAI-vendor model id is served
+    by OpenAI itself, so such a route is declined in favour of Codex's own
+    login rather than forwarding a vendor id to a gateway that need not carry
+    it. Managed non-proxy routes (Databricks, Bedrock, cli-config) keep their
+    precedence.
+
     Without a *spec* (or when the spec carries no spec-level credential),
     credentials are controlled by ``omnigent setup`` provider config (or the
     legacy global ``auth:`` block) exactly as before — there is no CLI/env
@@ -4963,6 +5020,20 @@ def resolve_native_codex_launch(
                     summary=f"Codex CLI login (spec provider {spec_entry.name!r}; {state})",
                     login_required=not spec_codex_logged_in,
                 )
+            if _openai_vendor_pin_forbids(spec_entry, model):
+                _logger.warning(
+                    "native-codex: spec-level provider %r is not OpenAI's own endpoint but "
+                    "the requested model %r is an OpenAI-vendor id — using Codex's own login.",
+                    spec_entry.name,
+                    model,
+                )
+                return _codex_login_launch(
+                    model,
+                    summary=(
+                        f"Codex CLI login (spec provider {spec_entry.name!r} is a gateway; "
+                        f"OpenAI-vendor model {model!r} requires OpenAI's own endpoint)"
+                    ),
+                )
             launch = _codex_provider_launch(spec_entry, model)
             if launch is not None:
                 if launch.profile is not None:
@@ -5014,6 +5085,20 @@ def resolve_native_codex_launch(
         # This keeps rollout metadata, app-server, and remote TUI routing on
         # one immutable provider selection during cold resume.
         provider_id = config_detection.model_provider
+        if _is_openai_vendor_model(model):
+            _logger.warning(
+                "native-codex: config.toml provider %r would carry OpenAI-vendor model %r; "
+                "using Codex's own login instead.",
+                provider_id,
+                model,
+            )
+            return _codex_login_launch(
+                model,
+                summary=(
+                    f"Codex CLI login (config.toml provider {provider_id!r} was declined for "
+                    f"OpenAI-vendor model {model!r})"
+                ),
+            )
         log_info_once(
             _logger,
             "native-codex routing: config.toml provider %r (ambient fallback, model=%s)",
@@ -5106,6 +5191,26 @@ def resolve_native_codex_launch(
         )
     if entry.kind == SUBSCRIPTION_KIND:
         return _resolve_subscription_launch(entry, model, explicit)
+
+    if _openai_vendor_pin_forbids(entry, model):
+        # The resolved default is a gateway/local route (explicit or ambient —
+        # an ``OPENROUTER_API_KEY`` in the environment auto-becomes the
+        # ``openai``-family default). An OpenAI-vendor model must still be
+        # served by OpenAI itself, so defer to Codex's own login rather than
+        # hand a vendor id to a proxy that need not carry it.
+        _logger.warning(
+            "native-codex: default provider %r is not OpenAI's own endpoint but model %r is "
+            "an OpenAI-vendor id — using Codex's own login instead.",
+            entry.name,
+            model,
+        )
+        return _codex_login_launch(
+            model,
+            summary=(
+                f"Codex CLI login (default provider {entry.name!r} is a gateway; "
+                f"OpenAI-vendor model {model!r} requires OpenAI's own endpoint)"
+            ),
+        )
 
     launch = _codex_provider_launch(entry, model)
     if launch is not None:

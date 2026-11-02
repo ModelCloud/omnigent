@@ -172,3 +172,99 @@ def test_vendor_detection(model: str | None, expected: bool) -> None:
     from omnigent.harnesses.codex_native.app_server import _is_openai_vendor_model
 
     assert _is_openai_vendor_model(model) is expected
+
+
+# --- The default-provider path (not just the logged-out fall-through) --------
+#
+# An ``OPENROUTER_API_KEY`` in the environment auto-becomes the ``openai``
+# family default on a host whose ``config.yaml`` has no ``providers:`` block
+# (that is how a fresh agent container is configured). The same pin has to
+# hold on that path: the resolved default is a gateway, so an OpenAI-vendor id
+# must defer to Codex's own login instead of being handed to OpenRouter.
+
+_AMBIENT_ONLY = """
+host:
+  host_id: test
+  name: test
+"""
+
+_DEFAULT_OPENROUTER = """
+providers:
+  openrouter:
+    kind: gateway
+    default: openai
+    openai:
+      api_key_ref: env:OPENROUTER_API_KEY
+      base_url: https://openrouter.ai/api/v1
+      wire_api: responses
+"""
+
+
+def test_ambient_gateway_default_does_not_serve_openai_vendor_models(
+    config_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A host with no ``providers:`` block must not route ``gpt-*`` to an ambient gateway.
+
+    This is the agent-4090-xl failure: ``config.yaml`` held only ``host:``, the
+    environment held ``OPENROUTER_API_KEY``, and ``gpt-6-astra`` produced a
+    launch against ``https://openrouter.ai/api/v1/responses`` — 404
+    ``No allowed providers are available for the selected model``.
+    """
+    _write(config_home, _AMBIENT_ONLY)
+    # The container has no OPENAI_API_KEY; only OpenRouter is ambient there.
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    from omnigent.harnesses.codex_native import app_server
+
+    launch = app_server.resolve_native_codex_launch(model="gpt-6-astra")
+
+    rendered = " ".join(launch.config_overrides)
+    assert "openrouter.ai" not in rendered
+    assert "api.openai.com" not in rendered  # Codex's own login, not a keyed route
+    assert launch.config_overrides == ['model_provider="openai"']
+    # The declined provider is named for diagnostics, but it never routes.
+    assert "was declined" in launch.summary or "requires OpenAI's own endpoint" in launch.summary
+
+
+@pytest.mark.parametrize("model", ["gpt-6-astra", "openai/gpt-6-astra", "o3"])
+def test_explicit_gateway_default_does_not_serve_openai_vendor_models(
+    model: str, config_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicitly defaulted gateway is still refused for OpenAI-vendor ids."""
+    _write(config_home, _DEFAULT_OPENROUTER)
+    from omnigent.harnesses.codex_native import app_server
+
+    launch = app_server.resolve_native_codex_launch(model=model)
+
+    rendered = " ".join(launch.config_overrides)
+    assert "openrouter.ai" not in rendered
+    assert launch.config_overrides == ['model_provider="openai"']
+
+
+def test_explicit_gateway_default_still_serves_gateway_models(
+    config_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The pin is scoped to OpenAI-vendor ids; GLM/Kimi keep their gateway route."""
+    _write(config_home, _DEFAULT_OPENROUTER)
+    from omnigent.harnesses.codex_native import app_server
+
+    launch = app_server.resolve_native_codex_launch(model="glm-5.3")
+
+    assert launch.summary.startswith("provider 'openrouter'")
+    assert "openrouter.ai" in " ".join(launch.config_overrides)
+
+
+def test_explicit_openai_key_default_serves_openai_vendor_models(
+    config_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A keyed default aimed at OpenAI itself is still honored."""
+    _write(
+        config_home,
+        _WITH_NATIVE_OPENAI.replace("    default: openai\n", "")
+        .replace("openai-key:\n    kind: key", "openai-key:\n    kind: key\n    default: openai"),
+    )
+    from omnigent.harnesses.codex_native import app_server
+
+    launch = app_server.resolve_native_codex_launch(model="gpt-6-astra")
+
+    assert launch.summary.startswith("provider 'openai-key'")
+    assert "api.openai.com" in " ".join(launch.config_overrides)
