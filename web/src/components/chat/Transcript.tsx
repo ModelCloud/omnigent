@@ -22,7 +22,7 @@ import {
   createBubbleCache,
   liveCandidateAssistantIndex,
 } from "@/lib/renderItems";
-import { useChatStore } from "@/store/chatStore";
+import { sendableQueuedHead, useChatStore } from "@/store/chatStore";
 import { useThinkingPaneStore } from "@/store/thinkingPane";
 import { collectReasoningSections } from "@/components/blocks/BlockRenderer";
 import { TranscriptScrollbar } from "@/pages/TranscriptScrollbar";
@@ -629,7 +629,32 @@ export function VirtualBubbleList({
   };
   const ctxRef = useRef(ctx);
   ctxRef.current = ctx;
+  // A commit can transiently shorten the transcript and clamp a following reader to that height.
+  // Re-pin only a reader the commit moved up from the end (the library pins 1px short of it);
+  // a user scroll lands in its own task.
+  const followingScrollTopRef = useRef<number | null>(null);
+  followingScrollTopRef.current =
+    scrollEl &&
+    ctx.state.isAtBottom &&
+    !ctx.state.escapedFromLock &&
+    scrollEl.scrollHeight - scrollEl.clientHeight - scrollEl.scrollTop <= 2
+      ? scrollEl.scrollTop
+      : null;
+  useLayoutEffect(() => {
+    const recorded = followingScrollTopRef.current;
+    const { isAtBottom, escapedFromLock } = ctxRef.current.state;
+    if (!scrollEl || recorded === null || !isAtBottom || escapedFromLock) return;
+    if (scrollEl.scrollTop >= recorded) return;
+    const bottom = scrollEl.scrollHeight - scrollEl.clientHeight;
+    if (bottom - scrollEl.scrollTop > 1) ctxRef.current.state.scrollTop = bottom;
+  });
   const storeConvId = useChatStore((s) => s.conversationId);
+  // A queued follow-up is sent as soon as the turn ends, so the reply's actions would
+  // only show for a frame.
+  const followUpQueued = useChatStore(
+    (s) => sendableQueuedHead(s.queuedMessages, conversationId) !== null,
+  );
+  const actionsPersist = sessionIdle && !followUpQueued;
   const restoringRef = useRef<string | null>(null);
   const latestSnapshotRef = useRef<{
     conversationId: string;
@@ -790,6 +815,25 @@ export function VirtualBubbleList({
         : element.getBoundingClientRect().height;
     },
   });
+
+  // A row mounted mid-scroll is only measured by its ResizeObserver, after the layout
+  // has recorded its shift. Measuring it right after the commit corrects the scroll first.
+  const measureRow = useCallback(
+    (node: HTMLDivElement | null) => {
+      virtualizer.measureElement(node);
+      if (node === null) return;
+      queueMicrotask(() => {
+        const key = node.dataset.bubbleKey;
+        if (!node.isConnected || key === undefined || virtualizer.itemSizeCache.has(key)) return;
+        // The cached offset lags scroll writes until the next scroll event, and the
+        // correction below writes an absolute position built from it.
+        const scroller = virtualizer.scrollElement;
+        if (scroller) virtualizer.scrollOffset = scroller.scrollTop;
+        virtualizer.resizeItem(Number(node.dataset.index), node.getBoundingClientRect().height);
+      });
+    },
+    [virtualizer],
+  );
 
   // An assistant bubble is keyed by its first item, so a history page that
   // continues the top turn renames it. Keep rendering it under the key its row
@@ -1082,7 +1126,7 @@ export function VirtualBubbleList({
             isLastAssistant={index === lastAssistantIndex}
             showsWorking={showsWorking && index === lastAssistantIndex}
             actionsPersistent={
-              index === lastMessageIndex && bubble.kind === "assistant" && sessionIdle
+              index === lastMessageIndex && bubble.kind === "assistant" && actionsPersist
             }
           />
         ))}
@@ -1113,7 +1157,7 @@ export function VirtualBubbleList({
             key={rowKey(bubble)}
             data-index={item.index}
             data-bubble-key={rowKey(bubble)}
-            ref={virtualizer.measureElement}
+            ref={measureRow}
             className="relative"
           >
             <BubbleView
@@ -1121,7 +1165,7 @@ export function VirtualBubbleList({
               isLastAssistant={item.index === lastAssistantIndex}
               showsWorking={showsWorking && item.index === lastAssistantIndex}
               actionsPersistent={
-                item.index === lastMessageIndex && bubble.kind === "assistant" && sessionIdle
+                item.index === lastMessageIndex && bubble.kind === "assistant" && actionsPersist
               }
             />
           </div>
