@@ -2607,6 +2607,47 @@ class CodexNativeAppServer:
                 # runtime may consult.
                 auth_path.write_text("{}\n", encoding="utf-8")
                 os.chmod(auth_path, 0o600)
+        else:
+            # An official-model session leaves the session home's auth.json on
+            # its own. A previous local-model run in this same home wrote an
+            # empty ``{}`` (the isolated-credential marker above) before the
+            # user logged in. Codex then reports "Your access token could not
+            # be refreshed because you have since logged out or signed in to
+            # another account" on every turn, even though the shared login is
+            # valid. Re-point the empty marker at the real login; a session
+            # home that already carries a usable credential is left alone.
+            auth_path = self.codex_home / "auth.json"
+            source_auth = _codex_home_config_source_from_env() / "auth.json"
+            if (
+                _is_empty_auth_marker(auth_path)
+                and not auth_path.is_symlink()
+                and source_auth.is_file()
+                and _auth_has_credential(source_auth)
+            ):
+                try:
+                    auth_path.unlink()
+                    auth_path.symlink_to(source_auth.resolve())
+                    _logger.info(
+                        "codex-native: replaced the empty session auth marker with the "
+                        "shared Codex login (%s)",
+                        auth_path,
+                    )
+                except OSError:
+                    import shutil
+
+                    try:
+                        shutil.copy2(source_auth, auth_path)
+                        _logger.info(
+                            "codex-native: copied the shared Codex login over the empty "
+                            "session auth marker (%s)",
+                            auth_path,
+                        )
+                    except OSError:  # noqa: BLE001 - a repair failure is not fatal here
+                        _logger.warning(
+                            "codex-native: could not repair the empty session auth marker "
+                            "at %s; Codex will ask the user to sign in again.",
+                            auth_path,
+                        )
         compose_profile_instructions = _materialize_codex_profile_for_start(
             self.codex_home,
             config_source,
@@ -4601,6 +4642,9 @@ def _codex_provider_launch(entry: ProviderEntry, model: str | None) -> NativeCod
     )
 
 
+# Largest file still treated as the empty ``{}`` session-home auth marker.
+# A real ``auth.json`` (tokens included) is kilobytes; the marker is 3 bytes.
+_EMPTY_AUTH_MARKER_MAX_BYTES = 64
 _OPENAI_NATIVE_HOST = "api.openai.com"
 # Model-id prefixes that name an OpenAI-vendor model MultiDex serves natively.
 # ``gpt-*`` / ``chatgpt-*`` / ``o<digit>`` are OpenAI's own shapes; the
@@ -4719,6 +4763,49 @@ def _first_routable_codex_provider(
             )
             return launch
     return None
+
+
+def _is_empty_auth_marker(auth_path: object) -> bool:
+    """Whether *auth_path* is the empty ``{}`` marker, not a real login.
+
+    :func:`_populate_codex_home_config` writes ``{}`` into a session home to
+    stop Codex falling back to ``$HOME/.codex/auth.json`` when a provider bearer
+    is the only credential a local-model run may consult. Codex accepts that
+    file as parsed-but-empty login state, so a later official-model launch in
+    the same home fails token refresh instead of using the shared login.
+
+    :param auth_path: The session home's ``auth.json``.
+    :returns: ``True`` for a regular file that parses to an empty JSON object.
+    """
+    import json
+    from pathlib import Path
+
+    path = Path(auth_path)  # type: ignore[arg-type]
+    try:
+        if not path.is_file() or path.is_symlink():
+            return False
+        if path.stat().st_size > _EMPTY_AUTH_MARKER_MAX_BYTES:
+            return False
+        parsed = json.loads(path.read_text(encoding="utf-8") or "{}")
+    except (OSError, ValueError):
+        return False
+    return isinstance(parsed, dict) and not parsed
+
+
+def _auth_has_credential(auth_path: object) -> bool:
+    """Whether *auth_path* carries a usable Codex credential.
+
+    Thin wrapper over :func:`omnigent.onboarding.ambient.codex_auth_has_credential`
+    so the launch path and the readiness checks agree on what a login is.
+
+    :param auth_path: Path to a Codex ``auth.json``.
+    :returns: ``True`` when the file holds a usable credential.
+    """
+    from pathlib import Path
+
+    from omnigent.onboarding.ambient import codex_auth_has_credential
+
+    return codex_auth_has_credential(Path(auth_path))  # type: ignore[arg-type]
 
 
 def _codex_login_usable() -> bool:
