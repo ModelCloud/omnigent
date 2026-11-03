@@ -84,6 +84,38 @@ def question(task, **overrides):
     )
 
 
+@pytest.mark.parametrize("character", ["x", "\U00010000"], ids=["ascii", "multibyte"])
+@pytest.mark.parametrize("length", [321, 16_384])
+def test_owner_id_length_bound_prevents_partial_creation(db_uri, character, length):
+    from sqlalchemy import select
+
+    from omnigent.db.bgr_models import SqlBgrAgent
+
+    store = BgrStore(db_uri)
+    body = TeamCreate(team_id=TEAM, config=CONFIG)
+    with pytest.raises(OmnigentError, match="320 characters") as error:
+        store.create(character * length, BRAIN, body)
+    assert error.value.code == ErrorCode.INVALID_INPUT
+    with get_or_create_engine(db_uri).connect() as connection:
+        for table in (SqlBgrTeam, SqlBgrAgent):
+            assert (
+                connection.scalar(select(table.id).where(table.workspace_id == 0).limit(1)) is None
+            )
+
+    owner = character * 320
+    team = store.create(owner, BRAIN, body)
+    assert team.owner_id == owner
+    assert store.create(owner, BRAIN, body) == team
+    assert BgrStore(db_uri).get_team(owner, BRAIN, TEAM) == team
+    with get_or_create_engine(db_uri).connect() as connection:
+        persisted = connection.scalar(
+            select(SqlBgrTeam.owner_id).where(SqlBgrTeam.workspace_id == 0, SqlBgrTeam.id == TEAM)
+        )
+        assert persisted == owner
+        assert len(persisted) == 320
+        assert len(persisted.encode("utf-8")) <= 1280
+
+
 @pytest.mark.parametrize(
     "table_name",
     [

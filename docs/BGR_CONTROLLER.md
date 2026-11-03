@@ -26,6 +26,11 @@ in the ledger. Compressible documents larger than 16,383 uncompressed bytes
 remain valid if their stored frame fits. The separate 8000-byte envelope payload
 and contract-delivery limits remain unchanged.
 
+The separately stored owner ID is limited to 320 Unicode characters before any
+team creation writes (at most 1280 UTF-8 bytes). Oversized identities return
+`invalid_input` without partial team/brain rows. This BGR-local limit does not
+change authentication or user IDs elsewhere.
+
 The indexed timestamp columns are `BIGINT` Unix epoch microseconds:
 `lease_expires_at_us`, `consumed_at_us`, `replied_at_us`, `discarded_at_us`.
 Lease comparisons and timestamp writes use integers; JSON/API timestamps retain

@@ -128,6 +128,11 @@ class BgrStore:
         return int(Decimal(str(self._clock())) * _MICROSECONDS)
 
     def create(self, user_id: str, session_id: str, body: TeamCreate) -> Team:
+        if len(user_id) > 320:
+            raise OmnigentError(
+                "BGR owner ID must not exceed 320 characters", code=ErrorCode.INVALID_INPUT
+            )
+
         def apply(db: Session) -> Team:
             row = db.get(SqlBgrTeam, (current_workspace_id(), body.team_id))
             if row is not None:
