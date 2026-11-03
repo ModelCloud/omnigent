@@ -172,6 +172,7 @@ from omnigent.stores import (
     ConversationStore,
     FileStore,
 )
+from omnigent.stores.bgr_store import BgrStore
 from omnigent.stores.comment_store import CommentStore
 from omnigent.stores.conversation_store import (
     ConversationNotFoundError,
@@ -1583,6 +1584,7 @@ def create_app(
     default_agents_seeded: bool = False,
     suppressed_agent_names: frozenset[str] = frozenset(),
     preference_store: PreferenceStore | None = None,
+    bgr_store: BgrStore | None = None,
     preference_policy: PreferencePolicy = DEFAULT_PREFERENCE_POLICY,
     scheduled_task_dispatch: ScheduledTaskDispatchHooks | None = None,
     scheduled_task_scheduler_config: ScheduledTaskSchedulerConfig | None = None,
@@ -3971,6 +3973,14 @@ def create_app(
             tags=["projects"],
         )
 
+    if bgr_store is not None:
+        from omnigent.server.routes.bgr import create_bgr_router
+
+        app.include_router(
+            create_bgr_router(bgr_store, conversation_store, permission_store, auth_provider),
+            prefix="/v1",
+            tags=["bgr"],
+        )
     if preference_store is not None:
         app.include_router(
             create_preferences_router(preference_store, auth_provider, policy=preference_policy),

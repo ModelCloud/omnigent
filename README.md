@@ -390,6 +390,11 @@ She's the tech lead: she plans, delegates the work to coding sub-agents
 (Claude Code, Codex, or Pi) in parallel git worktrees, then routes each diff
 to a reviewer from a different vendor than the one that wrote it. You merge.
 
+The separate [BGR controller foundation](docs/BGR_CONTROLLER.md) provides a durable,
+owner-authorized team/task ledger and mailbox. It is not a selectable execution
+mode yet: worker lifecycle, runtime role enforcement and independent reviewers
+remain staged follow-ups; Polly is unchanged.
+
 **🟠🔵 Debby** is a brainstorming partner with two heads, one Claude and one GPT.
 Every question you ask goes to both heads, and she lays the two answers out
 side by side. Type `/debate` and the heads critique each other for a few

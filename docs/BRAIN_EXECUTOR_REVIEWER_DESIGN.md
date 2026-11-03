@@ -1,8 +1,10 @@
 # BGR: brain, grunts, and reviewers
 
-Status: **design proposal only**. This document introduces no runtime behavior,
-configuration keys, API endpoints, UI, or automation. All interfaces below are
-proposed, not currently supported.
+Status: **design with a staged ledger implementation**. The full execution mode
+below remains proposed. The implemented, owner-authorized SQL ledger and mailbox
+APIs are documented in [BGR controller foundation](BGR_CONTROLLER.md). They do not
+launch workers, enforce runtime roles, deliver safe-boundary callbacks, or provide
+independent review. BGR is not selectable in the UI yet.
 
 Companion: [MultiDex execution contract](https://github.com/ModelCloud/MultiDex/blob/design/brain-executor-reviewer-contract/docs/brain-executor-reviewer-design.md).
 
