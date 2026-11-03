@@ -224,6 +224,15 @@ only same-app-server `bgr/message/send` are refused, not given a fake
 client with `experimentalApi:true` before negotiating (the existing client
 already does this).
 
+Compatibility is pinned by the captured mock-provider native exchange from
+[MultiDex 5e1d8040](https://github.com/ModelCloud/MultiDex/commit/5e1d8040f7ea52f3f1e0bd9ad4ef24040a3ad418),
+retained in `tests/harnesses/codex_native/bgr-native-conformance.json`. Adapter
+tests negotiate its unmodified capability document, including the report tool's
+draft-07 schema, `definitions` and `$ref`, and preserve it in startup options.
+The captured delivery, receipt and notification also round-trip through SQL,
+rebinding only routing identities to the test reservation. This fixture is not
+a live cross-provider execution test and adds no runtime feature exposure.
+
 ### Capabilities, mapping and startup obligations
 
 `await CodexNativeBgrAdapter.negotiate(request, store, user_id=...,

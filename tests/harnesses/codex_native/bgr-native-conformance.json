@@ -1,0 +1,188 @@
+{
+  "capabilitiesRead": {
+    "result": {
+      "crossHostDelivery": false,
+      "durableMailbox": false,
+      "hostDelivery": true,
+      "liveReattach": true,
+      "maxQueriesPerAttempt": 128,
+      "messageKinds": [
+        "status_query",
+        "status_reply"
+      ],
+      "reportTool": {
+        "description": "Answer a received BGR status_query at a safe boundary, then continue the same assignment. Use its messageId as inReplyTo. This is not task completion. Report only observed evidence and explicitly list coverage limits.",
+        "inputSchema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "additionalProperties": false,
+          "definitions": {
+            "BgrStatusReply": {
+              "additionalProperties": false,
+              "properties": {
+                "blockers": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "completed": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "coverageLimits": {
+                  "description": "Must describe missing evidence; scoped history is not synthesized by the backend.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "currentAction": {
+                  "type": "string"
+                },
+                "dirty": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "headSha": {
+                  "description": "Worker-supplied evidence, not a backend attestation of repository state.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "pending": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "blockers",
+                "completed",
+                "coverageLimits",
+                "currentAction",
+                "pending"
+              ],
+              "type": "object"
+            }
+          },
+          "properties": {
+            "inReplyTo": {
+              "type": "string"
+            },
+            "messageId": {
+              "type": "string"
+            },
+            "payload": {
+              "$ref": "#/definitions/BgrStatusReply"
+            }
+          },
+          "required": [
+            "inReplyTo",
+            "messageId",
+            "payload"
+          ],
+          "title": "BgrReportStatusArgs",
+          "type": "object"
+        },
+        "name": "bgr_report_status",
+        "type": "function"
+      },
+      "restartRecovery": false,
+      "reviewerSandbox": false,
+      "roles": [
+        "brain",
+        "grunt"
+      ],
+      "statusScopes": [
+        "now"
+      ],
+      "taskDispatch": false,
+      "version": 1
+    }
+  },
+  "messageDeliver": {
+    "params": {
+      "envelope": {
+        "correlationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "identity": {
+          "agentId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "attemptId": "44444444444444444444444444444444",
+          "epoch": 1,
+          "role": "grunt",
+          "sessionId": "22222222222222222222222222222222",
+          "taskId": "33333333333333333333333333333333",
+          "teamId": "00000000000000000000000000000000"
+        },
+        "inReplyTo": null,
+        "kind": "status_query",
+        "messageId": "cccccccccccccccccccccccccccccccc",
+        "payload": {
+          "scope": "now"
+        },
+        "recipientAgentId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "senderAgentId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": 1
+      },
+      "sender": {
+        "agentId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "epoch": 1,
+        "role": "brain",
+        "sessionId": "11111111111111111111111111111111",
+        "teamId": "00000000000000000000000000000000"
+      },
+      "threadId": "01a19f34-de81-7b10-b756-c97e25e52481"
+    },
+    "result": {
+      "accepted": true,
+      "duplicate": false,
+      "messageId": "cccccccccccccccccccccccccccccccc"
+    }
+  },
+  "messageNotification": {
+    "method": "bgr/message",
+    "params": {
+      "envelope": {
+        "correlationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "identity": {
+          "agentId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "attemptId": "44444444444444444444444444444444",
+          "epoch": 1,
+          "role": "grunt",
+          "sessionId": "22222222222222222222222222222222",
+          "taskId": "33333333333333333333333333333333",
+          "teamId": "00000000000000000000000000000000"
+        },
+        "inReplyTo": "cccccccccccccccccccccccccccccccc",
+        "kind": "status_reply",
+        "messageId": "dddddddddddddddddddddddddddddddd",
+        "payload": {
+          "blockers": [],
+          "completed": [
+            "held tool"
+          ],
+          "coverageLimits": [
+            "self-reported current state"
+          ],
+          "currentAction": "continuing task",
+          "dirty": null,
+          "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "pending": [
+            "assignment remains active"
+          ]
+        },
+        "recipientAgentId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "senderAgentId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "version": 1
+      },
+      "threadId": "01a19f34-de81-7b10-b756-c97e25e52481"
+    }
+  }
+}

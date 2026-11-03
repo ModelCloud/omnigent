@@ -6,6 +6,7 @@ import asyncio
 import copy
 import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -33,34 +34,10 @@ from tests.stores.test_bgr_store import (
 
 FENCE = Fence(controller_id=CONTROLLER, epoch=1)
 THREAD = "12345678-1234-1234-1234-123456789abc"
-CAPABILITIES = {
-    "version": 1,
-    "roles": ["brain", "grunt"],
-    "statusScopes": ["now"],
-    "messageKinds": ["status_query", "status_reply"],
-    "hostDelivery": True,
-    "liveReattach": True,
-    "durableMailbox": False,
-    "restartRecovery": False,
-    "reviewerSandbox": False,
-    "crossHostDelivery": False,
-    "taskDispatch": False,
-    "maxQueriesPerAttempt": 128,
-    "reportTool": {
-        "type": "function",
-        "name": "bgr_report_status",
-        "description": "Report observed status",
-        "inputSchema": {
-            "type": "object",
-            "required": ["messageId", "inReplyTo", "payload"],
-            "properties": {
-                "messageId": {"type": "string"},
-                "inReplyTo": {"type": "string"},
-                "payload": {"type": "object"},
-            },
-        },
-    },
-}
+NATIVE_CONFORMANCE = json.loads(
+    Path(__file__).with_name("bgr-native-conformance.json").read_text(encoding="utf-8")
+)
+CAPABILITIES = NATIVE_CONFORMANCE["capabilitiesRead"]["result"]
 
 
 @pytest.fixture
@@ -251,6 +228,56 @@ async def test_external_brain_query_roundtrip_replay_and_explicit_consumption(
         "bgr/thread/inspect",
         "bgr/message/deliver",
     }
+
+
+async def test_captured_native_host_delivery_contract(ledger, worker, db_uri):
+    rpc = WorkerRpc()
+    bridge = await bound(ledger, worker, rpc)
+    expected = copy.deepcopy(NATIVE_CONFORMANCE["messageDeliver"]["params"])
+    wire = expected["envelope"]
+    query = persist_query(
+        ledger,
+        worker,
+        message_id=wire["messageId"],
+        correlation_id=wire["correlationId"],
+        head_sha=wire["headSha"],
+    )
+    assignment = ledger.native_assignment(OWNER, BRAIN, TEAM, worker.attempt.attempt_id, FENCE)
+    # Rebind only captured routing identities to this test's real reservation.
+    expected["threadId"] = THREAD
+    expected["sender"].update(teamId=TEAM, agentId=assignment.team.brain_agent_id, sessionId=BRAIN)
+    wire.update(
+        identity=rpc.identity,
+        senderAgentId=assignment.team.brain_agent_id,
+        recipientAgentId=worker.attempt.agent_id,
+    )
+    rpc.receipt_override = NATIVE_CONFORMANCE["messageDeliver"]["result"]
+    assert await bridge.deliver(worker.attempt.attempt_id, query.message_id) is False
+    assert rpc.calls[-1] == ("bgr/message/deliver", expected)
+
+    captured = NATIVE_CONFORMANCE["messageNotification"]
+    assert captured["method"] == "bgr/message"
+    notification = copy.deepcopy(captured["params"])
+    notification["threadId"] = THREAD
+    notification["envelope"].update(
+        identity=rpc.identity,
+        senderAgentId=worker.attempt.agent_id,
+        recipientAgentId=assignment.team.brain_agent_id,
+    )
+    receipt = bridge.receive_notification(worker.attempt.attempt_id, notification)
+    restarted = await adapter(BgrStore(db_uri), rpc)
+    assert restarted.receive_notification(worker.attempt.attempt_id, notification) == receipt
+    reply = ledger.drain(OWNER, BRAIN, TEAM)[0]
+    assert reply.head_sha == query.head_sha
+    payload = reply.payload.copy()
+    assert payload.pop("native_provenance") == {
+        "thread_id": THREAD,
+        "message_id": notification["envelope"]["messageId"],
+    }
+    assert payload == captured["params"]["envelope"]["payload"]
+    assert payload["headSha"] != query.head_sha
+    pending = ledger.drain(OWNER, worker.attempt.session_id, TEAM)[1]
+    assert pending.consumed_at is None and pending.replied_at is not None
 
 
 @pytest.mark.parametrize(
