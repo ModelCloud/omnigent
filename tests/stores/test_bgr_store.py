@@ -2,6 +2,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta, timezone
+from random import Random
 from uuid import uuid4
 
 import pytest
@@ -25,7 +26,10 @@ from omnigent.bgr import (
     Workspace,
 )
 from omnigent.db import workspace_scope
-from omnigent.errors import OmnigentError
+from omnigent.db.bgr_models import SqlBgrEnvelope, SqlBgrTeam
+from omnigent.db.compression import encode
+from omnigent.db.utils import get_or_create_engine
+from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.stores import bgr_store
 from omnigent.stores.bgr_store import BgrStore
 
@@ -78,6 +82,353 @@ def question(task, **overrides):
             **overrides,
         }
     )
+
+
+@pytest.mark.parametrize(
+    "table_name",
+    [
+        "bgr_teams",
+        "bgr_agents",
+        "bgr_tasks",
+        "bgr_attempts",
+        "bgr_envelopes",
+        "bgr_native_bindings",
+    ],
+)
+def test_all_documents_enforce_actual_stored_byte_cap(table_name, db_uri):
+    from sqlalchemy import update
+    from sqlalchemy.exc import StatementError
+
+    from omnigent.db import OmnigentBase
+
+    random = Random(0)
+    text = "".join(chr(random.randrange(0x10000, 0x10FFFF)) for _ in range(10_000))
+    low, high = 0, len(text)
+    while high - low > 1:
+        middle = (low + high) // 2
+        if len(encode(text[:middle])) <= 16_383:
+            low = middle
+        else:
+            high = middle
+    table = OmnigentBase.metadata.tables[table_name]
+    column_type = table.c.document.type
+    assert len(text[:low].encode()) > 16_383
+    assert len(encode(text[:low])) <= 16_383 < len(encode(text[:high]))
+    assert column_type.process_bind_param(text[:low], None) == encode(text[:low])
+    with get_or_create_engine(db_uri).begin() as connection:
+        with pytest.raises(StatementError, match="size limit"):
+            connection.execute(
+                update(table)
+                .where(
+                    table.c.workspace_id == 0,
+                    table.c.id == "f" * 32,
+                )
+                .values(document=text[:high])
+            )
+
+
+@pytest.mark.parametrize("mutation", ["create", "configure"])
+def test_oversized_profile_documents_roll_back_atomically(db_uri, mutation):
+    from sqlalchemy import func, select
+
+    from omnigent.db.bgr_models import SqlBgrAgent
+
+    random = Random(0)
+    profiles = [
+        Profile(
+            **{
+                field: "".join(chr(random.randrange(0x10000, 0x10FFFF)) for _ in range(256))
+                for field in Profile.model_fields
+            }
+        )
+        for _ in range(4)
+    ]
+    initial = TeamConfig(brain=profiles[0], grunt=PROFILE, reviewers=[PROFILE])
+    oversized = TeamConfig(brain=profiles[0], grunt=profiles[1], reviewers=profiles[2:])
+    assert len(encode(oversized.model_dump_json())) > 16_383
+    store = BgrStore(db_uri)
+    if mutation == "configure":
+        store.create(OWNER, BRAIN, TeamCreate(team_id=TEAM, config=initial))
+        store.acquire(OWNER, BRAIN, TEAM, LeaseRequest(controller_id=CONTROLLER))
+    with pytest.raises(OmnigentError, match="16383 stored bytes") as error:
+        if mutation == "create":
+            store.create(OWNER, BRAIN, TeamCreate(team_id=TEAM, config=oversized))
+        else:
+            store.configure(
+                OWNER,
+                BRAIN,
+                TEAM,
+                ConfigUpdate(
+                    controller_id=CONTROLLER,
+                    epoch=1,
+                    config=oversized,
+                ),
+            )
+    assert error.value.code == ErrorCode.INVALID_INPUT
+    with get_or_create_engine(db_uri).connect() as connection:
+        for table in (SqlBgrTeam, SqlBgrAgent):
+            assert connection.scalar(select(func.count()).select_from(table)) == (
+                1 if mutation == "configure" else 0
+            )
+    if mutation == "configure":
+        assert BgrStore(db_uri).get_team(OWNER, BRAIN, TEAM).config == initial
+    else:
+        assert (
+            store.create(OWNER, BRAIN, TeamCreate(team_id=TEAM, config=initial)).config == initial
+        )
+
+
+def test_oversized_checkpoint_preserves_assignment_and_allows_smaller_retry(store, db_uri):
+    random = Random(0)
+
+    def text(length):
+        return "".join(chr(random.randrange(0x10000, 0x10FFFF)) for _ in range(length))
+
+    profile = Profile(**{field: text(256) for field in Profile.model_fields})
+    task = store.reserve(
+        OWNER,
+        BRAIN,
+        TEAM,
+        reservation(
+            profile=profile,
+            workspace=Workspace(
+                host_id=text(128),
+                repository=text(256),
+                worktree="/" + text(1023),
+                base_sha=SHA,
+            ),
+        ),
+    )
+    checkpoint = Checkpoint(
+        attempt_id=task.attempt.attempt_id,
+        epoch=1,
+        phase=text(256),
+        summary=text(2000),
+        artifact_refs=[text(256) for _ in range(16)],
+    )
+    document = task.attempt.model_copy(update={"checkpoint": checkpoint}).model_dump_json()
+    assert len(encode(document)) > 16_383
+    before = store.recover(OWNER, BRAIN, TEAM)
+    with pytest.raises(OmnigentError, match="16383 stored bytes") as error:
+        store.checkpoint(OWNER, task.attempt.session_id, TEAM, checkpoint)
+    assert error.value.code == ErrorCode.INVALID_INPUT
+    restarted = BgrStore(db_uri)
+    assert restarted.recover(OWNER, BRAIN, TEAM) == before
+    small = Checkpoint(
+        attempt_id=task.attempt.attempt_id,
+        epoch=1,
+        phase="test",
+        summary="é" * 2000,
+        artifact_refs=["artifact:evidence"],
+    )
+    assert restarted.checkpoint(OWNER, task.attempt.session_id, TEAM, small).checkpoint == small
+
+
+def test_integer_microseconds_preserve_lease_and_mailbox_boundaries(db_uri):
+    from sqlalchemy import select
+
+    now = [1000.123456]
+    store = BgrStore(db_uri, clock=lambda: now[0])
+    store.create(OWNER, BRAIN, TeamCreate(team_id=TEAM, config=CONFIG))
+    lease = store.acquire(
+        OWNER, BRAIN, TEAM, LeaseRequest(controller_id=CONTROLLER, ttl_seconds=5)
+    )
+    assert lease.lease_expires_at == 1005.123456
+    task = store.reserve(OWNER, BRAIN, TEAM, reservation())
+    delivery = store.drain(OWNER, task.attempt.session_id, TEAM)[0]
+    assert delivery.created_at == now[0]
+    acked = store.ack(
+        OWNER, task.attempt.session_id, TEAM, Ack(envelope_id=delivery.envelope_id, epoch=1)
+    )
+    assert acked.consumed_at == 1000.123456
+    query = question(task)
+    store.send(OWNER, BRAIN, TEAM, query)
+    store.send(
+        OWNER,
+        task.attempt.session_id,
+        TEAM,
+        query.model_copy(
+            update={
+                "message_id": uuid4().hex,
+                "recipient_agent_id": store.get_team(OWNER, BRAIN, TEAM).brain_agent_id,
+                "controller_id": None,
+                "kind": "status_reply",
+                "in_reply_to": query.message_id,
+                "payload": {"status": "working"},
+            }
+        ),
+    )
+    with get_or_create_engine(db_uri).connect() as connection:
+        assert connection.scalar(select(SqlBgrTeam.lease_expires_at_us)) == 1_005_123_456
+        assert (
+            connection.scalar(
+                select(SqlBgrEnvelope.consumed_at_us).where(
+                    SqlBgrEnvelope.id == delivery.envelope_id,
+                )
+            )
+            == 1_000_123_456
+        )
+        assert (
+            connection.scalar(
+                select(SqlBgrEnvelope.replied_at_us).where(
+                    SqlBgrEnvelope.message_id == query.message_id,
+                )
+            )
+            == 1_000_123_456
+        )
+    now[0] = 1005.123455
+    store.reserve(OWNER, BRAIN, TEAM, reservation())
+    now[0] = 1005.123456
+    with pytest.raises(OmnigentError, match="epoch"):
+        store.reserve(OWNER, BRAIN, TEAM, reservation())
+    assert store.acquire(OWNER, BRAIN, TEAM, LeaseRequest(controller_id=CONTROLLER)).epoch == 2
+    stale = store.drain(OWNER, task.attempt.session_id, TEAM)[0]
+    evidence = store.discard(
+        OWNER,
+        task.attempt.session_id,
+        TEAM,
+        MailboxDiscard(
+            epoch=2,
+            envelope_ids=[stale.envelope_id],
+            reason="superseded",
+        ),
+    )[0].discard
+    assert evidence is not None and evidence.discarded_at == now[0]
+    with get_or_create_engine(db_uri).connect() as connection:
+        assert (
+            connection.scalar(
+                select(SqlBgrEnvelope.discarded_at_us).where(
+                    SqlBgrEnvelope.id == stale.envelope_id,
+                )
+            )
+            == 1_005_123_456
+        )
+
+
+def test_recovery_keyset_pages_are_indexed_bounded_and_restart_safe(store, db_uri, monkeypatch):
+    from sqlalchemy import event
+
+    tasks = []
+    for _ in range(3):
+        task = store.reserve(OWNER, BRAIN, TEAM, reservation())
+        tasks.append(task)
+        store.close(
+            OWNER,
+            BRAIN,
+            TEAM,
+            TaskClose(
+                controller_id=CONTROLLER,
+                epoch=1,
+                attempt_id=task.attempt.attempt_id,
+                outcome="completed",
+                stop_confirmed=True,
+            ),
+        )
+    expected_tasks = sorted(task.task_id for task in tasks)
+    monkeypatch.setattr(bgr_store, "MAX_TASKS", 1)
+    monkeypatch.setattr(bgr_store, "MAX_ENVELOPES", 1)
+    statements = []
+
+    def capture(connection, cursor, statement, parameters, context, executemany):
+        if statement.startswith("SELECT") and "bgr_" in statement:
+            statements.append((statement, parameters))
+
+    engine = get_or_create_engine(db_uri)
+    event.listen(engine, "before_cursor_execute", capture)
+    cursor = None
+    seen_tasks, seen_agents = [], []
+    try:
+        for page_number in range(4):
+            restarted = BgrStore(db_uri)
+            page = restarted.recover(OWNER, BRAIN, TEAM, limit=1, cursor=cursor)
+            assert restarted.recover(OWNER, BRAIN, TEAM, limit=1, cursor=cursor) == page
+            assert len(page.tasks) <= 1 and len(page.agents) == 1
+            assert page.pending_envelopes == 1 and page.pending_envelopes_has_more
+            for task in page.tasks:
+                assert task.attempt == next(
+                    t.attempt for t in tasks if t.task_id == task.task_id
+                ).model_copy(
+                    update={"state": "completed"},
+                )
+            seen_tasks.extend(task.task_id for task in page.tasks)
+            seen_agents.extend(agent.agent_id for agent in page.agents)
+            cursor = page.next_cursor
+            assert (cursor is None) == (page_number == 3)
+        assert seen_tasks == expected_tasks
+        assert seen_agents == sorted(set(seen_agents)) and len(seen_agents) == 4
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+    with engine.connect() as connection:
+        for statement, parameters in statements:
+            assert "count(" not in statement.lower()
+            if any(
+                f"FROM {table}" in statement
+                for table in (
+                    "bgr_agents",
+                    "bgr_tasks",
+                    "bgr_envelopes",
+                )
+            ):
+                assert "LIMIT" in statement and parameters[-2:] == (2, 0)
+            if "FROM bgr_attempts" in statement:
+                assert "task_id IN" in statement and len(parameters) == 2
+            plan = connection.exec_driver_sql("EXPLAIN QUERY PLAN " + statement, parameters).all()
+            assert all("SEARCH" in step[-1] for step in plan), plan
+
+
+def test_recovery_empty_pages_cursor_validation_and_isolation(store, db_uri):
+    empty = store.recover(OWNER, BRAIN, TEAM, limit=1)
+    assert empty.tasks == [] and len(empty.agents) == 1 and empty.next_cursor is None
+    assert empty.pending_envelopes == 0 and not empty.pending_envelopes_has_more
+    task = store.reserve(OWNER, BRAIN, TEAM, reservation())
+    first = store.recover(OWNER, BRAIN, TEAM, limit=1)
+    assert first.next_cursor is not None
+    for limit in (0, 101):
+        with pytest.raises(ValueError, match="limit"):
+            store.recover(OWNER, BRAIN, TEAM, limit=limit)
+    for cursor in ("!", "☃", "e30=", "x" * 1025):
+        with pytest.raises(OmnigentError, match="cursor"):
+            store.recover(OWNER, BRAIN, TEAM, cursor=cursor)
+    for user, session in (("mallory", BRAIN), (OWNER, task.attempt.session_id)):
+        with pytest.raises(OmnigentError):
+            store.recover(user, session, TEAM, cursor=first.next_cursor)
+    foreign_team, foreign_brain = uuid4().hex, uuid4().hex
+    store.create(OWNER, foreign_brain, TeamCreate(team_id=foreign_team, config=CONFIG))
+    with pytest.raises(OmnigentError, match="cursor"):
+        store.recover(OWNER, foreign_brain, foreign_team, cursor=first.next_cursor)
+    with workspace_scope(9):
+        isolated = BgrStore(db_uri)
+        isolated.create(OWNER, BRAIN, TeamCreate(team_id=TEAM, config=CONFIG))
+        with pytest.raises(OmnigentError, match="cursor"):
+            isolated.recover(OWNER, BRAIN, TEAM, cursor=first.next_cursor)
+        assert isolated.recover(OWNER, BRAIN, TEAM).tasks == []
+
+
+def test_reservation_and_mailbox_capacity_checks_use_bounded_indexed_lookups(store, db_uri):
+    from sqlalchemy import event
+
+    statements = []
+
+    def capture(connection, cursor, statement, parameters, context, executemany):
+        if statement.startswith(("SELECT bgr_attempts.id", "SELECT bgr_envelopes.id")):
+            statements.append((statement, parameters))
+
+    engine = get_or_create_engine(db_uri)
+    event.listen(engine, "before_cursor_execute", capture)
+    try:
+        task = store.reserve(OWNER, BRAIN, TEAM, reservation())
+        query = question(task)
+        receipt = store.send(OWNER, BRAIN, TEAM, query)
+        assert store.send(OWNER, BRAIN, TEAM, query) == receipt
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+    assert len(statements) == 6
+    with engine.connect() as connection:
+        for statement, parameters in statements:
+            assert "LIMIT" in statement and "count(" not in statement.lower()
+            plan = connection.exec_driver_sql("EXPLAIN QUERY PLAN " + statement, parameters).all()
+            assert all("SEARCH" in step[-1] for step in plan), plan
+            assert "TEMP B-TREE" not in str(plan)
 
 
 def test_atomic_reservation_and_restart_receipt(store, db_uri):

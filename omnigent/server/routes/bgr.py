@@ -69,9 +69,14 @@ def create_bgr_router(
         return store.create(user, session, body)
 
     @router.get("/teams/{team_id}")
-    def recover(request: Request, team_id: Identifier) -> Recovery:
+    def recover(
+        request: Request,
+        team_id: Identifier,
+        limit: Annotated[int, Query(ge=1, le=100)] = 50,
+        cursor: Annotated[str, Query(max_length=1024)] | None = None,
+    ) -> Recovery:
         user, session = source(request)
-        return store.recover(user, session, team_id)
+        return store.recover(user, session, team_id, limit=limit, cursor=cursor)
 
     @router.post("/teams/{team_id}/lease")
     def acquire(request: Request, team_id: Identifier, body: LeaseRequest) -> Team:
@@ -87,7 +92,7 @@ def create_bgr_router(
     def reserve(request: Request, team_id: Identifier, body: TaskReserve) -> Task:
         user, session = source(request)
         # This registers an existing child, never creates or starts a process.
-        store.recover(user, session, team_id)
+        store.get_team(user, session, team_id)
         assert permissions is not None
         child = require_owned_session(
             body.session_id, user, conversations, permissions, private=True
@@ -153,7 +158,7 @@ def create_bgr_router(
     @router.post("/teams/{team_id}/launch")
     def launch(request: Request, team_id: Identifier) -> None:
         user, session = source(request)
-        store.recover(user, session, team_id)
+        store.get_team(user, session, team_id)
         raise OmnigentError(
             "BGR execution is unavailable: role enforcement, safe-boundary delivery "
             "and reviewer isolation are not implemented",

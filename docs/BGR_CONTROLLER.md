@@ -12,6 +12,40 @@ ledger is required. Normal database migration on startup installs the schema.
 The tables use application-database workspace scoping, including when transcript
 storage is configured separately.
 
+### Storage limits and schema review
+
+All six BGR document columns use the existing
+`CompressedText(max_stored_bytes=16_383)`. The limit applies to actual stored
+bytes, including UTF-8, compression and framing, on every insert and update.
+It covers embedded profiles, configuration and checkpoints as well as envelopes.
+Character limits alone do not guarantee acceptance: high-entropy multibyte text
+can exceed the stored-byte cap even with otherwise valid fields. A rejected
+mutation returns HTTP 400 `invalid_input`, with no partial reservation, revision
+or checkpoint update. Save large evidence in artifacts and keep small references
+in the ledger. Compressible documents larger than 16,383 uncompressed bytes
+remain valid if their stored frame fits. The separate 8000-byte envelope payload
+and contract-delivery limits remain unchanged.
+
+The indexed timestamp columns are `BIGINT` Unix epoch microseconds:
+`lease_expires_at_us`, `consumed_at_us`, `replied_at_us`, `discarded_at_us`.
+Lease comparisons and timestamp writes use integers; JSON/API timestamps retain
+Unix seconds for compatibility. The normal clock uses `now_epoch_us`; injected
+second-based test clocks are converted once at the store boundary. Workspace IDs
+are supplied explicitly by the application, never a database default. Native
+thread UUIDs use the existing binary `Uuid16` SQL type, while native-facing
+bindings and RPCs retain canonical lowercase hyphenated UUID strings.
+
+**Pre-merge compatibility:** the new BGR create-table migrations were corrected
+in place during review. They import only existing shared SQL helpers and run
+without BGR application records/stores. A database already created from earlier
+versions of these same unmerged revisions is **not** converted by `upgrade head`.
+Do not run this code against such a schema. Preserve its data and arrange an
+explicit conversion if needed; do not silently reset it or use downgrade as a
+data-preserving repair. Fresh databases and databases at the pre-BGR base are
+covered by upgrade/downgrade tests. The required standalone-schema PR extraction
+and database-owner approval remain pending; this combined PR is not ready to
+merge or deploy. No separate schema PR has been opened.
+
 ## Authentication and existing session integration
 
 Every endpoint uses the existing session-orchestration checks:
@@ -47,7 +81,7 @@ validation. Resource conflicts return 409; ownership failures return 403.
 | --- | --- |
 | `GET /capabilities` | Reports protocol 1, ledger/mailbox support, and explicit missing runtime capabilities |
 | `POST /teams` | Creates one brain and a profile/configuration snapshot; exact replay is idempotent (201) |
-| `GET /teams/{team_id}` | Brain-only recovery snapshot: team/lease, agents, tasks/attempts, pending envelope count |
+| `GET /teams/{team_id}?limit=50&cursor=...` | Brain-only bounded recovery page: team/lease, agents, tasks/attempts, pending envelope lower bound and continuation cursor |
 | `POST /teams/{team_id}/lease` | Acquires/renews a coordinator lease (`controller_id`, optional `ttl_seconds`, 5–300, default 60) |
 | `PUT /teams/{team_id}/configuration` | Fenced configuration update for future assignments; increments `config_revision` only on change |
 | `POST /teams/{team_id}/tasks` | Fenced, atomic grunt/task/attempt/workspace reservation **and task envelope** (201) |
@@ -84,6 +118,38 @@ worker can send on someone else's attempt. Terminal attempts reject checkpoints,
 reattachment and new sends. Historical mailbox operations and exact receipt/close
 replays grant no execution authority. Closing an old attempt again cannot release
 a replacement attempt's writer reservation.
+
+### Recovery pagination
+
+`GET /teams/{team_id}` accepts `limit` (1–100, default 50) and an optional opaque
+`cursor`. Each response contains at most `limit` agents and `limit` tasks, each
+ordered by ascending ID; every returned task includes its own attempt. Reads
+fetch only one lookahead per collection. Attempt lookups use at most `limit`
+unique workspace/task keys, not the team's complete attempt history. Team/ID
+and pending-mailbox indexes support the continuation and filtered reads.
+
+Pass `next_cursor` unchanged to continue, including after reconstructing the
+server/store. It tracks the two collections independently, so completing one
+does not restart it while the other continues. `next_cursor: null` means both
+collections are complete; an empty team returns just its brain and no task page.
+Malformed, oversized or foreign workspace/team cursors return `invalid_input`.
+Cursors grant no authority: each page rechecks ownership and the brain session.
+Recovery stays readable after lease expiry for explicit reconciliation.
+
+`pending_envelopes` is now **bounded**, not always an exact count: it is
+`min(current_pending, limit)`. `pending_envelopes_has_more: true` means additional
+unconsumed, undiscarded envelopes exist beyond that lower bound. This summary
+is recomputed on each request and is independent of the task/agent cursor;
+mailbox retrieval remains the recipient-only API for actual envelope delivery.
+No unbounded `COUNT(*)` is used. Reservation and send capacity checks also use
+indexed SQL limits instead of loading all historical attempts/envelopes. These
+bounds apply even if retained data exceeds a product quota.
+
+Continuation is deterministic for an unchanged ledger, **not a frozen multi-page
+snapshot**. Concurrent membership/assignment changes can introduce IDs behind a
+cursor or change returned attempt state. Fence competing controllers and restart
+from the first page when a complete current traversal is needed. No cursor is a
+lease, acknowledgement, scheduling instruction or runtime-resumption guarantee.
 
 ### Reservation example
 

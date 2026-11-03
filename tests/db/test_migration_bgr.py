@@ -1,6 +1,11 @@
 """The additive BGR migration preserves existing sessions and matches ORM metadata."""
 
+import runpy
+
+import pytest
 import sqlalchemy as sa
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 from alembic.script import ScriptDirectory
 
 from omnigent.db import OmnigentBase
@@ -51,6 +56,17 @@ def test_bgr_upgrade_downgrade_and_model_parity(database):
         }
         columns = {column["name"]: column for column in inspector.get_columns(table.name)}
         assert isinstance(columns["document"]["type"], sa.LargeBinary)
+        assert table.c.document.type.max_stored_bytes == 16_383
+        for column in columns.values():
+            assert column["default"] is None
+            assert not isinstance(column["type"], sa.Float)
+            if column["name"].endswith("_at_us"):
+                assert isinstance(column["type"], sa.BigInteger)
+        for index in inspector.get_indexes(table.name):
+            expected = next(i for i in table.indexes if i.name == index["name"])
+            assert index["column_names"] == [column.name for column in expected.columns]
+    native = {column["name"]: column for column in inspector.get_columns("bgr_native_bindings")}
+    assert isinstance(native["thread_id"]["type"], sa.LargeBinary)
     _migrate(uri, engine, "downgrade", "d0a1f879a01d")
     assert not any(name.startswith("bgr_") for name in sa.inspect(engine).get_table_names())
     with engine.connect() as connection:
@@ -63,6 +79,33 @@ def test_bgr_upgrade_downgrade_and_model_parity(database):
         )
     _migrate(uri, engine, "upgrade", "head")
     assert {table.name for table in models} <= set(sa.inspect(engine).get_table_names())
+
+
+def test_bgr_ddl_without_application_metadata(database):
+    uri, engine = database
+    scripts = ScriptDirectory.from_config(_build_alembic_config(uri))
+    revisions = ["e4b6c8d0f213", "f5c7d9e1a324", "a6d8e0f2b435"]
+    with engine.begin() as connection, Operations.context(MigrationContext.configure(connection)):
+        for revision in revisions:
+            namespace = runpy.run_path(scripts.get_revision(revision).path)
+            namespace["upgrade"]()
+        inspector = sa.inspect(connection)
+        assert (
+            len([table for table in inspector.get_table_names() if table.startswith("bgr_")]) == 6
+        )
+        for table in inspector.get_table_names():
+            assert all(column["default"] is None for column in inspector.get_columns(table))
+        with pytest.raises(sa.exc.IntegrityError):
+            connection.execute(
+                sa.text(
+                    "INSERT INTO bgr_native_bindings (id, team_id, thread_id, document) "
+                    "VALUES (:id, :id, :id, :document)"
+                ),
+                {"id": bytes.fromhex("1" * 32), "document": b"{}"},
+            )
+        for revision in reversed(revisions):
+            runpy.run_path(scripts.get_revision(revision).path)["downgrade"]()
+        assert not sa.inspect(connection).get_table_names()
 
 
 def test_discard_migration_preserves_old_envelopes(database):
@@ -82,11 +125,14 @@ def test_discard_migration_preserves_old_envelopes(database):
     _migrate(uri, engine, "upgrade", "f5c7d9e1a324")
     with engine.connect() as connection:
         row = connection.execute(
-            sa.text("SELECT document, consumed_at, replied_at, discarded_at FROM bgr_envelopes")
+            sa.text(
+                "SELECT document, consumed_at_us, replied_at_us, discarded_at_us "
+                "FROM bgr_envelopes"
+            )
         ).one()
         assert tuple(row) == (document, None, None, None)
     _migrate(uri, engine, "downgrade", "e4b6c8d0f213")
-    assert "discarded_at" not in {
+    assert "discarded_at_us" not in {
         column["name"] for column in sa.inspect(engine).get_columns("bgr_envelopes")
     }
     with engine.connect() as connection:

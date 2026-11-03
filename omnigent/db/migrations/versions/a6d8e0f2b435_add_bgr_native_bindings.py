@@ -19,11 +19,11 @@ depends_on = None
 def upgrade() -> None:
     op.create_table(
         "bgr_native_bindings",
-        sa.Column("workspace_id", sa.BigInteger(), server_default="0", nullable=False),
+        sa.Column("workspace_id", sa.BigInteger(), nullable=False),
         sa.Column("id", Uuid16(), nullable=False),
         sa.Column("team_id", Uuid16(), nullable=False),
-        sa.Column("thread_id", sa.String(36), nullable=False),
-        sa.Column("document", CompressedText(), nullable=False),
+        sa.Column("thread_id", Uuid16(), nullable=False),
+        sa.Column("document", CompressedText(max_stored_bytes=16_383), nullable=False),
         sa.PrimaryKeyConstraint("workspace_id", "id"),
         sa.UniqueConstraint("workspace_id", "thread_id", name="uq_bgr_native_thread"),
     )

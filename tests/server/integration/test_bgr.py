@@ -1,6 +1,7 @@
 """BGR HTTP contract through create_app, bound runners and real SQL stores."""
 
 import json
+from random import Random
 from uuid import uuid4
 
 import httpx
@@ -130,6 +131,119 @@ def task_request(worker, fence):
             "base_sha": SHA,
         },
     }
+
+
+async def test_http_recovery_cursor_pages_survive_app_restart(bgr_environment):
+    application, brain, worker, _, _ = bgr_environment
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application()),
+        base_url="http://test",
+    ) as client:
+        team, fence = await create_team(client, brain)
+        team_id = team["team_id"]
+        children = [worker(), worker()]
+        tasks = []
+        for child in children:
+            response = await client.post(
+                f"{PREFIX}/teams/{team_id}/tasks",
+                headers=headers(brain),
+                json=task_request(child, fence),
+            )
+            assert response.status_code == 201, response.text
+            tasks.append(response.json())
+        response = await client.get(
+            f"{PREFIX}/teams/{team_id}",
+            headers=headers(brain),
+            params={"limit": 1},
+        )
+        assert response.status_code == 200, response.text
+        first = response.json()
+        assert len(first["tasks"]) == len(first["agents"]) == 1
+        assert first["pending_envelopes"] == 1 and first["pending_envelopes_has_more"]
+        assert first["next_cursor"] is not None
+        for params in ({"limit": 0}, {"limit": 101}, {"cursor": "!"}, {"cursor": "x" * 1025}):
+            response = await client.get(
+                f"{PREFIX}/teams/{team_id}", headers=headers(brain), params=params
+            )
+            assert response.status_code in (400, 422), response.text
+        response = await client.get(
+            f"{PREFIX}/teams/{team_id}",
+            headers=headers(children[0]),
+            params={"cursor": first["next_cursor"]},
+        )
+        assert response.status_code == 403
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application()),
+        base_url="http://test",
+    ) as client:
+        second = (
+            await client.get(
+                f"{PREFIX}/teams/{team_id}",
+                headers=headers(brain),
+                params={"limit": 1, "cursor": first["next_cursor"]},
+            )
+        ).json()
+        third = (
+            await client.get(
+                f"{PREFIX}/teams/{team_id}",
+                headers=headers(brain),
+                params={"limit": 1, "cursor": second["next_cursor"]},
+            )
+        ).json()
+        assert third["tasks"] == [] and third["next_cursor"] is None
+        assert first["tasks"] + second["tasks"] == sorted(tasks, key=lambda task: task["task_id"])
+        agents = first["agents"] + second["agents"] + third["agents"]
+        assert len({agent["agent_id"] for agent in agents}) == 3
+
+
+async def test_http_oversized_checkpoint_returns_invalid_input_and_rolls_back(bgr_environment):
+    application, brain, worker, _, _ = bgr_environment
+    random = Random(0)
+
+    def text(length):
+        return "".join(chr(random.randrange(0x10000, 0x10FFFF)) for _ in range(length))
+
+    child = worker()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application()),
+        base_url="http://test",
+    ) as client:
+        team, fence = await create_team(client, brain)
+        team_id = team["team_id"]
+        task = (
+            await client.post(
+                f"{PREFIX}/teams/{team_id}/tasks",
+                headers=headers(brain),
+                json=task_request(child, fence),
+            )
+        ).json()
+        checkpoint = {
+            "attempt_id": task["attempt"]["attempt_id"],
+            "epoch": 1,
+            "phase": text(256),
+            "summary": text(2000),
+            "artifact_refs": [text(256) for _ in range(16)],
+        }
+        response = await client.post(
+            f"{PREFIX}/teams/{team_id}/checkpoints",
+            headers=headers(child),
+            json=checkpoint,
+        )
+        assert response.status_code == 400, response.text
+        assert response.json()["error"]["code"] == "invalid_input" and "16383" in response.text
+        snapshot = (await client.get(f"{PREFIX}/teams/{team_id}", headers=headers(brain))).json()
+        assert snapshot["tasks"] == [task] and snapshot["pending_envelopes"] == 1
+        response = await client.post(
+            f"{PREFIX}/teams/{team_id}/checkpoints",
+            headers=headers(child),
+            json={
+                **checkpoint,
+                "phase": "saved",
+                "summary": "artifact refs only",
+                "artifact_refs": [],
+            },
+        )
+        assert response.status_code == 200, response.text
 
 
 async def test_http_restart_acceptance_correlation_checkpoint_and_ack(bgr_environment):

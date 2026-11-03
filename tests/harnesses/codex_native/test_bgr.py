@@ -415,6 +415,11 @@ async def test_bad_native_acceptance_never_acknowledges_host(ledger, worker, rec
 async def test_mapping_reservation_is_immutable_authorized_and_restart_safe(
     ledger, worker, db_uri
 ):
+    from sqlalchemy import select, text
+
+    from omnigent.db.bgr_models import SqlBgrNativeBinding
+    from omnigent.db.utils import get_or_create_engine
+
     rpc = WorkerRpc()
     bridge = await bound(ledger, worker, rpc)
     existing = ledger.native_assignment(OWNER, BRAIN, TEAM, worker.attempt.attempt_id, FENCE)
@@ -423,6 +428,10 @@ async def test_mapping_reservation_is_immutable_authorized_and_restart_safe(
         == existing
     )
     assert await bridge.bind(worker.attempt.attempt_id, THREAD) == existing.binding
+    with get_or_create_engine(db_uri).connect() as connection:
+        assert connection.scalar(select(SqlBgrNativeBinding.thread_id)) == THREAD.replace("-", "")
+        assert connection.scalar(text("SELECT length(thread_id) FROM bgr_native_bindings")) == 16
+    assert existing.binding.thread_id == THREAD
     calls = len(rpc.calls)
     with pytest.raises(OmnigentError, match="immutable"):
         await bridge.bind(worker.attempt.attempt_id, str(uuid4()))

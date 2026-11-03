@@ -280,6 +280,8 @@ class Receipt(Record):
 
 class Recovery(Record):
     team: Team
-    agents: list[Agent]
-    tasks: list[Task]
-    pending_envelopes: int
+    agents: Annotated[list[Agent], Field(max_length=100)]
+    tasks: Annotated[list[Task], Field(max_length=100)]
+    pending_envelopes: Annotated[int, Field(ge=0, le=100)]
+    pending_envelopes_has_more: bool
+    next_cursor: Annotated[str, Field(max_length=1024)] | None

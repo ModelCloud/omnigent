@@ -14,20 +14,26 @@ depends_on = None
 
 
 def _mailbox_index(*, discarded: bool) -> None:
-    columns = ["workspace_id", "team_id", "recipient_agent_id", "consumed_at"]
+    columns = ["workspace_id", "team_id", "recipient_agent_id", "consumed_at_us"]
     if discarded:
-        columns.append("discarded_at")
-    op.create_index("ix_bgr_mailbox", "bgr_envelopes", [*columns, "sequence"])
+        columns.append("discarded_at_us")
+    op.create_index("ix_bgr_mailbox", "bgr_envelopes", [*columns, "sequence", "id"])
 
 
 def upgrade() -> None:
-    op.add_column("bgr_envelopes", sa.Column("discarded_at", sa.Float(), nullable=True))
+    op.add_column("bgr_envelopes", sa.Column("discarded_at_us", sa.BigInteger(), nullable=True))
     op.drop_index("ix_bgr_mailbox", table_name="bgr_envelopes")
     _mailbox_index(discarded=True)
+    op.create_index(
+        "ix_bgr_pending_team",
+        "bgr_envelopes",
+        ["workspace_id", "team_id", "consumed_at_us", "discarded_at_us", "sequence", "id"],
+    )
 
 
 def downgrade() -> None:
+    op.drop_index("ix_bgr_pending_team", table_name="bgr_envelopes")
     op.drop_index("ix_bgr_mailbox", table_name="bgr_envelopes")
     with op.batch_alter_table("bgr_envelopes") as batch:
-        batch.drop_column("discarded_at")
+        batch.drop_column("discarded_at_us")
     _mailbox_index(discarded=False)
