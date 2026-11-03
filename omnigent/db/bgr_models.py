@@ -75,6 +75,7 @@ class SqlBgrEnvelope(_ScopedRow, OmnigentBase):
     sequence: Mapped[int] = mapped_column(BigInteger)
     consumed_at: Mapped[float | None] = mapped_column(Float)
     replied_at: Mapped[float | None] = mapped_column(Float)
+    discarded_at: Mapped[float | None] = mapped_column(Float)
     document: Mapped[str] = mapped_column(CompressedText())
     __table_args__ = (
         UniqueConstraint(
@@ -86,6 +87,7 @@ class SqlBgrEnvelope(_ScopedRow, OmnigentBase):
             "team_id",
             "recipient_agent_id",
             "consumed_at",
+            "discarded_at",
             "sequence",
         ),
     )

@@ -23,7 +23,7 @@ def test_bgr_upgrade_downgrade_and_model_parity(database):
             ),
             {"id": session},
         )
-    _migrate(uri, engine, "upgrade", "e4b6c8d0f213")
+    _migrate(uri, engine, "upgrade", "f5c7d9e1a324")
     inspector = sa.inspect(engine)
     models = [
         table for name, table in OmnigentBase.metadata.tables.items() if name.startswith("bgr_")
@@ -63,3 +63,35 @@ def test_bgr_upgrade_downgrade_and_model_parity(database):
         )
     _migrate(uri, engine, "upgrade", "head")
     assert {table.name for table in models} <= set(sa.inspect(engine).get_table_names())
+
+
+def test_discard_migration_preserves_old_envelopes(database):
+    uri, engine = database
+    _migrate(uri, engine, "upgrade", "e4b6c8d0f213")
+    envelope_id = bytes.fromhex("1" * 32)
+    document = b'{"legacy_envelope":"preserved"}'
+    with engine.begin() as connection:
+        connection.execute(
+            sa.text(
+                "INSERT INTO bgr_envelopes (workspace_id, id, team_id, sender_agent_id, "
+                "recipient_agent_id, message_id, request_hash, sequence, document) "
+                "VALUES (0, :id, :id, :id, :id, :id, :hash, 1, :document)"
+            ),
+            {"id": envelope_id, "hash": "0" * 64, "document": document},
+        )
+    _migrate(uri, engine, "upgrade", "f5c7d9e1a324")
+    with engine.connect() as connection:
+        row = connection.execute(
+            sa.text("SELECT document, consumed_at, replied_at, discarded_at FROM bgr_envelopes")
+        ).one()
+        assert tuple(row) == (document, None, None, None)
+    _migrate(uri, engine, "downgrade", "e4b6c8d0f213")
+    assert "discarded_at" not in {
+        column["name"] for column in sa.inspect(engine).get_columns("bgr_envelopes")
+    }
+    with engine.connect() as connection:
+        assert (
+            connection.execute(sa.text("SELECT document FROM bgr_envelopes")).scalar_one()
+            == document
+        )
+    _migrate(uri, engine, "upgrade", "head")

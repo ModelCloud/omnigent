@@ -55,8 +55,9 @@ validation. Resource conflicts return 409; ownership failures return 403.
 | `POST /teams/{team_id}/attempts/{attempt_id}/reattach` | Brain explicitly reconciles a surviving reserved attempt into the current epoch |
 | `POST /teams/{team_id}/attempts/close` | Brain records a terminal outcome; requires literal `stop_confirmed: true` before releasing the writer reservation |
 | `POST /teams/{team_id}/envelopes` | Durable acceptance receipt (202), not execution or completion |
-| `GET /teams/{team_id}/mailbox?limit=50` | Recipient-only ordered unconsumed envelopes; limit 1–100, no destructive dequeue |
+| `GET /teams/{team_id}/mailbox?limit=50` | Recipient-only ordered pending envelopes (neither consumed nor explicitly discarded); limit 1–100, no destructive dequeue |
 | `POST /teams/{team_id}/mailbox/ack` | Recipient explicitly records consumption of an envelope in its live epoch |
+| `POST /teams/{team_id}/mailbox/discard` | Recipient atomically discards 1–100 explicitly identified stale envelopes, with durable reconciliation evidence; never successful consumption |
 | `POST /teams/{team_id}/launch` | Always refuses (503 `runner_capability_mismatch`); execution/isolation are not implemented |
 
 Brain mutations carry `controller_id` and `epoch`; worker messages/checkpoints
@@ -66,8 +67,9 @@ next acquisition, even for the same controller. Old-epoch mutations fail closed.
 Read-only mailbox retrieval remains available for reconciliation after expiry.
 Reattachment changes the attempt's epoch, not its task, session, profile,
 workspace, checkpoint or historical envelopes. Old envelopes remain visible as
-stale evidence and cannot be acknowledged or replied to under a new epoch;
-the controller must reconcile delivery deliberately, not blindly redeliver it.
+stale evidence and cannot be acknowledged or replied to under a new epoch.
+The recipient must explicitly reconcile/discard superseded deliveries before
+proceeding, not blindly execute or redeliver them. Nothing clears them implicitly.
 
 Profiles preserve provider, model, optional variant/speed/reasoning and optional
 harness, without guessing defaults or model-family substitutions. One or two
@@ -75,6 +77,13 @@ reviewer profiles are required, but no reviewer session/channel can be used yet.
 Profile values are ledger snapshots, **not validated backend capabilities**.
 The active brain profile is pinned; configuration updates apply to future grunt
 assignments only. Lowering the cap never kills or discards existing reservations.
+Terminal close preserves historical agent/session membership, rather than
+reassigning that identity to a new writer. New envelopes must connect the team's
+brain and the attempt's assigned worker: neither an active sibling nor a terminal
+worker can send on someone else's attempt. Terminal attempts reject checkpoints,
+reattachment and new sends. Historical mailbox operations and exact receipt/close
+replays grant no execution authority. Closing an old attempt again cannot release
+a replacement attempt's writer reservation.
 
 ### Reservation example
 
@@ -139,9 +148,56 @@ consumption acknowledgement (`consumed_at`).
 
 The payload is JSON-only, at most 8000 UTF-8 bytes, with no NaN/infinities. The
 initial contract delivery must fit the same bound. Each team retains at most
-256 tasks, 4096 envelopes, and 256 unconsumed envelopes per recipient. Backpressure
+256 tasks, 4096 retained envelopes, and 256 pending envelopes per recipient. Backpressure
 fails the **entire** transaction: no orphan reservations or partial reply markers.
 Retention currently stops acceptance rather than silently deleting evidence.
+
+### Explicit stale-envelope reconciliation
+
+After acquiring the new lease/epoch and reconciling surviving attempts, the
+authenticated **recipient session** sends:
+
+```http
+POST /v1/bgr/teams/{team_id}/mailbox/discard
+```
+
+```json
+{
+  "epoch": 2,
+  "envelope_ids": ["55555555555555555555555555555555"],
+  "reason": "Survivor reattached; superseded task delivery reconciled from checkpoint"
+}
+```
+
+The body requires the current live lease's integer epoch, 1–100 distinct envelope
+IDs, and a nonblank reason of at most 512 characters. There is no caller-supplied
+recipient or actor identity. The usual owner/private-source/bound-runner checks
+apply. Only that source's own, unconsumed envelopes from **older** epochs qualify;
+even the brain cannot discard a worker's mailbox on its behalf. Wrong owners,
+unknown identities or another recipient's envelopes fail 403. Expired/stale
+epochs, current/future envelopes, consumed envelopes or changed discard decisions
+fail 409. Invalid/duplicate/oversized ID lists and blank reasons fail 422.
+
+Success (200) returns the original envelopes in request order, each with a new
+`discard` object containing `epoch` (the reconciled epoch), `session_id` (the
+authenticated recipient), `reason`, and `discarded_at` (server timestamp).
+Original IDs, sender/correlation fields, sequence, payload, original epoch,
+`consumed_at` and `replied_at` are preserved. An undiscarded envelope has
+`discard: null`. Discard is **not** successful consumption or a synthetic reply.
+Discarded questions cannot accept replies, and discarded deliveries cannot later
+be acknowledged as consumed.
+
+The batch is atomic: any invalid or unauthorized entry rolls back every change.
+An exact retry in that live epoch, including after app/store reconstruction,
+returns the same evidence/timestamps; changed epoch/reason conflicts. Discarded
+rows leave pending delivery, pending counts and recipient backpressure, so old
+pages no longer starve fresh delivery. They remain in SQL and count toward the
+4096-envelope retention ceiling. Nothing is deleted, relaunched, automatically
+redelivered or silently called consumed. Iterate explicitly over remaining stale
+pages if there are more than 100 entries. The additive mailbox-discard migration
+indexes the separate nullable `discarded_at` column; audit metadata stays in the
+compressed envelope record. Database downgrade is not an evidence-preserving
+application rollback: stop controllers and back up/reconcile state first.
 
 This is durable pull transport, not a runner callback dispatcher. No polling or
 waiting loops are introduced. Runtime event subscriptions, safe-yield injection,

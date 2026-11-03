@@ -13,6 +13,7 @@ from omnigent.bgr import (
     Fence,
     Identifier,
     LeaseRequest,
+    MailboxDiscard,
     Receipt,
     Recovery,
     Send,
@@ -143,6 +144,11 @@ def create_bgr_router(
     def ack(request: Request, team_id: Identifier, body: Ack) -> Envelope:
         user, session = source(request)
         return store.ack(user, session, team_id, body)
+
+    @router.post("/teams/{team_id}/mailbox/discard")
+    def discard(request: Request, team_id: Identifier, body: MailboxDiscard) -> list[Envelope]:
+        user, session = source(request)
+        return store.discard(user, session, team_id, body)
 
     @router.post("/teams/{team_id}/launch")
     def launch(request: Request, team_id: Identifier) -> None:

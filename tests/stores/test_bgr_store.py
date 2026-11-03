@@ -14,6 +14,7 @@ from omnigent.bgr import (
     Contract,
     Fence,
     LeaseRequest,
+    MailboxDiscard,
     Profile,
     Send,
     StatusScope,
@@ -466,3 +467,214 @@ def test_reservation_delivery_bound_and_literal_stop_confirmation():
         )
     with pytest.raises(ValidationError):
         TeamCreate(team_id=TEAM, config=CONFIG, protocol_version=True)
+
+
+def test_stale_mailbox_discard_recovers_full_pages_and_capacity(db_uri, monkeypatch):
+    now = [1000.0]
+    store = BgrStore(db_uri, clock=lambda: now[0])
+    store.create(OWNER, BRAIN, TeamCreate(team_id=TEAM, config=CONFIG))
+    store.acquire(OWNER, BRAIN, TEAM, LeaseRequest(controller_id=CONTROLLER, ttl_seconds=5))
+    task = store.reserve(OWNER, BRAIN, TEAM, reservation())
+    worker = task.attempt.session_id
+    monkeypatch.setattr(bgr_store, "MAX_PENDING", 101)
+    queries = [question(task) for _ in range(100)]
+    for query in queries:
+        store.send(OWNER, BRAIN, TEAM, query)
+    original_page = store.drain(OWNER, worker, TEAM, limit=100)
+    assert len(original_page) == 100
+    now[0] += 6
+    controller = "e" * 32
+    lease = store.acquire(OWNER, BRAIN, TEAM, LeaseRequest(controller_id=controller))
+    assert lease.epoch == 2
+    store.reattach(
+        OWNER, BRAIN, TEAM, task.attempt.attempt_id, Fence(controller_id=controller, epoch=2)
+    )
+    action = MailboxDiscard(
+        epoch=2,
+        envelope_ids=[envelope.envelope_id for envelope in original_page],
+        reason="Reconciled survivor; superseded deliveries are not executable",
+    )
+    for user, session in (("bob", worker), (OWNER, BRAIN), (OWNER, "f" * 32)):
+        with pytest.raises(OmnigentError):
+            store.discard(user, session, TEAM, action)
+    with workspace_scope(9), pytest.raises(OmnigentError):
+        store.discard(OWNER, worker, TEAM, action)
+    with pytest.raises(OmnigentError):
+        store.discard(OWNER, worker, TEAM, action.model_copy(update={"epoch": 1}))
+    for epoch in (1, 2):
+        with pytest.raises(OmnigentError):
+            store.ack(
+                OWNER, worker, TEAM, Ack(epoch=epoch, envelope_id=original_page[0].envelope_id)
+            )
+    fresh = question(task, epoch=2, controller_id=controller)
+    with pytest.raises(OmnigentError, match="backpressure"):
+        store.send(OWNER, BRAIN, TEAM, fresh)
+    discarded = store.discard(OWNER, worker, TEAM, action)
+    for before, after in zip(original_page, discarded, strict=True):
+        assert after.model_dump(exclude={"discard"}) == before.model_dump(exclude={"discard"})
+        assert after.consumed_at is None and after.replied_at is None
+        assert after.discard.session_id == worker and after.discard.epoch == 2
+        assert after.discard.reason == action.reason and after.discard.discarded_at == now[0]
+    restarted = BgrStore(db_uri, clock=lambda: now[0])
+    assert restarted.discard(OWNER, worker, TEAM, action) == discarded
+    with pytest.raises(OmnigentError):
+        restarted.discard(
+            OWNER, worker, TEAM, action.model_copy(update={"reason": "Different decision"})
+        )
+    assert restarted.recover(OWNER, BRAIN, TEAM).pending_envelopes == 1
+    remaining = restarted.drain(OWNER, worker, TEAM)[0]
+    receipt = restarted.send(OWNER, BRAIN, TEAM, fresh)
+    mixed = MailboxDiscard(
+        epoch=2, envelope_ids=[remaining.envelope_id, receipt.envelope_id], reason=action.reason
+    )
+    with pytest.raises(OmnigentError):
+        restarted.discard(OWNER, worker, TEAM, mixed)
+    assert restarted.drain(OWNER, worker, TEAM)[0].discard is None
+    assert restarted.recover(OWNER, BRAIN, TEAM).pending_envelopes == 2
+    restarted.discard(
+        OWNER, worker, TEAM, mixed.model_copy(update={"envelope_ids": [remaining.envelope_id]})
+    )
+    delivered = restarted.drain(OWNER, worker, TEAM)
+    assert len(delivered) == 1 and delivered[0].envelope_id == receipt.envelope_id
+    assert delivered[0].discard is None
+    consumed = restarted.ack(OWNER, worker, TEAM, Ack(epoch=2, envelope_id=receipt.envelope_id))
+    assert consumed.consumed_at is not None and consumed.discard is None
+    assert restarted.drain(OWNER, worker, TEAM) == []
+    assert restarted.recover(OWNER, BRAIN, TEAM).pending_envelopes == 0
+    reply = queries[0].model_copy(
+        update={
+            "message_id": uuid4().hex,
+            "epoch": 2,
+            "controller_id": None,
+            "recipient_agent_id": lease.brain_agent_id,
+            "kind": "status_reply",
+            "in_reply_to": queries[0].message_id,
+            "payload": {"summary": "Stale reply"},
+        }
+    )
+    with pytest.raises(OmnigentError):
+        restarted.send(OWNER, worker, TEAM, reply)
+    assert restarted.discard(OWNER, worker, TEAM, action) == discarded
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"envelope_ids": []},
+        {"envelope_ids": ["1" * 32] * 101},
+        {"envelope_ids": ["1" * 32, "1" * 32]},
+        {"reason": " "},
+        {"reason": "x" * 513},
+        {"epoch": 0},
+        {"epoch": "2"},
+    ],
+)
+def test_discard_requires_bounded_explicit_action(overrides):
+    with pytest.raises(ValidationError):
+        MailboxDiscard.model_validate(
+            {"epoch": 2, "envelope_ids": ["1" * 32], "reason": "Reconciled", **overrides}
+        )
+
+
+def test_terminal_membership_never_gains_another_attempt_writer(store):
+    first_body = reservation()
+    first = store.reserve(OWNER, BRAIN, TEAM, first_body)
+    close = TaskClose(
+        controller_id=CONTROLLER,
+        epoch=1,
+        attempt_id=first.attempt.attempt_id,
+        outcome="failed",
+        stop_confirmed=True,
+    )
+    result = store.close(OWNER, BRAIN, TEAM, close)
+    assert store.close(OWNER, BRAIN, TEAM, close) == result
+    with pytest.raises(OmnigentError):
+        store.close(OWNER, BRAIN, TEAM, close.model_copy(update={"outcome": "completed"}))
+    replacement = store.reserve(OWNER, BRAIN, TEAM, reservation(workspace=first_body.workspace))
+    assert replacement.attempt.workspace == first.attempt.workspace
+    with pytest.raises(OmnigentError):
+        store.reserve(OWNER, BRAIN, TEAM, reservation(session_id=first.attempt.session_id))
+    brain_agent = store.recover(OWNER, BRAIN, TEAM).team.brain_agent_id
+    for task in (first, replacement):
+        for recipient in (task.attempt.agent_id, brain_agent):
+            message = question(
+                task,
+                kind="progress",
+                controller_id=None,
+                recipient_agent_id=recipient,
+                payload={"summary": "Old worker"},
+            )
+            with pytest.raises(OmnigentError):
+                store.send(OWNER, first.attempt.session_id, TEAM, message)
+    with pytest.raises(OmnigentError):
+        store.checkpoint(
+            OWNER,
+            first.attempt.session_id,
+            TEAM,
+            Checkpoint(
+                attempt_id=first.attempt.attempt_id,
+                epoch=1,
+                phase="editing",
+                summary="Stale writer",
+            ),
+        )
+    with pytest.raises(OmnigentError):
+        store.reattach(
+            OWNER, BRAIN, TEAM, first.attempt.attempt_id, Fence(controller_id=CONTROLLER, epoch=1)
+        )
+    # Retrying the old close must not release the replacement's reservation.
+    assert store.close(OWNER, BRAIN, TEAM, close) == result
+    with pytest.raises(OmnigentError):
+        store.reserve(OWNER, BRAIN, TEAM, reservation(workspace=first_body.workspace))
+
+
+def test_discard_preserves_reply_evidence_and_never_relabels_consumption(db_uri):
+    now = [1000.0]
+    store = BgrStore(db_uri, clock=lambda: now[0])
+    store.create(OWNER, BRAIN, TeamCreate(team_id=TEAM, config=CONFIG))
+    lease = store.acquire(
+        OWNER, BRAIN, TEAM, LeaseRequest(controller_id=CONTROLLER, ttl_seconds=5)
+    )
+    task = store.reserve(OWNER, BRAIN, TEAM, reservation())
+    worker = task.attempt.session_id
+    query = question(task)
+    receipt = store.send(OWNER, BRAIN, TEAM, query)
+    delivery = store.drain(OWNER, worker, TEAM)
+    consumed = store.ack(OWNER, worker, TEAM, Ack(epoch=1, envelope_id=delivery[0].envelope_id))
+    response = store.send(
+        OWNER,
+        worker,
+        TEAM,
+        query.model_copy(
+            update={
+                "message_id": uuid4().hex,
+                "controller_id": None,
+                "recipient_agent_id": lease.brain_agent_id,
+                "kind": "status_reply",
+                "in_reply_to": query.message_id,
+                "payload": {"summary": "Evidence saved"},
+            }
+        ),
+    )
+    replied = store.drain(OWNER, worker, TEAM)[0]
+    assert replied.replied_at is not None and replied.consumed_at is None
+    now[0] += 6
+    store.acquire(OWNER, BRAIN, TEAM, LeaseRequest(controller_id=CONTROLLER))
+    action = MailboxDiscard(
+        epoch=2,
+        envelope_ids=[receipt.envelope_id, consumed.envelope_id],
+        reason="Reconcile stale replies, not successful consumption",
+    )
+    with pytest.raises(OmnigentError):
+        store.discard(OWNER, worker, TEAM, action)
+    assert store.drain(OWNER, worker, TEAM)[0] == replied
+    result = store.discard(
+        OWNER, worker, TEAM, action.model_copy(update={"envelope_ids": [receipt.envelope_id]})
+    )[0]
+    assert result.replied_at == replied.replied_at
+    assert result.consumed_at is None and result.discard is not None
+    brain_result = store.discard(
+        OWNER, BRAIN, TEAM, action.model_copy(update={"envelope_ids": [response.envelope_id]})
+    )[0]
+    assert brain_result.discard.session_id == BRAIN
+    assert store.recover(OWNER, BRAIN, TEAM).pending_envelopes == 0

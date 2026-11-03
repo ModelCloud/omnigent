@@ -165,6 +165,27 @@ class Ack(Record):
     epoch: Annotated[int, Field(ge=1)]
 
 
+class MailboxDiscard(Record):
+    epoch: Annotated[int, Field(ge=1)]
+    envelope_ids: Annotated[list[Identifier], Field(min_length=1, max_length=100)]
+    reason: Annotated[str, Field(min_length=1, max_length=512)]
+
+    @model_validator(mode="after")
+    def validate_action(self) -> Self:
+        if len(set(self.envelope_ids)) != len(self.envelope_ids):
+            raise ValueError("envelope_ids must be unique")
+        if not self.reason.strip():
+            raise ValueError("discard requires a nonblank reconciliation reason")
+        return self
+
+
+class DiscardEvidence(Record):
+    epoch: Annotated[int, Field(ge=1)]
+    session_id: Identifier
+    reason: Annotated[str, Field(min_length=1, max_length=512)]
+    discarded_at: float
+
+
 class TaskClose(Fence):
     attempt_id: Identifier
     outcome: Literal["completed", "failed", "cancelled"]
@@ -232,6 +253,7 @@ class Envelope(Send):
     created_at: float
     consumed_at: float | None = None
     replied_at: float | None = None
+    discard: DiscardEvidence | None = None
 
 
 class Receipt(Record):

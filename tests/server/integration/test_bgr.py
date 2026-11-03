@@ -419,3 +419,140 @@ async def test_http_strict_payloads_cannot_forge_sender(bgr_environment):
         assert "BGR" not in json.dumps(
             (await client.get("/v1/agents", headers=headers(brain))).json()
         )
+
+
+async def test_http_stale_mailbox_reconciliation_survives_restart(bgr_environment):
+    application, brain, worker, _, now = bgr_environment
+    child = worker()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application()), base_url="http://test"
+    ) as client:
+        team, fence = await create_team(client, brain)
+        team_id = team["team_id"]
+        response = await client.post(
+            f"{PREFIX}/teams/{team_id}/tasks",
+            headers=headers(brain),
+            json=task_request(child, fence),
+        )
+        assert response.status_code == 201, response.text
+        task = response.json()
+        query = {
+            **fence,
+            "message_id": uuid4().hex,
+            "recipient_agent_id": task["attempt"]["agent_id"],
+            "task_id": task["task_id"],
+            "attempt_id": task["attempt"]["attempt_id"],
+            "kind": "status_query",
+            "correlation_id": uuid4().hex,
+            "payload": {"scope": "now"},
+        }
+        for _ in range(49):
+            query = {**query, "message_id": uuid4().hex}
+            response = await client.post(
+                f"{PREFIX}/teams/{team_id}/envelopes", headers=headers(brain), json=query
+            )
+            assert response.status_code == 202, response.text
+        original = (
+            await client.get(f"{PREFIX}/teams/{team_id}/mailbox", headers=headers(child))
+        ).json()
+        assert len(original) == 50
+        now[0] += 61
+        response = await client.post(
+            f"{PREFIX}/teams/{team_id}/lease",
+            headers=headers(brain),
+            json={"controller_id": uuid4().hex},
+        )
+        assert response.status_code == 200, response.text
+        fence = {
+            "epoch": response.json()["epoch"],
+            "controller_id": response.json()["controller_id"],
+        }
+        assert fence["epoch"] == 2
+        response = await client.post(
+            f"{PREFIX}/teams/{team_id}/attempts/{task['attempt']['attempt_id']}/reattach",
+            headers=headers(brain),
+            json=fence,
+        )
+        assert response.status_code == 200, response.text
+        action = {
+            "epoch": 2,
+            "envelope_ids": [entry["envelope_id"] for entry in original],
+            "reason": "Recovery confirmed survivor; discard superseded deliveries",
+        }
+        path = f"{PREFIX}/teams/{team_id}/mailbox/discard"
+        for source, user, changes, expected in (
+            (brain, "alice", {}, 403),
+            (child, "bob", {}, 403),
+            (child, "alice", {"epoch": 1}, 409),
+            (child, "alice", {"envelope_ids": []}, 422),
+            (child, "alice", {"envelope_ids": [uuid4().hex for _ in range(101)]}, 422),
+            (child, "alice", {"envelope_ids": [original[0]["envelope_id"]] * 2}, 422),
+        ):
+            response = await client.post(
+                path, headers=headers(source, user), json={**action, **changes}
+            )
+            assert response.status_code == expected, response.text
+        for epoch in (1, 2):
+            response = await client.post(
+                f"{PREFIX}/teams/{team_id}/mailbox/ack",
+                headers=headers(child),
+                json={"epoch": epoch, "envelope_id": original[0]["envelope_id"]},
+            )
+            assert response.status_code == 409, response.text
+        response = await client.post(path, headers=headers(child), json=action)
+        assert response.status_code == 200, response.text
+        discarded = response.json()
+        assert len(discarded) == 50
+        for before, after in zip(original, discarded, strict=True):
+            assert {key: value for key, value in after.items() if key != "discard"} == {
+                key: value for key, value in before.items() if key != "discard"
+            }
+            assert after["consumed_at"] is None and after["replied_at"] is None
+            assert after["discard"] == {
+                "epoch": 2,
+                "session_id": child,
+                "reason": action["reason"],
+                "discarded_at": now[0],
+            }
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application()), base_url="http://test"
+    ) as client:
+        response = await client.post(path, headers=headers(child), json=action)
+        assert response.status_code == 200 and response.json() == discarded
+        assert (
+            await client.get(f"{PREFIX}/teams/{team_id}/mailbox", headers=headers(child))
+        ).json() == []
+        reply = {
+            **query,
+            "epoch": 2,
+            "controller_id": None,
+            "message_id": uuid4().hex,
+            "recipient_agent_id": team["brain_agent_id"],
+            "kind": "status_reply",
+            "in_reply_to": query["message_id"],
+            "payload": {"summary": "Stale callback"},
+        }
+        response = await client.post(
+            f"{PREFIX}/teams/{team_id}/envelopes", headers=headers(child), json=reply
+        )
+        assert response.status_code == 409, response.text
+        response = await client.post(
+            f"{PREFIX}/teams/{team_id}/envelopes",
+            headers=headers(brain),
+            json={**query, **fence, "message_id": uuid4().hex},
+        )
+        assert response.status_code == 202, response.text
+        receipt = response.json()
+        delivery = (
+            await client.get(f"{PREFIX}/teams/{team_id}/mailbox", headers=headers(child))
+        ).json()
+        assert len(delivery) == 1 and delivery[0]["envelope_id"] == receipt["envelope_id"]
+        response = await client.post(
+            f"{PREFIX}/teams/{team_id}/mailbox/ack",
+            headers=headers(child),
+            json={"epoch": 2, "envelope_id": receipt["envelope_id"]},
+        )
+        assert response.status_code == 200 and response.json()["consumed_at"] is not None
+        assert response.json()["discard"] is None
+        snapshot = (await client.get(f"{PREFIX}/teams/{team_id}", headers=headers(brain))).json()
+        assert snapshot["pending_envelopes"] == 0

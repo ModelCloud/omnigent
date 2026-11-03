@@ -24,9 +24,11 @@ from omnigent.bgr import (
     Checkpoint,
     ConfigUpdate,
     Contract,
+    DiscardEvidence,
     Envelope,
     Fence,
     LeaseRequest,
+    MailboxDiscard,
     Receipt,
     Recovery,
     Send,
@@ -385,6 +387,7 @@ class BgrStore:
                         SqlBgrEnvelope.workspace_id == current_workspace_id(),
                         SqlBgrEnvelope.team_id == team_id,
                         SqlBgrEnvelope.consumed_at.is_(None),
+                        SqlBgrEnvelope.discarded_at.is_(None),
                     )
                 )
                 or 0
@@ -468,6 +471,7 @@ class BgrStore:
                     SqlBgrEnvelope.team_id == team.id,
                     SqlBgrEnvelope.recipient_agent_id == body.recipient_agent_id,
                     SqlBgrEnvelope.consumed_at.is_(None),
+                    SqlBgrEnvelope.discarded_at.is_(None),
                 )
             )
             or 0
@@ -546,7 +550,10 @@ class BgrStore:
                 or attempt.state != "reserved"
             ):
                 raise _conflict("Task/attempt is stale, terminal, or not reconciled")
-            if attempt.agent_id not in (sender.agent_id, target.agent_id):
+            if {sender.agent_id, target.agent_id} != {
+                _team(team).brain_agent_id,
+                attempt.agent_id,
+            }:
                 raise _forbidden()
             if body.kind in ("task", "cancel", "status_query") and sender.role != "brain":
                 raise _forbidden()
@@ -562,6 +569,8 @@ class BgrStore:
                 if original is None:
                     raise _conflict("Reply does not identify a question from the recipient")
                 question = _envelope(original)
+                if question.discard is not None:
+                    raise _conflict("Discarded questions cannot be replied to")
                 expected = "status_query" if body.kind == "status_reply" else "question"
                 if (
                     question.recipient_agent_id != sender.agent_id
@@ -599,6 +608,7 @@ class BgrStore:
                     SqlBgrEnvelope.team_id == team_id,
                     SqlBgrEnvelope.recipient_agent_id == agent.agent_id,
                     SqlBgrEnvelope.consumed_at.is_(None),
+                    SqlBgrEnvelope.discarded_at.is_(None),
                 )
                 .order_by(SqlBgrEnvelope.sequence)
                 .limit(limit)
@@ -613,10 +623,55 @@ class BgrStore:
             row = db.get(SqlBgrEnvelope, (current_workspace_id(), body.envelope_id))
             if row is None or row.team_id != team_id or row.recipient_agent_id != agent.agent_id:
                 raise _forbidden()
-            if _envelope(row).epoch != body.epoch:
+            envelope = _envelope(row)
+            if envelope.discard is not None:
+                raise _conflict("Discarded envelopes cannot be acknowledged as consumed")
+            if envelope.epoch != body.epoch:
                 raise _conflict("Acknowledgement epoch does not match the envelope")
             if row.consumed_at is None:
                 row.consumed_at = self._clock()
             return _envelope(row)
 
         return self._write("acknowledge_consumption", apply)
+
+    def discard(
+        self, user_id: str, session_id: str, team_id: str, body: MailboxDiscard
+    ) -> list[Envelope]:
+        def apply(db: Session) -> list[Envelope]:
+            team = self._owned(db, team_id, user_id)
+            self._epoch(team, body.epoch)
+            agent = self._agent(db, team_id, session_id)
+            result = []
+            for envelope_id in body.envelope_ids:
+                row = db.get(SqlBgrEnvelope, (current_workspace_id(), envelope_id))
+                if (
+                    row is None
+                    or row.team_id != team_id
+                    or row.recipient_agent_id != agent.agent_id
+                ):
+                    raise _forbidden()
+                envelope = _envelope(row)
+                if envelope.epoch >= body.epoch or envelope.consumed_at is not None:
+                    raise _conflict("Only unconsumed envelopes from older epochs can be discarded")
+                if envelope.discard is not None:
+                    evidence = envelope.discard
+                    if (
+                        evidence.epoch != body.epoch
+                        or evidence.reason != body.reason
+                        or evidence.session_id != session_id
+                    ):
+                        raise _conflict("Envelope already has a different discard action")
+                else:
+                    evidence = DiscardEvidence(
+                        epoch=body.epoch,
+                        session_id=session_id,
+                        reason=body.reason,
+                        discarded_at=self._clock(),
+                    )
+                    envelope = envelope.model_copy(update={"discard": evidence})
+                    row.document = envelope.model_dump_json()
+                    row.discarded_at = evidence.discarded_at
+                result.append(envelope)
+            return result
+
+        return self._write("discard_stale_mailbox", apply)
