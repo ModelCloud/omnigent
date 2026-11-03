@@ -198,6 +198,7 @@ from omnigent.runner.identity import (
     RUNNER_AUTH_REJECTED_EXIT_CODE,
     RUNNER_CONNECT_MARKER_ENV_VAR,
     RUNNER_DELEGATED_AUTH_ENV_VAR,
+    RUNNER_FINISH_WORK_SIGNAL,
     RUNNER_HOST_OWNS_GLOBAL_CLEANUP_ENV_VAR,
     RUNNER_ID_ENV_VAR,
     RUNNER_INITIAL_AUTH_TOKEN_ENV_VAR,
@@ -1201,6 +1202,8 @@ class _RunnerHandle:
         ``None`` disables the watchdog.
     :param stop_requested: Suppress diagnostics for intentional stops
         or superseded launches, even after the exit watcher pops them.
+    :param create_time: Process start time recorded while the runner was
+        alive, used to reject a reused PID before signalling a forked runner.
     """
 
     proc: subprocess.Popen[bytes] | ZygoteRunnerProc
@@ -1208,6 +1211,7 @@ class _RunnerHandle:
     session_id: str | None = None
     connect_marker: Path | None = None
     stop_requested: bool = False
+    create_time: float | None = None
 
 
 @dataclass(frozen=True)
@@ -1280,6 +1284,7 @@ class HostProcess:
         server_url: str,
         lifecycle_lock: DaemonLifecycleLock | None = None,
         interactive_shells: list[str] | None = None,
+        server_still_ours: Callable[[], bool] | None = None,
     ) -> None:
         """Initialize the host process.
 
@@ -1290,9 +1295,13 @@ class HostProcess:
             and self-terminates once the record is deleted or reassigned.
         :param interactive_shells: Optional shell inventory override for tests.
             By default the host discovers its installed shells once at startup.
+        :param server_still_ours: For a local-mode host, reports whether the
+            local server it started is still the one on ``server_url``; while
+            it is ``False`` each attempt is treated as refused instead of dialing.
         """
         self._identity = identity
         self._server_url = server_url.rstrip("/")
+        self._server_still_ours = server_still_ours
         # One reader per workspace, so its registry keeps state between
         # requests (the changed-files snapshot search reuses for untracked
         # files). Each entry remembers the repository root it was built for.
@@ -1488,6 +1497,34 @@ class HostProcess:
             if (pid := active.session.pid) is not None
         )
         return pids
+
+    def signal_runners_finish_work(self, kill: Callable[[int, int], None] = os.kill) -> None:
+        """Tell live runners to finish in-flight work once this host exits.
+
+        Runs on the hangup signal-exit thread, so it only reads process state
+        and sends signals; the zygote is not a runner and is never signalled.
+        A direct child is filtered by a non-blocking poll(), which keeps its
+        PID reserved while the host remains its parent. A zygote-forked runner,
+        which the host does not reap, is validated against the start identity
+        recorded at launch so a reused PID is never signalled.
+
+        :param kill: Signal sender, defaults to :func:`os.kill`; injectable for tests.
+        """
+        if RUNNER_FINISH_WORK_SIGNAL is None:
+            return
+        zygote_pid = self._zygote.unreaped_pid if self._zygote is not None else None
+        for handle in list(self._runners.values()):
+            proc = handle.proc
+            pid = proc.pid
+            code = proc.returncode if isinstance(proc, ZygoteRunnerProc) else proc.poll()
+            if code is not None or pid == zygote_pid:
+                continue
+            if isinstance(proc, ZygoteRunnerProc) and (
+                handle.create_time is None or _proc.process_create_time(pid) != handle.create_time
+            ):
+                continue
+            with contextlib.suppress(OSError):
+                kill(pid, RUNNER_FINISH_WORK_SIGNAL)
 
     @staticmethod
     def _orphan_child_pids() -> list[int]:
@@ -2228,6 +2265,7 @@ class HostProcess:
             log_path=log_path,
             session_id=frame.session_id or None,
             connect_marker=_connect_marker_path(log_path),
+            create_time=_proc.process_create_time(proc.pid),
         )
         launch_context = current_scheduled_run()
         with scheduled_run_scope(None, session_id=frame.session_id):
@@ -2395,6 +2433,9 @@ class HostProcess:
                     stdin=subprocess.DEVNULL,
                     stdout=log_fh,
                     stderr=log_fh,
+                    # Own session: a hangup of the daemon's terminal reaches only
+                    # the daemon, which asks its runners to finish in-flight work.
+                    **_proc.spawn_kwargs(),
                     **logging_kwargs,
                 )
             return proc, log_path
@@ -5241,6 +5282,12 @@ class HostProcess:
         # Fresh per-connection markers for the silent-connect streak.
         self._conn_upgrade_accepted = False
         self._conn_frame_received = False
+        if self._server_still_ours is not None and not self._server_still_ours():
+            # Our local server exited; another data dir's server may now own the
+            # port, and registering there steals that host's same-name row.
+            raise ConnectionRefusedError(
+                errno.ECONNREFUSED, f"the local server at {self._server_url} is no longer running"
+            )
         url = self._tunnel_url()
         # Credential discovery may invoke the Databricks CLI. Keep it off the
         # event loop so startup capability discovery can make progress at the
@@ -6093,6 +6140,7 @@ def run_host_process(
     daemon_target: str | None = None,
     lifecycle_lock: DaemonLifecycleLock | None = None,
     interactive_shells: list[str] | None = None,
+    server_still_ours: Callable[[], bool] | None = None,
 ) -> None:
     """Entry point for ``omnigent host``.
 
@@ -6112,6 +6160,7 @@ def run_host_process(
         for the host process lifetime instead of acquiring another handle.
     :param interactive_shells: Optional shell inventory override for tests.
         By default the host discovers its installed shells once at startup.
+    :param server_still_ours: Local-mode ownership check; see :class:`HostProcess`.
     :raises SystemExit: With :data:`HOST_FATAL_EXIT_CODE` when the tunnel
         fails permanently (auth / authorization / outdated server, or a
         loopback server that is gone). The actionable cause is printed
@@ -6146,6 +6195,7 @@ def run_host_process(
             daemon_target=daemon_target,
             lifecycle_lock=lifecycle_lock,
             interactive_shells=interactive_shells,
+            server_still_ours=server_still_ours,
         )
     except BaseException as exc:
         # A stop signal already being handled owns the exit: never returns then.
@@ -6195,6 +6245,7 @@ def _serve_host_until_exit(
     daemon_target: str | None,
     lifecycle_lock: DaemonLifecycleLock | None,
     interactive_shells: list[str] | None,
+    server_still_ours: Callable[[], bool] | None = None,
 ) -> bool:
     """Run the host until it exits; see :func:`run_host_process`.
 
@@ -6286,7 +6337,9 @@ def _serve_host_until_exit(
         server_url,
         lifecycle_lock=lifecycle_lock,
         interactive_shells=interactive_shells,
+        server_still_ours=server_still_ours,
     )
+    crash_reporting.set_hangup_callback(host.signal_runners_finish_work)
     try:
         asyncio.run(host.run())
     except HostConnectError as exc:
@@ -6303,4 +6356,8 @@ def _serve_host_until_exit(
             stderr=True,
         )
         raise SystemExit(HOST_FATAL_EXIT_CODE) from exc
+    finally:
+        # Serving is over: drop the callback so a hangup during the exit-drain
+        # window cannot signal runners through a torn-down host.
+        crash_reporting.set_hangup_callback(None)
     return host.lifecycle_lost
