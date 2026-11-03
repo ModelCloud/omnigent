@@ -18,6 +18,7 @@ import { normalizeExplicitMathDelimiters } from "@/components/ai-elements/mathMa
 import { useThinkingPaneStore } from "@/store/thinkingPane";
 import { useTurnTpsStore } from "@/store/turnTps";
 import { BlockRenderer, collectReasoningSections, rendersOnlyWorkedFold } from "./BlockRenderer";
+import { FilePathAwareMessageResponse } from "./ChatMarkdown";
 
 afterEach(cleanup);
 
@@ -2420,6 +2421,36 @@ describe("BlockRenderer dispatch", () => {
           />
         </FileViewerContext.Provider>,
       );
+
+    it("keeps message typography for assistant prose over 50K characters", () => {
+      const text = "Long assistant prose. ".repeat(2_500);
+      const { container } = renderText(text);
+
+      const fallback = container.querySelector(".break-all");
+      expect(fallback).toHaveClass(
+        "chat-markdown",
+        "text-message",
+        "font-mono",
+        "whitespace-pre-wrap",
+      );
+      expect(fallback).not.toHaveClass("text-sm");
+      expect(fallback!.textContent).toBe(text);
+    });
+
+    it("keeps the small-text default for non-message callers", () => {
+      const { container } = render(
+        <FilePathAwareMessageResponse className="text-muted-foreground">
+          {"Long non-message prose. ".repeat(2_500)}
+        </FilePathAwareMessageResponse>,
+      );
+
+      expect(container.querySelector(".break-all")).toHaveClass(
+        "text-sm",
+        "font-mono",
+        "whitespace-pre-wrap",
+        "text-muted-foreground",
+      );
+    });
 
     it("renders a giant unbroken token via the break-anywhere fallback", () => {
       // A long base64-ish token with no whitespace — exactly the freezing
