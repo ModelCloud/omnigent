@@ -2423,6 +2423,9 @@ class HostProcess:
         )
         try:
             await self._stop_runner_and_trigger(proc, "runner_spawn_abandoned")
+            if isinstance(proc, ZygoteRunnerProc):
+                # No watcher owns an abandoned spawn's retained exit status.
+                await asyncio.to_thread(proc.wait, timeout=5.0)
         except Exception:  # detached cleanup must be observed
             _logger.warning(
                 "Failed to stop abandoned runner pid=%s",
@@ -2525,12 +2528,14 @@ class HostProcess:
     def _stop_runner_proc(proc: subprocess.Popen[bytes] | ZygoteRunnerProc) -> None:
         """Terminate a runner: SIGTERM, brief wait, then SIGKILL. Blocking.
 
-        Runs on a worker thread (see :meth:`_handle_stop`) because for a
-        zygote-forked runner these are blocking control-socket round-trips, not
-        lock-free waitpid calls.
+        Runs on a worker thread (see :meth:`_handle_stop`). Forked runners
+        use OS liveness so a stalled control exchange cannot postpone a stop.
 
         :param proc: The runner process handle (Popen or zygote shim).
         """
+        if isinstance(proc, ZygoteRunnerProc):
+            proc.stop()
+            return
         if proc.poll() is not None:
             return
         proc.terminate()
@@ -5877,14 +5882,17 @@ class HostProcess:
         elif isinstance(frame, HostRunnerStatusFrame):
             await self._send_text(ws, encode_host_frame(await self._handle_runner_status(frame)))
         elif isinstance(frame, HostStatFrame):
-            await self._send_text(ws, encode_host_frame(self._handle_stat(frame)))
+            # Even a single metadata lookup can block on a mounted filesystem.
+            stat_result = await asyncio.to_thread(self._handle_stat, frame)
+            await self._send_text(ws, encode_host_frame(stat_result))
         elif isinstance(frame, HostListDirFrame):
             # Stat-ing every entry can be slow on large or network-backed
             # directories; keep the tunnel's event loop free meanwhile.
             list_result = await asyncio.to_thread(self._handle_list_dir, frame)
             await self._send_text(ws, encode_host_frame(list_result))
         elif isinstance(frame, HostCreateDirFrame):
-            await self._send_text(ws, encode_host_frame(self._handle_create_dir(frame)))
+            create_dir_result = await asyncio.to_thread(self._handle_create_dir, frame)
+            await self._send_text(ws, encode_host_frame(create_dir_result))
         elif isinstance(frame, HostInstallHarnessFrame):
             # The installer shells out (npm) and can run for minutes, so run
             # it off the event loop and reply when it completes.
