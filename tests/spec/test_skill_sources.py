@@ -342,13 +342,15 @@ def test_codex_native_and_sdk_agree_without_a_configured_codex_home(
 def test_codex_native_honors_codex_home_sdk_keeps_home_codex(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Native codex sources host skills from ``$CODEX_HOME``; SDK keeps ``~/.codex``.
+    """Codex sources host skills from ``$CODEX_HOME``.
 
     The codex analog of the ``$CLAUDE_CONFIG_DIR`` facet: codex-native honors
     ``$CODEX_HOME`` (its launch seeds the per-bridge home from that resolved
-    home), so the menu must read it too. The in-process ``codex`` (SDK) harness
-    has no such terminal, so it stays on ``~/.codex`` — the same seeded tree
-    must diverge by harness.
+    home), so the menu must read it too.
+
+    The MultiDex fork aliases the legacy ``codex`` (in-process SDK) spelling to
+    ``codex-native`` and ships only the native runtime, so both spellings honor
+    the resolved home instead of diverging.
     """
     home = tmp_path / "home"
     monkeypatch.setattr("pathlib.Path.home", lambda: home)
@@ -362,9 +364,10 @@ def test_codex_native_honors_codex_home_sdk_keeps_home_codex(
 
     native = {s.name for s in resolve_harness_skills(ctx, "codex-native")}
     sdk = {s.name for s in resolve_harness_skills(ctx, "codex")}
-    # Native reads $CODEX_HOME's skills; SDK ignores codex_home and reads ~/.codex.
+    # ``codex`` canonicalizes to ``codex-native`` in this fork, so both read
+    # $CODEX_HOME's skills.
     assert native == {"custom-codex-skill", "shared-skill"}
-    assert sdk == {"default-codex-skill", "shared-skill"}
+    assert sdk == {"custom-codex-skill", "shared-skill"}
 
 
 @pytest.mark.parametrize("harness", ["codex", "codex-native"])
