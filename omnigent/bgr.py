@@ -242,6 +242,21 @@ class Task(Record):
     attempt: Attempt
 
 
+class NativeBinding(Record):
+    team_id: Identifier
+    attempt_id: Identifier
+    epoch: Annotated[int, Field(ge=1)]
+    thread_id: Annotated[
+        str, Field(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+    ]
+
+
+class NativeAssignment(Record):
+    team: Team
+    attempt: Attempt
+    binding: NativeBinding
+
+
 class Envelope(Send):
     envelope_id: Identifier
     team_id: Identifier

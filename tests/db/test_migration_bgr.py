@@ -23,12 +23,12 @@ def test_bgr_upgrade_downgrade_and_model_parity(database):
             ),
             {"id": session},
         )
-    _migrate(uri, engine, "upgrade", "f5c7d9e1a324")
+    _migrate(uri, engine, "upgrade", "a6d8e0f2b435")
     inspector = sa.inspect(engine)
     models = [
         table for name, table in OmnigentBase.metadata.tables.items() if name.startswith("bgr_")
     ]
-    assert len(models) == 5
+    assert len(models) == 6
     for table in models:
         assert set(table.c.keys()) == {
             column["name"] for column in inspector.get_columns(table.name)

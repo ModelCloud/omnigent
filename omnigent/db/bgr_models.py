@@ -91,3 +91,12 @@ class SqlBgrEnvelope(_ScopedRow, OmnigentBase):
             "sequence",
         ),
     )
+
+
+class SqlBgrNativeBinding(_ScopedRow, OmnigentBase):
+    __tablename__ = "bgr_native_bindings"
+
+    team_id: Mapped[str] = mapped_column(Uuid16())
+    thread_id: Mapped[str] = mapped_column(String(36))
+    document: Mapped[str] = mapped_column(CompressedText())
+    __table_args__ = (UniqueConstraint("workspace_id", "thread_id", name="uq_bgr_native_thread"),)

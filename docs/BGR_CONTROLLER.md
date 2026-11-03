@@ -6,8 +6,8 @@ behavior, seeded agent, picker, or runtime prompt changes are included.
 
 The normal server constructs `BgrStore` from its application database URI and
 injects it into `create_app`. Embedded servers opt in with the `bgr_store`
-argument. Five additive Alembic tables store teams, agent identities, contracts,
-attempts and mailbox envelopes. No Redis, service, credentials, or separate file
+argument. Six additive Alembic tables store teams, agent identities, contracts,
+attempts, mailbox envelopes and immutable native-thread mappings. No Redis, service, credentials, or separate file
 ledger is required. Normal database migration on startup installs the schema.
 The tables use application-database workspace scoping, including when transcript
 storage is configured separately.
@@ -203,11 +203,210 @@ This is durable pull transport, not a runner callback dispatcher. No polling or
 waiting loops are introduced. Runtime event subscriptions, safe-yield injection,
 push callbacks and outbox execution remain follow-up work.
 
+## Opt-in codex-native protocol adapter (not runtime integration)
+
+`omnigent.harnesses.codex_native.bgr.CodexNativeBgrAdapter` is a trusted Python
+helper over the existing `CodexRequestFn` (`CodexAppServerClient.request`), not
+a public launch API, scheduler, new event loop, or automatic callback registration.
+It translates already persisted host `status_query` envelopes and imports native
+`status_reply` events through real `BgrStore.send`. The source of truth remains
+Omnigent SQL. Tests use an external Claude-profile brain with **only a worker**
+on the native connection; no native brain, proxy model, fictional brain task or
+brain attempt is allocated. This is not proof of cross-provider execution.
+
+The baseline [MultiDex native types](https://github.com/ModelCloud/MultiDex/blob/design/brain-executor-reviewer-contract/codex-rs/protocol/src/bgr.rs),
+[app-server types](https://github.com/ModelCloud/MultiDex/blob/design/brain-executor-reviewer-contract/codex-rs/app-server-protocol/src/protocol/v2/bgr.rs)
+and [startup contract](https://github.com/ModelCloud/MultiDex/blob/design/brain-executor-reviewer-contract/docs/brain-executor-reviewer-design.md#implemented-backend-contract-version-1)
+define the wire format. The adapter additionally **requires** the host-delivery
+extension: `hostDelivery:true` and `bgr/message/deliver`. Earlier backends exposing
+only same-app-server `bgr/message/send` are refused, not given a fake
+`sourceThreadId`. All native BGR RPCs are experimental. Initialize the existing
+client with `experimentalApi:true` before negotiating (the existing client
+already does this).
+
+### Capabilities, mapping and startup obligations
+
+`await CodexNativeBgrAdapter.negotiate(request, store, user_id=...,
+brain_session_id=..., team_id=..., fence=Fence(...))` reads
+`bgr/capabilities/read {}`. It requires strict version 1, brain/grunt roles,
+`statusScopes:["now"]`, `messageKinds:["status_query","status_reply"]`,
+`hostDelivery:true`, `liveReattach:true`, a positive `maxQueriesPerAttempt <= 128`,
+and a nondeferred `bgr_report_status` function specification. Durable native
+mailbox, restart recovery, reviewer sandbox, cross-host delivery and task dispatch
+must all be false for this contract. Missing/old/unsupported capabilities fail
+with `runner_capability_mismatch`. There is no model-family/profile fallback.
+
+`startup_options()` returns the negotiated `reportTool` unchanged in
+`dynamicTools` plus `config` overrides `features.multi_agent:false`,
+`features.multi_agent_v2:false`, `features.defer_mailbox_preemption:true`.
+The caller must apply these to a **fresh worker** `thread/start`, resolve the
+worker's explicit profile/catalog settings, bind before its first turn/history,
+and enforce host permissions/worktree/tool ceilings. This helper starts no
+thread or turn. `bind` requires the reserved worker profile's explicit
+`harness:"codex-native"`; another/missing harness is not silently rerouted.
+
+`await adapter.bind(attempt_id, native_thread_uuid)` reserves an immutable
+workspace-scoped SQL mapping before `bgr/thread/bind {threadId,identity}`.
+`NativeBinding` fields are `team_id`, `attempt_id`, `epoch`, `thread_id`; the
+mapping table is `bgr_native_bindings`, keyed by workspace/attempt with a unique
+workspace/native-thread constraint. The remaining identity comes from the live
+attempt. Native thread IDs must be canonical lowercase hyphenated UUIDs; logical
+host IDs remain lowercase 32-hex. Native `identity.sessionId` is always the
+logical worker session, **never** the native UUID. A bind result must return the
+exact worker identity and an uncancelled snapshot. A failed/ambiguous RPC leaves
+the reservation intact for an explicit exact retry; it is not proof of successful
+native binding. No unbind/reassignment or native process-restart recovery exists.
+
+`BgrStore.bind_native`, `native_assignment`, and `native_query` require the owned
+brain session, live lease/current controller, current reserved attempt and exact
+binding. Thread/attempt remapping is forbidden, including after terminal close.
+Native mappings are deliberately pinned to their original epoch. Advancing a
+ledger attempt via `reattach` does **not** reauthorize an old native binding:
+this backend cannot rebind that thread to a new identity/epoch. Fence externally
+and use a separately reserved clean assignment; automatic fresh attempts under
+the same logical task are still unsupported. Migration `a6d8e0f2b435` adds only
+the mapping table; downgrading drops mappings and is not a safe live rollback.
+
+The caller must authenticate the owning private sessions and route to their
+trusted runner connection before using this helper. It is not a new authority
+boundary or a substitute for the HTTP session/runner-token checks above.
+
+### Delivery and receipt example
+
+`await adapter.deliver(attempt_id, original_query_message_id)` loads the actual
+persisted envelope using its original **message ID**, not server `envelope_id`.
+Only unconsumed `status_query` with exact `{"scope":"now"}` is supported.
+The target identity comes from the mapped attempt; the host sender attestation
+comes exclusively from the authenticated persisted brain envelope. Example
+`bgr/message/deliver` parameters:
+
+```json
+{
+  "threadId": "12345678-1234-1234-1234-123456789abc",
+  "sender": {
+    "teamId": "cccccccccccccccccccccccccccccccc",
+    "agentId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "sessionId": "11111111111111111111111111111111",
+    "epoch": 1,
+    "role": "brain"
+  },
+  "envelope": {
+    "version": 1,
+    "messageId": "33333333333333333333333333333333",
+    "senderAgentId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "recipientAgentId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "identity": {
+      "teamId": "cccccccccccccccccccccccccccccccc",
+      "agentId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sessionId": "22222222222222222222222222222222",
+      "taskId": "dddddddddddddddddddddddddddddddd",
+      "attemptId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "epoch": 1,
+      "role": "grunt"
+    },
+    "kind": "status_query",
+    "correlationId": "ffffffffffffffffffffffffffffffff",
+    "inReplyTo": null,
+    "payload": {"scope": "now"},
+    "headSha": "4444444444444444444444444444444444444444"
+  }
+}
+```
+
+The native JSON-RPC response has
+`result:{messageId:"33333333333333333333333333333333",accepted:true,duplicate:false}`.
+The adapter checks exact message ID and strict boolean acceptance/duplicate,
+rechecks the host fence, and returns the native `duplicate` flag. **Neither
+acceptance nor a successful RPC acknowledges host consumption.** The original
+mailbox envelope is untouched; a separate explicit recipient ack still requires
+actual consumption evidence. Socket loss is ambiguous and is not automatically
+retried or translated into success. Host delivery is not native cross-host
+routing (`crossHostDelivery` remains false).
+
+### Native replies and explicit inspect reconciliation
+
+The caller's existing worker notification dispatcher can pass `bgr/message`
+notification **params** to
+`adapter.receive_notification(attempt_id, params)`. Example params:
+
+```json
+{
+  "threadId": "12345678-1234-1234-1234-123456789abc",
+  "envelope": {
+    "version": 1,
+    "messageId": "reply-one",
+    "senderAgentId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "recipientAgentId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "identity": {
+      "teamId": "cccccccccccccccccccccccccccccccc",
+      "agentId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sessionId": "22222222222222222222222222222222",
+      "taskId": "dddddddddddddddddddddddddddddddd",
+      "attemptId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "epoch": 1,
+      "role": "grunt"
+    },
+    "kind": "status_reply",
+    "correlationId": "ffffffffffffffffffffffffffffffff",
+    "inReplyTo": "33333333333333333333333333333333",
+    "payload": {
+      "currentAction": "Implementing",
+      "completed": [],
+      "pending": ["Tests"],
+      "blockers": [],
+      "headSha": "5555555555555555555555555555555555555555",
+      "dirty": true,
+      "coverageLimits": ["Worker self-report; not a repository attestation"]
+    },
+    "headSha": "4444444444444444444444444444444444444444"
+  }
+}
+```
+
+The adapter validates thread, team, worker agent, logical session, task, attempt,
+epoch, role, sender, brain recipient, original correlation, `inReplyTo`, query
+scope and query head anchor. Top-level `headSha` must preserve the original
+query anchor; observed worker head belongs **only in payload**. Status payloads
+have strict native camelCase fields as above; nullable head SHA/dirty may be
+omitted. Non-null head SHAs must meet the host's full lowercase 40-hex bound.
+Unknown fields/types fail explicitly rather than being truncated or coerced.
+
+Native reply IDs accept the backend's 1–128 ASCII alphanumeric/`-_.:` format,
+including `reply-one`. **All** native reply IDs (even host-shaped ones) map to a
+lowercase 32-hex host message ID using UUIDv5 in the URL namespace over compact,
+key-sorted JSON of `["omnigent/codex-native/bgr/reply/v1", nativeIdentity,
+nativeThreadId, originalNativeMessageId]`. This stable, domain-separated,
+assignment/thread-scoped mapping survives adapter/store reconstruction. Query
+message IDs, `correlationId` and `inReplyTo` are never remapped. The imported
+payload preserves the native status fields and adds
+`native_provenance:{thread_id:nativeThreadId,message_id:originalNativeMessageId}`.
+The **entire** imported payload, including provenance and nullable fields, must
+fit the host's serialized UTF-8 8000-byte limit, even though native permits
+32 KiB. Oversize/malformed replies fail with explicit errors and no host write.
+
+Import is a real worker-session `Send`, so durable store idempotency returns the
+same receipt after restart, while reusing a native ID with changed status or for
+another query reaches the store's content-conflict check. The original query
+gets `replied_at`, not `consumed_at`. Out-of-order replies retain their own
+query/correlation; stale/terminal/cancelled identities are not promoted.
+
+`await adapter.inspect(attempt_id)` issues one explicit `bgr/thread/inspect`,
+validates identity/cancellation and each pending query against the SQL ledger,
+then imports retained replies through the same path. Retry is idempotent.
+Replies commit individually, not as an atomic snapshot batch: a later invalid
+reply may fail after earlier valid replies persisted. There is no polling,
+stored native cursor, automatic subscription, process restart recovery or
+resumption. Native `sequence` is only a process-local watermark, never proof of
+host consumption. This helper exposes no checkpoint/cancel operation; in
+particular a native cancel ack could not justify host `stop_confirmed`/close.
+
 ## Verification and remaining stages
 
 ```bash
 .venv/bin/python -m pytest -q tests/stores/test_bgr_store.py \
-  tests/server/integration/test_bgr.py tests/db/test_migration_bgr.py
+  tests/server/integration/test_bgr.py tests/db/test_migration_bgr.py \
+  tests/harnesses/codex_native/test_bgr.py \
+  tests/harnesses/codex_native/test_codex_native_app_server_rpc.py
 ```
 
 These use existing migrated DB/runtime fixtures and real `create_app` HTTP routes,
@@ -215,6 +414,10 @@ reconstruct apps/stores for restart, and test permissions, correlation, cap race
 rollback, database/workspace isolation and upgrade/downgrade. No model, GPU,
 credential, browser or external service is needed. They do not prove process
 crash recovery or non-SQLite database behavior.
+Adapter contract tests use real SQL acceptance/reply/restart and a fake sole
+worker request boundary; a local fake WebSocket server additionally exercises
+the existing JSON-RPC client's response multiplexing out of order. They prove
+translation and fencing, not actual MultiDex execution or cross-provider turns.
 
 Before making BGR selectable or registering a working launcher, implement and
 verify host capability negotiation, applied profile/catalog validation,

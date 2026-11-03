@@ -391,9 +391,11 @@ She's the tech lead: she plans, delegates the work to coding sub-agents
 to a reviewer from a different vendor than the one that wrote it. You merge.
 
 The separate [BGR controller foundation](docs/BGR_CONTROLLER.md) provides a durable,
-owner-authorized team/task ledger and mailbox. It is not a selectable execution
-mode yet: worker lifecycle, runtime role enforcement and independent reviewers
-remain staged follow-ups; Polly is unchanged.
+owner-authorized team/task ledger and mailbox, plus an opt-in codex-native
+status-protocol translator with explicit host/native identity mapping. The
+translator is not wired to runtime scheduling or callbacks. BGR is not a
+selectable execution mode yet: worker lifecycle, runtime role enforcement and
+independent reviewers remain staged follow-ups; Polly is unchanged.
 
 **🟠🔵 Debby** is a brainstorming partner with two heads, one Claude and one GPT.
 Every question you ask goes to both heads, and she lays the two answers out

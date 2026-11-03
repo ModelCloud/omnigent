@@ -29,6 +29,8 @@ from omnigent.bgr import (
     Fence,
     LeaseRequest,
     MailboxDiscard,
+    NativeAssignment,
+    NativeBinding,
     Receipt,
     Recovery,
     Send,
@@ -42,6 +44,7 @@ from omnigent.db.bgr_models import (
     SqlBgrAgent,
     SqlBgrAttempt,
     SqlBgrEnvelope,
+    SqlBgrNativeBinding,
     SqlBgrTask,
     SqlBgrTeam,
 )
@@ -400,6 +403,137 @@ class BgrStore:
             )
 
         return self._write("recover_team", read)
+
+    def _native_assignment(
+        self,
+        db: Session,
+        user_id: str,
+        session_id: str,
+        team_id: str,
+        attempt_id: str,
+        fence: Fence,
+        binding: NativeBinding | None = None,
+    ) -> NativeAssignment:
+        team = self._owned(db, team_id, user_id)
+        self._fence(team, session_id, fence)
+        row = self._attempt(db, team_id, attempt_id)
+        attempt = Attempt.model_validate_json(row.document)
+        if attempt.state != "reserved" or attempt.epoch != fence.epoch:
+            raise _conflict("Native attempt is terminal or stale")
+        if attempt.profile.harness != "codex-native":
+            raise _conflict("Native BGR binding requires an explicit codex-native profile")
+        existing = db.get(SqlBgrNativeBinding, (current_workspace_id(), attempt_id))
+        if binding is not None:
+            if (
+                binding.team_id != team_id
+                or binding.attempt_id != attempt_id
+                or binding.epoch != fence.epoch
+            ):
+                raise _conflict("Native binding does not match the assignment")
+            if existing is None:
+                db.add(
+                    SqlBgrNativeBinding(
+                        id=attempt_id,
+                        team_id=team_id,
+                        thread_id=binding.thread_id,
+                        document=binding.model_dump_json(),
+                    )
+                )
+            elif NativeBinding.model_validate_json(existing.document) != binding:
+                raise _conflict("Attempt already has another immutable native binding")
+        elif existing is None:
+            raise _conflict("Attempt has no reserved native binding")
+        else:
+            binding = NativeBinding.model_validate_json(existing.document)
+        if binding.epoch != fence.epoch:
+            raise _conflict("Native binding belongs to an older epoch; replacement is unsupported")
+        return NativeAssignment(team=_team(team), attempt=attempt, binding=binding)
+
+    def bind_native(
+        self,
+        user_id: str,
+        session_id: str,
+        team_id: str,
+        fence: Fence,
+        binding: NativeBinding,
+    ) -> NativeAssignment:
+        """Reserve an immutable mapping before RPC; this is not proof of native binding."""
+        return self._write(
+            "reserve_native_worker_mapping",
+            lambda db: self._native_assignment(
+                db,
+                user_id,
+                session_id,
+                team_id,
+                binding.attempt_id,
+                fence,
+                binding,
+            ),
+        )
+
+    def native_assignment(
+        self,
+        user_id: str,
+        session_id: str,
+        team_id: str,
+        attempt_id: str,
+        fence: Fence,
+    ) -> NativeAssignment:
+        return self._write(
+            "read_live_native_assignment",
+            lambda db: self._native_assignment(
+                db,
+                user_id,
+                session_id,
+                team_id,
+                attempt_id,
+                fence,
+            ),
+        )
+
+    def native_query(
+        self,
+        user_id: str,
+        session_id: str,
+        team_id: str,
+        attempt_id: str,
+        fence: Fence,
+        message_id: str,
+    ) -> Envelope:
+        def read(db: Session) -> Envelope:
+            assignment = self._native_assignment(
+                db,
+                user_id,
+                session_id,
+                team_id,
+                attempt_id,
+                fence,
+            )
+            row = db.scalar(
+                select(SqlBgrEnvelope).where(
+                    SqlBgrEnvelope.workspace_id == current_workspace_id(),
+                    SqlBgrEnvelope.team_id == team_id,
+                    SqlBgrEnvelope.sender_agent_id == assignment.team.brain_agent_id,
+                    SqlBgrEnvelope.message_id == message_id,
+                )
+            )
+            if row is None:
+                raise _forbidden()
+            query = _envelope(row)
+            if (
+                query.kind != "status_query"
+                or query.epoch != fence.epoch
+                or query.attempt_id != attempt_id
+                or query.task_id != assignment.attempt.task_id
+                or query.recipient_agent_id != assignment.attempt.agent_id
+                or query.sender_session_id != session_id
+                or query.sender_role != "brain"
+                or query.discard is not None
+            ):
+                raise _conflict("Native query is not a live authenticated brain status query")
+            return query
+
+        return self._write("read_persisted_native_query", read)
 
     def checkpoint(self, user_id: str, session_id: str, team_id: str, body: Checkpoint) -> Attempt:
         def apply(db: Session) -> Attempt:
