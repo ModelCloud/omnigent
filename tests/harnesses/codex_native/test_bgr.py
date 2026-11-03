@@ -557,6 +557,8 @@ async def test_terminal_and_epoch_fences_block_late_delivery_reply_and_rebinding
         bridge.receive_notification(worker.attempt.attempt_id, reply)
     with pytest.raises(OmnigentError):
         await bridge.deliver(worker.attempt.attempt_id, query.message_id)
+    with pytest.raises(OmnigentError, match="terminal"):
+        await bridge.inspect(worker.attempt.attempt_id)
     with pytest.raises(OmnigentError):
         await bridge.bind(worker.attempt.attempt_id, THREAD)
     assert len(rpc.calls) == calls
@@ -572,6 +574,8 @@ async def test_epoch_rollover_does_not_promote_native_binding_or_old_replies(led
     ledger.acquire(OWNER, BRAIN, TEAM, LeaseRequest(controller_id=CONTROLLER))
     with pytest.raises(OmnigentError, match="epoch is stale"):
         bridge.receive_notification(worker.attempt.attempt_id, reply)
+    with pytest.raises(OmnigentError, match="epoch is stale"):
+        await bridge.inspect(worker.attempt.attempt_id)
     fence = Fence(controller_id=CONTROLLER, epoch=2)
     ledger.reattach(OWNER, BRAIN, TEAM, worker.attempt.attempt_id, fence)
     with pytest.raises(OmnigentError, match="older epoch"):
@@ -607,13 +611,82 @@ async def test_scoped_queries_and_unpersisted_messages_are_never_forwarded(ledge
     assert len(rpc.calls) == calls
 
 
-async def test_inspect_validates_pending_identity_and_cancelled_snapshot(ledger, worker):
+async def test_inspect_recovers_other_replies_while_consumed_query_is_unanswered(
+    ledger, worker, db_uri
+):
+    rpc = WorkerRpc()
+    bridge = await bound(ledger, worker, rpc)
+    queries = [persist_query(ledger, worker) for _ in range(2)]
+    for query in queries:
+        await bridge.deliver(worker.attempt.attempt_id, query.message_id)
+    first = ledger.native_query(
+        OWNER, BRAIN, TEAM, worker.attempt.attempt_id, FENCE, queries[0].message_id
+    )
+    consumed = ledger.ack(
+        OWNER, worker.attempt.session_id, TEAM, Ack(envelope_id=first.envelope_id, epoch=1)
+    )
+    assert consumed.consumed_at is not None and consumed.replied_at is None
+    rpc.replies = [rpc.reply(queries[1].message_id)["envelope"]]
+    del rpc.pending[queries[1].message_id]
+
+    restarted = await adapter(BgrStore(db_uri), rpc)
+    calls = len(rpc.calls)
+    with pytest.raises(OmnigentError, match="unconsumed"):
+        await restarted.deliver(worker.attempt.attempt_id, first.message_id)
+    assert len(rpc.calls) == calls
+    receipts = await restarted.inspect(worker.attempt.attempt_id)
+    assert len(receipts) == 1
+    reply = ledger.drain(OWNER, BRAIN, TEAM)[0]
+    assert reply.envelope_id == receipts[0].envelope_id
+    assert reply.in_reply_to == queries[1].message_id
+    assert reply.correlation_id == queries[1].correlation_id
+    assert (
+        ledger.native_query(OWNER, BRAIN, TEAM, worker.attempt.attempt_id, FENCE, first.message_id)
+        == consumed
+    )
+    second = ledger.native_query(
+        OWNER, BRAIN, TEAM, worker.attempt.attempt_id, FENCE, queries[1].message_id
+    )
+    assert second.consumed_at is None and second.replied_at is not None
+
+    replayed = await adapter(BgrStore(db_uri), rpc)
+    assert await replayed.inspect(worker.attempt.attempt_id) == receipts
+    assert ledger.drain(OWNER, BRAIN, TEAM) == [reply]
+    assert ledger.recover(OWNER, BRAIN, TEAM).tasks == [worker]
+
+
+@pytest.mark.parametrize("consumed", [False, True])
+@pytest.mark.parametrize(
+    "path,value",
+    [
+        (("payload",), {"scope": "since_time"}),
+        (("identity", "attemptId"), "f" * 32),
+        (("identity", "epoch"), 2),
+        (("recipientAgentId",), "f" * 32),
+    ],
+)
+async def test_inspect_validates_pending_identity_and_cancelled_snapshot(
+    ledger, worker, consumed, path, value
+):
     rpc = WorkerRpc()
     bridge = await bound(ledger, worker, rpc)
     query = persist_query(ledger, worker)
     await bridge.deliver(worker.attempt.attempt_id, query.message_id)
+    if consumed:
+        original = ledger.native_query(
+            OWNER, BRAIN, TEAM, worker.attempt.attempt_id, FENCE, query.message_id
+        )
+        ledger.ack(
+            OWNER,
+            worker.attempt.session_id,
+            TEAM,
+            Ack(envelope_id=original.envelope_id, epoch=1),
+        )
     assert await bridge.inspect(worker.attempt.attempt_id) == []
-    rpc.pending[query.message_id]["payload"] = {"scope": "since_time"}
+    target = rpc.pending[query.message_id]
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
     with pytest.raises(OmnigentError, match="changed or foreign"):
         await bridge.inspect(worker.attempt.attempt_id)
     rpc.cancelled = True

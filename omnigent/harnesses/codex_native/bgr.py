@@ -167,8 +167,8 @@ def _identity(assignment: NativeAssignment) -> _Identity:
 
 
 def _query_wire(assignment: NativeAssignment, query: Envelope) -> _Envelope:
-    if query.payload != {"scope": "now"} or query.consumed_at is not None:
-        raise _conflict("only unconsumed scope=now status queries can be delivered")
+    if query.payload != {"scope": "now"}:
+        raise _conflict("only scope=now status queries can be translated")
     return _Envelope.model_validate(
         {
             "version": 1,
@@ -293,6 +293,8 @@ class CodexNativeBgrAdapter:
         """Return native duplicate flag, not a durable delivery/consumption receipt."""
         assignment = self._assignment(attempt_id)
         query = self._query(attempt_id, message_id)
+        if query.consumed_at is not None:
+            raise _conflict("only unconsumed status queries can be delivered")
         wire = _query_wire(assignment, query)
         response = await self.request(
             "bgr/message/deliver",

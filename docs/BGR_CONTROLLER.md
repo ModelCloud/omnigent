@@ -402,6 +402,11 @@ query/correlation; stale/terminal/cancelled identities are not promoted.
 `await adapter.inspect(attempt_id)` issues one explicit `bgr/thread/inspect`,
 validates identity/cancellation and each pending query against the SQL ledger,
 then imports retained replies through the same path. Retry is idempotent.
+Native `pending` means unanswered, not unconsumed: a host-acknowledged query can
+remain there until its reply arrives. Inspect compares its persisted content
+without redelivering it or changing consumption evidence; `deliver` still refuses
+consumed queries. Consumed-but-unanswered queries do not block importing other
+valid replies. Discard, assignment and epoch fencing still apply.
 Replies commit individually, not as an atomic snapshot batch: a later invalid
 reply may fail after earlier valid replies persisted. There is no polling,
 stored native cursor, automatic subscription, process restart recovery or
