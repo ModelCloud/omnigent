@@ -1434,6 +1434,15 @@ def _isolate_native_probe_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
     monkeypatch.delenv("OMNIGENT_INFERENCE_CONFIG", raising=False)
     for name in (
+        # Ambient API keys would otherwise win over the hermetic config and
+        # route the launch through a real provider (e.g. OpenRouter).
+        "ANTHROPIC_API_KEY",
+        "OMNIGENT_ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "OMNIGENT_OPENAI_API_KEY",
+        "OPENROUTER_API_KEY",
+        "OMNIGENT_OPENROUTER_API_KEY",
+        "CODEX_HOME",
         "CLAUDE_CODE_OAUTH_TOKEN",
         "OMNIGENT_CLAUDE_CODE_OAUTH_TOKEN",
         "ANTHROPIC_AUTH_TOKEN",
@@ -1696,7 +1705,12 @@ _ENV_KEY_CODEX_TOML = (
         pytest.param("{}", None, False, False, id="logged-out-env-only"),
         pytest.param("{}", 'model_provider = "ollama"\n', False, True, id="self-auth-toml"),
         pytest.param("{}", _ENV_KEY_CODEX_TOML, False, False, id="env-key-filtered"),
-        pytest.param("{}", _ENV_KEY_CODEX_TOML, True, True, id="env-key-passed-through"),
+        # ModelCloud aliases ``codex`` onto the single native harness, whose
+        # catalog gate trusts only Codex's own CLI login: a ``config.toml``
+        # provider authenticated by ``env_key`` is not adopted, so passing the
+        # variable through does not unlock the listing (upstream's SDK harness
+        # did adopt it).
+        pytest.param("{}", _ENV_KEY_CODEX_TOML, True, False, id="env-key-passed-through"),
     ],
 )
 def test_codex_login_catalog_requires_a_usable_child_launch(
@@ -1720,17 +1734,6 @@ def test_codex_login_catalog_requires_a_usable_child_launch(
     _isolate_native_probe_store(monkeypatch, tmp_path)
     monkeypatch.setattr(app_server, "_codex_login_usable", lambda: False)
     monkeypatch.setenv("CUSTOM_CODEX_TOKEN", "token")
-    if config_toml is None:
-        _seed_cli_login_catalogs(codex_pinned=provider_config != "{}")
-    else:
-        (tmp_path / "codex-source" / "config.toml").write_text(config_toml)
-        # Seed where the native probe writes for this config.toml launch.
-        launch = app_server.resolve_native_codex_launch(model=None)
-        model_catalog_store.write_catalog(
-            "codex-native",
-            app_server.codex_catalog_fingerprint(launch),
-            [{"id": model_id} for model_id in _CLI_LOGIN_CODEX_IDS],
-        )
     spec = AgentSpec(
         spec_version=1,
         name="worker",
@@ -1741,6 +1744,17 @@ def test_codex_login_catalog_requires_a_usable_child_launch(
             )
         ),
     )
+    if config_toml is None:
+        _seed_cli_login_catalogs(codex_pinned=provider_config != "{}")
+    else:
+        (tmp_path / "codex-source" / "config.toml").write_text(config_toml)
+        # Seed where the native probe writes for this config.toml launch.
+        launch = app_server.resolve_native_codex_launch(model=None, spec=spec)
+        model_catalog_store.write_catalog(
+            "codex-native",
+            app_server.codex_catalog_fingerprint(launch),
+            [{"id": model_id} for model_id in _CLI_LOGIN_CODEX_IDS],
+        )
 
     row = catalog_for_spec(spec)["self"]
 
@@ -1970,10 +1984,16 @@ def test_managed_api_key_helper_alone_keeps_the_login_catalog(
     assert [model["id"] for model in row["models"]] == _CLI_LOGIN_CLAUDE_IDS
 
 
-def test_native_only_binding_does_not_feed_the_sdk_worker(
+def test_codex_alias_shares_the_native_only_binding(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A gateway bound only to native Codex never supplies the SDK worker's catalog."""
+    """A ``codex-native`` gateway binding serves the ``codex`` alias too.
+
+    Upstream keeps a separate SDK ``codex`` worker whose catalog must not be
+    fed by a gateway bound only to ``codex-native``. ModelCloud aliases
+    ``codex`` onto the single native Codex harness, so both ids resolve the
+    same binding and neither falls back to the CLI-login catalog.
+    """
     from omnigent.harnesses.codex_native import app_server
     from omnigent.models import model_catalog_store
 
@@ -1992,10 +2012,11 @@ def test_native_only_binding_does_not_feed_the_sdk_worker(
     )
     _seed_cli_login_catalogs(codex_pinned=True)
 
-    sdk = _worker_spec("codex")
-    assert resolve_model_provider(sdk, "codex").kind == "subscription"
-    row = catalog_for_spec(sdk)["self"]
-    assert [model["id"] for model in row["models"]] == _CLI_LOGIN_CODEX_IDS
+    for harness in ("codex", "codex-native"):
+        spec = _worker_spec(harness)
+        assert resolve_model_provider(spec, harness).kind == "gateway"
+        row = catalog_for_spec(spec)["self"]
+        assert [model["id"] for model in row["models"]] != _CLI_LOGIN_CODEX_IDS
 
 
 def test_unconfigured_rows_require_a_cli_login_launch(

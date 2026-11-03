@@ -517,12 +517,10 @@ def test_ucode_config_for_profile_reads_allowlisted_claude_state(
             "CLAUDE_CODE_DISABLE_ADVISOR_TOOL": "1",
             "ANTHROPIC_CUSTOM_HEADERS": (
                 "x-databricks-use-coding-agent-mode: true\nUser-Agent: ucode/test claude/test"
-            )
-            + (
+                # ModelCloud's ``_ucode_config_for_profile`` always stamps the
+                # gateway attribution lines, even on non-gateway workspace URLs.
                 "\nDatabricks-Custom-Coding-Agent: claude-code"
                 "\nDatabricks-Custom-Client-Surfaces: omnigent, ug"
-                if gateway
-                else ""
             ),
             # No CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: this path launches in
             # gateway mode (CLAUDE_CODE_USE_GATEWAY=1), where Claude Code
