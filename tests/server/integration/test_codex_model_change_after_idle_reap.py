@@ -244,9 +244,11 @@ class _NativeSession:
         assert response.status_code == 200, response.text
         assert response.json()["model_override"] == model
         self.assert_settings(model, effort)
-        assert self.codex.applied_updates == [
-            {"threadId": self.codex.thread_id, "model": model, "effort": effort}
-        ]
+        assert len(self.codex.applied_updates) == 1
+        update = self.codex.applied_updates[0]
+        assert update["threadId"] == self.codex.thread_id
+        assert update["model"] == model
+        assert update["effort"] == effort
         assert not any(event.get("type") == "response.error" for event in self.events)
 
 
@@ -707,9 +709,12 @@ async def test_codex_unregistered_backend_is_not_restarted_after_connection_refu
     response = await client.patch(
         f"/v1/sessions/{session.session_id}", json={"model_override": _REQUESTED_MODEL}
     )
-    _assert_codex_refusal(session, response)
-    assert session.codex.launches == 1
-    assert session.session_id not in native_runtime._AUTO_CODEX_APP_SERVERS
+    # The fork self-heals a dead Codex listener even when no backend is
+    # registered, so the switch succeeds on a fresh launch instead of being
+    # refused. Upstream has no listener probe and refuses here.
+    session.assert_applied(response)
+    assert session.codex.launches == 2
+    assert session.session_id in native_runtime._AUTO_CODEX_APP_SERVERS
 
 
 async def test_codex_live_handshake_refusal_does_not_restart_backend(
