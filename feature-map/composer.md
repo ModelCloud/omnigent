@@ -18,9 +18,14 @@ apply only to that side chat. See the [side-chat settings recipe](sessions.md).
   Configure draft** beside Polly, not a runnable agent. The scrollable dialog
   configures one brain, a 1–64 dynamic grunt cap/default profile and one or two
   fresh-reviewer profiles. All six profile fields persist per
-  browser/server/user/project/host; catalog choices reuse the host's model rows
-  and grouped native selectors. Manual/unsupported values remain visible and
-  unverified. Saving incomplete drafts is allowed; storage and validation errors
+  browser/server/user/project/host. Each role uses friendly harness names (MultiDex,
+  not `codex-native`) and one Harness → Model → Provider → Variant/Speed → Reasoning
+  flow. The opt-in native selector form handles singleton/ungrouped catalogs and
+  explicit fast-only variants without changing compact composer consumers.
+  Provider means “Service serving this model”; missing metadata is not invented.
+  Advanced manual overrides are collapsed by default. Unsupported or mismatched
+  saved values remain visibly unverified instead of claiming another active
+  catalog row. Saving incomplete drafts is allowed; storage and validation errors
   never claim success. Reopen/reload restores saved values. Launch is explicitly
   unavailable; no generic session is created. Closing restores the previous
   normal agent/message. Sandbox and deployment-curated menus omit the preview.
@@ -32,7 +37,11 @@ apply only to that side chat. See the [side-chat settings recipe](sessions.md).
   required for desktop/mobile layout, focus and nested dropdown behavior.
 
   Manual journey: on an isolated server with a connected ordinary host, open
-  New Chat → agent picker → BGR. Choose profiles, set 64 grunts and 2 reviewers,
+  New Chat → agent picker → BGR. Confirm MultiDex labels on every role and
+  Advanced collapsed by default. Choose a model, provider and variant/speed
+  (explicitly choose Fast when that is the only variant), then reasoning.
+  Open Advanced to edit a manual provider and confirm its unverified notice,
+  not another catalog row, is shown. Set 64 grunts and 2 reviewers,
   save and reload; verify every field is retained. Switch hosts/users to verify
   scope isolation. Make storage unavailable and verify a visible save error.
   Confirm Launch BGR stays disabled, then go Back to New Chat and verify the

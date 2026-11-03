@@ -15,16 +15,28 @@ cap of 1–64 (default 4), and one or two **Reviewer** profiles for fresh
 provider, model, variant, speed and reasoning independently. No worker/session
 names or identities are fabricated by the form.
 
-Harness choices come from the existing agent catalog. The existing host model
-catalog and grouped native model selectors supply advertised model/provider/
-variant/speed/reasoning choices. Selecting a catalog row explicitly replaces its
-four routing/metadata values; absent provider metadata stays blank rather than
-being inferred from a display label. Numeric catalog speed is saved as a string
-to match `Profile.speed`; it describes relative endpoint performance, **not an
+Each role follows **Harness → Model → Provider → Variant/Speed → Reasoning**.
+Harness choices come from the existing agent catalog with shared friendly labels
+(for example, `codex-native` displays as **MultiDex**, not as a new wire ID).
+The host model catalog supplies one ordered selection flow, including ungrouped
+catalogs; there is no extra catalog-profile picker. **Provider** means “Service
+serving this model.” Single choices display as static values after selection,
+but even a sole model can be explicitly selected from an empty draft. Fast-only
+or otherwise non-regular models require an explicit variant/speed choice; merely
+choosing their family never commits an implicit fast variant.
+
+Applying an advertised model/variant replaces its four routing/metadata values;
+absent provider metadata displays as “Not advertised” and stays blank rather
+than being inferred from a display label or subscription source. Numeric catalog
+speed is saved as a string to match `Profile.speed`; it describes relative endpoint performance, **not an
 enforced execution mode**. Manual values, a retired harness/model and reasoning
-not advertised by a replacement catalog are retained with unverified-value
-notices. Changing harness never silently clears profile fields. Profiles are
-drafts, not applied or runtime-validated configuration.
+not advertised by a replacement catalog are retained with visible unverified-value
+notices. **Advanced manual overrides**, collapsed by default for every role,
+exposes all six raw fields without duplicating the primary pickers. A manual
+model/provider/variant/speed combination that differs from an advertised row
+does not claim that row as the active catalog selection. Changing harness never
+silently clears profile fields. Profiles are drafts, not applied or
+runtime-validated configuration.
 
 **Save draft** writes a versioned browser-local record, including incomplete
 profiles, under `omnigent:bgr-draft:v1:` scoped through the existing New Chat

@@ -6443,6 +6443,7 @@ export function NewChatLandingScreen() {
           scope={pickerCacheKey}
           host={selectedHost}
           agents={agents ?? []}
+          harnessLabels={brainHarnessLabelsAll}
           onClose={() => setBgrOpen(false)}
         />
       )}

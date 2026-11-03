@@ -331,3 +331,123 @@ it("forwards select open/close to onSelectOpenChange (dialog dismiss guard)", as
   fireEvent.keyDown(screen.getByRole("combobox", { name: "Provider" }), { key: "ArrowDown" });
   expect(onOpenChange).toHaveBeenLastCalledWith(true);
 });
+
+it.each(["fast", "future-variant"])(
+  "configuration requires an explicit %s variant even for a single default catalog row",
+  (variant) => {
+    const onModelChange = vi.fn();
+    const row = {
+      id: "wire-only",
+      modelFamily: "only",
+      modelLabel: "Only model",
+      providerId: "future-service",
+      variant,
+      isDefault: true,
+    };
+    render(
+      <NativeModelSelectors
+        configuration
+        options={[row]}
+        selectedModel={null}
+        effort={null}
+        onModelChange={onModelChange}
+        onEffortChange={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("combobox", { name: "Model" })).toHaveValue("");
+    expect(onModelChange).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByRole("combobox", { name: "Model" }), {
+      target: { value: "only" },
+    });
+    expect(onModelChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("group", { name: "Provider" })).toHaveTextContent("future-service");
+    fireEvent.change(screen.getByRole("combobox", { name: "Variant / Speed" }), {
+      target: { value: "wire-only" },
+    });
+    expect(onModelChange).toHaveBeenCalledExactlyOnceWith("wire-only");
+  },
+);
+
+it("configuration keeps dependent picks explicit, uses exact row ids, and preserves unknown reasoning", () => {
+  const fast = {
+    ...options[0],
+    id: "future-fast",
+    providerId: "future",
+    variant: "fast",
+    speed: 7.5,
+  };
+  const onModelChange = vi.fn();
+  const onEffortChange = vi.fn();
+  const props = {
+    configuration: true,
+    options: [...options, fast],
+    effort: "retired-effort",
+    onModelChange,
+    onEffortChange,
+  };
+  const { rerender } = render(<NativeModelSelectors {...props} selectedModel="lithos-fast" />);
+  expect(screen.getAllByRole("group").map((node) => node.getAttribute("aria-label"))).toEqual([
+    "Model",
+    "Provider",
+    "Variant / Speed",
+    "Reasoning",
+  ]);
+  expect(screen.getByRole("combobox", { name: "Reasoning" })).toHaveDisplayValue(
+    "Unverified: retired-effort",
+  );
+  fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), {
+    target: { value: "known:openrouter" },
+  });
+  expect(onModelChange).toHaveBeenCalledExactlyOnceWith("openrouter-1017");
+  rerender(<NativeModelSelectors {...props} selectedModel="openrouter-1017" />);
+  onModelChange.mockClear();
+  fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), {
+    target: { value: "known:future" },
+  });
+  expect(onModelChange).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByRole("combobox", { name: "Variant / Speed" }), {
+    target: { value: "future-fast" },
+  });
+  expect(onModelChange).toHaveBeenCalledExactlyOnceWith("future-fast");
+  expect(onEffortChange).not.toHaveBeenCalled();
+  rerender(<NativeModelSelectors {...props} selectedModel="future-fast" />);
+  expect(screen.getByRole("combobox", { name: "Reasoning" })).toHaveDisplayValue(
+    "Unverified: retired-effort",
+  );
+  fireEvent.change(screen.getByRole("combobox", { name: "Reasoning" }), {
+    target: { value: "max" },
+  });
+  expect(onEffortChange).toHaveBeenLastCalledWith("max");
+  fireEvent.change(screen.getByRole("combobox", { name: "Reasoning" }), { target: { value: "" } });
+  expect(onEffortChange).toHaveBeenLastCalledWith(null);
+});
+
+it("configuration distinguishes exact catalog rows sharing a variant and respects disabled controls", () => {
+  const rows = [1, 2].map((speed) => ({
+    id: `wire-${speed}`,
+    modelFamily: "family",
+    modelLabel: "Model",
+    providerId: "openai",
+    speed,
+    supportedReasoningEfforts: [{ reasoningEffort: "high" }],
+  }));
+  const onModelChange = vi.fn();
+  const props = {
+    configuration: true,
+    options: rows,
+    selectedModel: "wire-1",
+    effort: null,
+    onModelChange,
+    onEffortChange: vi.fn(),
+  };
+  const { rerender } = render(<NativeModelSelectors {...props} />);
+  expect(screen.getByRole("combobox", { name: "Variant / Speed" })).toHaveDisplayValue(
+    "Regular · 1×",
+  );
+  fireEvent.change(screen.getByRole("combobox", { name: "Variant / Speed" }), {
+    target: { value: "wire-2" },
+  });
+  expect(onModelChange).toHaveBeenCalledExactlyOnceWith("wire-2");
+  rerender(<NativeModelSelectors {...props} disabled />);
+  for (const control of screen.getAllByRole("combobox")) expect(control).toBeDisabled();
+});

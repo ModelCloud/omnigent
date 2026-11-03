@@ -11,6 +11,8 @@ import {
   type BgrProfileDraft,
 } from "@/lib/bgrDraft";
 import { NativeModelSelectors } from "@/components/NativeModelSelectors";
+import { BRAIN_HARNESS_LABELS } from "@/lib/agentLabels";
+import { nativeCodingAgentForHarness } from "@/lib/nativeCodingAgents";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -30,6 +32,7 @@ function RoleProfile({
   profile,
   host,
   harnesses,
+  harnessLabels,
   onChange,
 }: {
   title: string;
@@ -37,6 +40,7 @@ function RoleProfile({
   profile: BgrProfileDraft;
   host: Host | undefined;
   harnesses: readonly string[];
+  harnessLabels: Readonly<Record<string, string>>;
   onChange: (profile: BgrProfileDraft) => void;
 }) {
   const id = useId();
@@ -48,9 +52,21 @@ function RoleProfile({
   );
   const options = catalog.data ?? [];
   const selected = options.find((row) => row.id === profile.model);
-  const grouped = options.some((row) => row.modelFamily);
+  const verified =
+    selected &&
+    profile.provider === (selected.providerId ?? "") &&
+    profile.variant === (selected.variant ?? "") &&
+    profile.speed === (selected.speed === undefined ? "" : String(selected.speed));
   const reasoningOptions = selected?.supportedReasoningEfforts ?? [];
-  const fields = ["provider", "model", "variant", "speed", "reasoning"] as const;
+  const fields = [
+    ["harness", "Harness ID"],
+    ["model", "Model ID"],
+    ["provider", "Provider ID"],
+    ["variant", "Variant value"],
+    ["speed", "Speed value"],
+    ["reasoning", "Reasoning value"],
+  ] as const;
+  const [advanced, setAdvanced] = useState(false);
   const knownHarnesses = [
     ...new Set([...harnesses, ...(profile.harness ? [profile.harness] : [])]),
   ];
@@ -76,18 +92,22 @@ function RoleProfile({
           <option value="">Not specified</option>
           {knownHarnesses.map((harness) => (
             <option key={harness} value={harness}>
-              {harness}
+              {nativeCodingAgentForHarness(harness)?.displayName ??
+                harnessLabels[harness] ??
+                harness}
+              {!harnesses.includes(harness) ? " (unverified)" : ""}
             </option>
           ))}
         </select>
       </div>
       {host?.status !== "online" ? (
         <p className="text-xs text-muted-foreground">
-          Connect this host to load its model catalog. Manual draft values remain editable.
+          Connect this host to load its model catalog. Manual draft values remain editable in
+          Advanced.
         </p>
       ) : !profile.harness ? (
         <p className="text-xs text-muted-foreground">
-          Choose a harness to load its model catalog, or enter a profile manually.
+          Choose a harness to load its model catalog, or enter manual values in Advanced.
         </p>
       ) : catalog.isLoading ? (
         <p role="status" className="text-xs text-muted-foreground">
@@ -105,87 +125,80 @@ function RoleProfile({
           No models advertised for this harness. Manual values are unverified.
         </p>
       ) : (
-        <div className="space-y-2">
-          <label htmlFor={`${id}-catalog`} className="text-sm font-medium">
-            Catalog profile
-          </label>
-          <select
-            id={`${id}-catalog`}
-            className={selectClass}
-            value={selected?.id ?? ""}
-            onChange={(event) => changeModel(event.target.value)}
-          >
-            <option value="" disabled>
-              Choose a catalog row
-            </option>
-            {options.map((row) => (
-              <option key={row.id} value={row.id}>
-                {[
-                  row.displayName ?? row.id,
-                  row.providerId,
-                  row.variant,
-                  row.speed === undefined ? null : `${row.speed}×`,
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
-              </option>
-            ))}
-          </select>
-          {grouped && (
-            <NativeModelSelectors
-              className="min-w-0 p-0"
-              options={options}
-              selectedModel={profile.model || null}
-              effort={profile.reasoning || null}
-              onModelChange={changeModel}
-              onEffortChange={(reasoning) => onChange({ ...profile, reasoning: reasoning ?? "" })}
-            />
-          )}
-          <p className="text-xs text-muted-foreground">
-            Choosing a catalog row replaces model, provider, variant and speed with its advertised
-            values. Reasoning is retained until you change it.
-          </p>
-          <p className="text-xs text-muted-foreground">
-            Catalog speed is relative endpoint metadata, not an enforced execution mode.
-          </p>
-        </div>
+        <NativeModelSelectors
+          key={JSON.stringify([
+            profile.harness,
+            profile.model,
+            profile.provider,
+            profile.variant,
+            profile.speed,
+          ])}
+          configuration
+          className="min-w-0 p-0"
+          options={options}
+          selectedModel={verified ? profile.model : null}
+          effort={profile.reasoning || null}
+          onModelChange={changeModel}
+          onEffortChange={(reasoning) => onChange({ ...profile, reasoning: reasoning ?? "" })}
+        />
       )}
-      <div className="grid min-w-0 gap-3 sm:grid-cols-2">
-        {fields.map((field) => (
-          <div key={field} className="min-w-0 space-y-1.5">
-            <label htmlFor={`${id}-${field}`} className="text-sm font-medium">
-              {field.charAt(0).toUpperCase() + field.slice(1)}
-              {field === "provider" || field === "model" ? " (required for a team)" : " (optional)"}
-            </label>
-            <Input
-              id={`${id}-${field}`}
-              maxLength={256}
-              value={profile[field]}
-              list={field === "reasoning" ? `${id}-reasoning-options` : undefined}
-              onChange={(event) => onChange({ ...profile, [field]: event.target.value })}
-              autoComplete="off"
-            />
+      {!verified &&
+        [profile.model, profile.provider, profile.variant, profile.speed].some(Boolean) && (
+          <div className="space-y-1 break-words rounded-md border p-2 text-xs text-muted-foreground">
+            <p>
+              Manual values (unverified). They remain unchanged until you select an advertised
+              model/variant or edit Advanced.
+            </p>
+            <p>
+              Model: {profile.model || "Not set"} · Provider: {profile.provider || "Not set"} ·
+              Variant: {profile.variant || "Not set"} · Speed: {profile.speed || "Not set"}
+            </p>
           </div>
-        ))}
-      </div>
-      <datalist id={`${id}-reasoning-options`}>
-        {reasoningOptions.map((option) => (
-          <option key={option.reasoningEffort} value={option.reasoningEffort} />
-        ))}
-      </datalist>
-      {profile.model && !selected && options.length > 0 && (
-        <p className="text-xs text-muted-foreground">
-          Saved model is not in this catalog. It is preserved as an unverified manual value.
-        </p>
-      )}
+        )}
       {profile.reasoning &&
-        selected &&
-        !reasoningOptions.some((option) => option.reasoningEffort === profile.reasoning) && (
+        (!verified ||
+          !reasoningOptions.some((option) => option.reasoningEffort === profile.reasoning)) && (
           <p className="text-xs text-muted-foreground">
-            This reasoning value is not advertised for the selected model. It is preserved, not
-            silently removed.
+            Reasoning: {profile.reasoning} (unverified). This reasoning value is not advertised for
+            the selected model. It is preserved, not silently removed.
           </p>
         )}
+      <div>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          aria-expanded={advanced}
+          aria-controls={`${id}-advanced`}
+          onClick={() => setAdvanced(!advanced)}
+        >
+          Advanced manual overrides
+        </Button>
+        {advanced && (
+          <div id={`${id}-advanced`} className="space-y-3 rounded-md border p-3">
+            <p className="text-xs text-muted-foreground">
+              Raw saved values, not runtime-validated. Catalog selection replaces model, provider,
+              variant and speed with advertised values; reasoning is retained until changed.
+            </p>
+            <div className="grid min-w-0 gap-3 sm:grid-cols-2">
+              {fields.map(([field, label]) => (
+                <div key={field} className="min-w-0 space-y-1.5">
+                  <label htmlFor={`${id}-${field}-manual`} className="text-sm font-medium">
+                    {label}
+                  </label>
+                  <Input
+                    id={`${id}-${field}-manual`}
+                    maxLength={256}
+                    value={profile[field]}
+                    onChange={(event) => onChange({ ...profile, [field]: event.target.value })}
+                    autoComplete="off"
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
     </fieldset>
   );
 }
@@ -195,11 +208,13 @@ export function BgrConfigurationDialog({
   scope,
   host,
   agents,
+  harnessLabels = BRAIN_HARNESS_LABELS,
   onClose,
 }: {
   scope: string | null;
   host: Host | undefined;
   agents: readonly AvailableAgent[];
+  harnessLabels?: Readonly<Record<string, string>>;
   onClose: () => void;
 }) {
   const key = bgrDraftStorageKey(scope, host?.host_id ?? null);
@@ -314,6 +329,7 @@ export function BgrConfigurationDialog({
             onChange={(brain) => update({ ...draft, brain })}
             host={host}
             harnesses={harnesses}
+            harnessLabels={harnessLabels}
           />
           <RoleProfile
             title="Grunt default"
@@ -322,6 +338,7 @@ export function BgrConfigurationDialog({
             onChange={(grunt) => update({ ...draft, grunt })}
             host={host}
             harnesses={harnesses}
+            harnessLabels={harnessLabels}
           />
           {reviewerSlots.map(({ profile, title }, index) => (
             <RoleProfile
@@ -339,6 +356,7 @@ export function BgrConfigurationDialog({
               }
               host={host}
               harnesses={harnesses}
+              harnessLabels={harnessLabels}
             />
           ))}
           {incomplete.length > 0 && (
