@@ -393,9 +393,13 @@ to a reviewer from a different vendor than the one that wrote it. You merge.
 The separate [BGR controller foundation](docs/BGR_CONTROLLER.md) provides a durable,
 owner-authorized team/task ledger and mailbox, plus an opt-in codex-native
 status-protocol translator with explicit host/native identity mapping. The
-translator is not wired to runtime scheduling or callbacks. BGR is not a
-selectable execution mode yet: worker lifecycle, runtime role enforcement and
-independent reviewers remain staged follow-ups; Polly is unchanged.
+translator is not wired to runtime scheduling or callbacks. New Chat offers
+**BGR → Configure draft** alongside Polly on an ordinary host: configure one
+brain, dynamic grunts and one or two reviewer profiles, then save a browser-local
+draft scoped to the server, user, project and host. This is **configuration-only**;
+launch remains unavailable until worker lifecycle, runtime role enforcement and
+independent reviewers are implemented. It never creates a generic session as a
+substitute. Polly and normal native launches are unchanged.
 
 **🟠🔵 Debby** is a brainstorming partner with two heads, one Claude and one GPT.
 Every question you ask goes to both heads, and she lays the two answers out

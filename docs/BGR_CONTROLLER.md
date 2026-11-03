@@ -2,7 +2,50 @@
 
 This is a durable control-plane foundation, **not a working BGR execution mode**.
 The [full design](BRAIN_EXECUTOR_REVIEWER_DESIGN.md) remains the target. No Polly
-behavior, seeded agent, picker, or runtime prompt changes are included.
+behavior, seeded agent, or runtime prompt changes are included. New Chat has a
+configuration-only BGR entry; it is not a runnable catalog agent.
+
+## New Chat configuration preview
+
+On an ordinary host, open New Chat's harness/agent picker and choose **BGR →
+Configure draft** beside Polly. The responsive dialog has exactly one **Brain**
+(`brain`), a **Grunt default** for dynamic `grunt-<unique>` workers with an active
+cap of 1–64 (default 4), and one or two **Reviewer** profiles for fresh
+`reviewer-<unique>` sessions per publication. Each profile preserves harness,
+provider, model, variant, speed and reasoning independently. No worker/session
+names or identities are fabricated by the form.
+
+Harness choices come from the existing agent catalog. The existing host model
+catalog and grouped native model selectors supply advertised model/provider/
+variant/speed/reasoning choices. Selecting a catalog row explicitly replaces its
+four routing/metadata values; absent provider metadata stays blank rather than
+being inferred from a display label. Numeric catalog speed is saved as a string
+to match `Profile.speed`; it describes relative endpoint performance, **not an
+enforced execution mode**. Manual values, a retired harness/model and reasoning
+not advertised by a replacement catalog are retained with unverified-value
+notices. Changing harness never silently clears profile fields. Profiles are
+drafts, not applied or runtime-validated configuration.
+
+**Save draft** writes a versioned browser-local record, including incomplete
+profiles, under `omnigent:bgr-draft:v1:` scoped through the existing New Chat
+server/user/project identity plus the selected host ID. It does not create SQL
+teams or call runner-authenticated `/v1/bgr` APIs: those require an existing
+private source session and trusted runner authentication. No authentication is
+weakened. Provider/model must be filled before a draft could describe a complete
+team; the field lengths, reviewer count and grunt cap are checked on save.
+Browser reload/reopening restores saved values; unsaved edits are labelled and
+are discarded on explicit close. Storage read/write errors are visible and a
+failed write never claims success or overwrites the previous record. Do not put
+credentials in drafts; they do not sync between browsers or configure a host.
+
+**Launch BGR (unavailable)** stays disabled even for complete drafts, with missing
+worker lifecycle, role enforcement and reviewer isolation explained. While the
+dialog is open, the ordinary New Chat submit button, keyboard and form-submit
+paths cannot create a generic session. Closing returns to the previous normal
+agent and composer draft. No host/identity means no saved draft; offline hosts
+allow manual draft editing without catalog probes. Managed sandboxes and
+deployment-curated agent menus do not expose the BGR preview. This does not add
+BGR to fork, schedule or project-default catalog pickers.
 
 The normal server constructs `BgrStore` from its application database URI and
 injects it into `create_app`. Embedded servers opt in with the `bgr_store`
@@ -504,7 +547,7 @@ worker request boundary; a local fake WebSocket server additionally exercises
 the existing JSON-RPC client's response multiplexing out of order. They prove
 translation and fencing, not actual MultiDex execution or cross-provider turns.
 
-Before making BGR selectable or registering a working launcher, implement and
+Before enabling BGR execution or registering a working launcher, implement and
 verify host capability negotiation, applied profile/catalog validation,
 runtime-enforced role/tool/git restrictions, safe-boundary delivery with actual
 callbacks, stop confirmation from a trusted host, independent fresh reviewer

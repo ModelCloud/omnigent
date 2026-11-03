@@ -442,6 +442,63 @@ afterEach(() => {
 });
 
 describe("NewChatLandingScreen create flow", () => {
+  it("opens BGR beside Polly without selecting a generic agent or allowing any submit path", async () => {
+    setAgents([agent({ name: "polly", display_name: "Polly", builtin: true })]);
+    renderLanding();
+    await waitForWorkspaceSeed();
+    typeMessage("Keep my normal chat draft");
+    const input = screen.getByTestId("new-chat-landing-input");
+    const mainForm = input.closest("form")!;
+    const picker = screen.getByTestId("new-chat-landing-agent-select");
+    fireEvent.pointerDown(picker, { button: 0 });
+    expect(screen.getByTestId("new-chat-landing-agent-ag_hello")).toHaveTextContent("Polly");
+    fireEvent.click(screen.getByTestId("new-chat-landing-bgr"));
+    expect(screen.getByRole("dialog", { name: "BGR configuration" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Launch BGR (unavailable)" })).toBeDisabled();
+    expect(screen.getByTestId("new-chat-landing-submit")).toBeDisabled();
+    fireEvent.submit(mainForm);
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+    expect(authenticatedFetch).not.toHaveBeenCalled();
+    expect(beginLocalConversationMock).not.toHaveBeenCalled();
+    expect(navigateMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Back to New Chat" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(picker).toHaveTextContent("Polly");
+    expect(input).toHaveValue("Keep my normal chat draft");
+    expect(screen.getByTestId("new-chat-landing-submit")).toBeEnabled();
+  });
+
+  it("does not offer BGR configuration for a managed sandbox", async () => {
+    renderLanding([], { managed_sandboxes_enabled: true });
+    fireEvent.pointerDown(screen.getByTestId("new-chat-landing-host-chip"), { button: 0 });
+    fireEvent.click(screen.getByTestId("new-chat-landing-sandbox-option"));
+    fireEvent.pointerDown(screen.getByTestId("new-chat-landing-agent-select"), { button: 0 });
+    expect(screen.queryByTestId("new-chat-landing-bgr")).not.toBeInTheDocument();
+    expect(authenticatedFetch).not.toHaveBeenCalled();
+  });
+
+  it("does not bypass a deployment-curated agent menu with BGR configuration", () => {
+    setAgents([agent({ name: "polly", display_name: "Polly", builtin: true })]);
+    renderLanding([], {
+      picker: { restrictToAgentNames: new Set(["polly"]), defaultAgentName: "polly" },
+    });
+    fireEvent.pointerDown(screen.getByTestId("new-chat-landing-agent-select"), { button: 0 });
+    expect(screen.getByTestId("new-chat-landing-agent-ag_hello")).toBeInTheDocument();
+    expect(screen.queryByTestId("new-chat-landing-bgr")).not.toBeInTheDocument();
+    expect(authenticatedFetch).not.toHaveBeenCalled();
+  });
+
+  it("cannot configure or submit BGR without a connected host selection", () => {
+    setHosts([]);
+    renderLanding();
+    typeMessage("Do not invent a BGR host");
+    expect(screen.queryByTestId("new-chat-landing-bgr")).not.toBeInTheDocument();
+    expect(screen.getByTestId("new-chat-landing-submit")).toBeDisabled();
+    fireEvent.submit(screen.getByTestId("new-chat-landing-input").closest("form")!);
+    expect(authenticatedFetch).not.toHaveBeenCalled();
+  });
+
   it.each([
     { query: "canvas=main", canvasId: "main", project: undefined },
     {

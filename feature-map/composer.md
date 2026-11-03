@@ -14,6 +14,30 @@ apply only to that side chat. See the [side-chat settings recipe](sessions.md).
 
 ## Sub-features
 
+- `bgr-configuration`: New Chat's ordinary-host agent picker offers **BGR →
+  Configure draft** beside Polly, not a runnable agent. The scrollable dialog
+  configures one brain, a 1–64 dynamic grunt cap/default profile and one or two
+  fresh-reviewer profiles. All six profile fields persist per
+  browser/server/user/project/host; catalog choices reuse the host's model rows
+  and grouped native selectors. Manual/unsupported values remain visible and
+  unverified. Saving incomplete drafts is allowed; storage and validation errors
+  never claim success. Reopen/reload restores saved values. Launch is explicitly
+  unavailable; no generic session is created. Closing restores the previous
+  normal agent/message. Sandbox and deployment-curated menus omit the preview.
+  No host or unresolved identity prevents saving. See
+  [the controller contract](../docs/BGR_CONTROLLER.md#new-chat-configuration-preview).
+  Component/flow coverage: `web/src/components/BgrConfigurationDialog.test.tsx`,
+  `web/src/lib/bgrDraft.test.ts`, and the BGR cases in
+  `web/src/shell/NewChatDialog.flow.test.tsx`. Browser verification is still
+  required for desktop/mobile layout, focus and nested dropdown behavior.
+
+  Manual journey: on an isolated server with a connected ordinary host, open
+  New Chat → agent picker → BGR. Choose profiles, set 64 grunts and 2 reviewers,
+  save and reload; verify every field is retained. Switch hosts/users to verify
+  scope isolation. Make storage unavailable and verify a visible save error.
+  Confirm Launch BGR stays disabled, then go Back to New Chat and verify the
+  previous Polly/native agent and prompt can still launch normally.
+
 - `prompt-link`: opening the new-session page with `?prompt=`
   fills an editable draft without starting a session. The consumed prompt is
   removed from the URL while other query parameters and the fragment remain.
