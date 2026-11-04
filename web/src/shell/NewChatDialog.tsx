@@ -6419,7 +6419,14 @@ export function NewChatLandingScreen() {
           onLaunched={({ brainSessionId }) => {
             setSessionHost(brainSessionId, selectedHostId);
             markSessionCreated(brainSessionId, "computer");
-            navigate(`/c/${brainSessionId}`);
+            const returnToCanvas =
+              searchParams.has(CANVAS_QUERY_PARAM) && isFeatureEnabled(info, "canvas");
+            const canvasId = selectedProject
+              ? (configProjectId ?? `name:${selectedProject}`)
+              : MAIN_CANVAS_ID;
+            navigate(
+              returnToCanvas ? canvasLocation(canvasId, brainSessionId) : `/c/${brainSessionId}`,
+            );
           }}
         />
       )}
