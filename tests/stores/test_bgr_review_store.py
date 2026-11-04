@@ -471,3 +471,37 @@ def test_malformed_result_is_atomic_and_does_not_end_the_reviewer(reviews):
         )
     assert reviews.get_review_round(OWNER, BRAIN, TEAM, round.round_id).jobs[0].state == "running"
     assert reviews.drain(OWNER, BRAIN, TEAM) == []
+
+
+def test_review_admission_is_bounded_and_failed_activation_has_no_partial_rows(
+    reviews, monkeypatch
+):
+    from omnigent.stores import bgr_review_store
+
+    monkeypatch.setattr(bgr_review_store, "MAX_REVIEW_ROUNDS", 1)
+    monkeypatch.setattr(bgr_review_store, "MAX_TASKS", 1)
+    round = reviews.reserve_review_round(OWNER, BRAIN, TEAM, request())
+    with pytest.raises(OmnigentError, match="review retention"):
+        reviews.reserve_review_round(OWNER, BRAIN, TEAM, request())
+    activate(reviews, round, round.jobs[0])
+    with pytest.raises(OmnigentError, match="task retention"):
+        activate(reviews, round, round.jobs[1])
+    assert len(reviews.recover(OWNER, BRAIN, TEAM).agents) == 2
+    assert reviews.get_review_round(OWNER, BRAIN, TEAM, round.round_id).jobs[1].state == "reserved"
+
+
+def test_redaction_expansion_returns_invalid_input_and_preserves_mailbox(reviews):
+    round = reviews.reserve_review_round(OWNER, BRAIN, TEAM, request())
+    job = activate(reviews, round, round.jobs[0])
+    brain = reviews.get_team(OWNER, BRAIN, TEAM).brain_agent_id
+    body = message(
+        round,
+        job,
+        brain,
+        kind="question",
+        correlation_id=uuid4().hex,
+        payload={"question": "http://x " * 850},
+    )
+    with pytest.raises(OmnigentError, match="Sanitized reviewer message"):
+        reviews.send(OWNER, job.session_id, TEAM, body)
+    assert reviews.drain(OWNER, BRAIN, TEAM) == []

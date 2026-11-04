@@ -28,7 +28,9 @@ from omnigent.db.bgr_models import (
     SqlBgrTask,
 )
 from omnigent.errors import ErrorCode, OmnigentError
-from omnigent.stores.bgr_store import BgrStore, _conflict, _digest, _forbidden, _team
+from omnigent.stores.bgr_store import MAX_TASKS, BgrStore, _conflict, _digest, _forbidden, _team
+
+MAX_REVIEW_ROUNDS = 128
 
 
 class _ResultPayload(Record):
@@ -101,7 +103,13 @@ def validate_review_message(
             ) from None
     else:
         safe = _safe_payload(body.payload)
-    return Send.model_validate({**body.model_dump(), "payload": safe})
+    try:
+        return Send.model_validate({**body.model_dump(), "payload": safe})
+    except ValidationError:
+        raise OmnigentError(
+            "Sanitized reviewer message exceeds the bounded payload contract",
+            code=ErrorCode.INVALID_INPUT,
+        ) from None
 
 
 class BgrReviewStore(BgrStore):
@@ -144,6 +152,18 @@ class BgrReviewStore(BgrStore):
                 ):
                     raise _conflict("round_id already identifies another immutable review")
                 return round
+            retained = list(
+                db.scalars(
+                    select(SqlBgrReviewRound.id)
+                    .where(
+                        SqlBgrReviewRound.workspace_id == current_workspace_id(),
+                        SqlBgrReviewRound.team_id == team_id,
+                    )
+                    .limit(MAX_REVIEW_ROUNDS)
+                )
+            )
+            if len(retained) >= MAX_REVIEW_ROUNDS:
+                raise _conflict("BGR team review retention limit reached")
             round = ReviewRound(
                 round_id=body.round_id,
                 team_id=team_id,
@@ -221,6 +241,18 @@ class BgrReviewStore(BgrStore):
                 for other in round.jobs
             ):
                 raise _conflict("Independent reviewers cannot share a thread or snapshot root")
+            retained = list(
+                db.scalars(
+                    select(SqlBgrAttempt.id)
+                    .where(
+                        SqlBgrAttempt.workspace_id == current_workspace_id(),
+                        SqlBgrAttempt.team_id == team_id,
+                    )
+                    .limit(MAX_TASKS)
+                )
+            )
+            if len(retained) >= MAX_TASKS:
+                raise _conflict("BGR team task retention limit reached")
             agent = Agent(
                 team_id=team_id,
                 agent_id=job.agent_id,
