@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from typing import Literal
 from uuid import uuid4
 
 from pydantic import JsonValue, ValidationError
@@ -19,6 +20,7 @@ from omnigent.bgr_review import (
     publication_body,
     sanitize_review,
     sanitize_review_text,
+    sensitive_review_key,
 )
 from omnigent.db import current_workspace_id
 from omnigent.db.bgr_models import (
@@ -46,10 +48,8 @@ def _safe_payload(value: JsonValue) -> JsonValue:
         return [_safe_payload(item) for item in value]
     if isinstance(value, dict):
         return {
-            key: (
-                "[REDACTED]"
-                if any(word in key.lower() for word in ("token", "password", "secret", "cookie"))
-                else _safe_payload(item)
+            sanitize_review_text(key): (
+                "[REDACTED]" if sensitive_review_key(key) else _safe_payload(item)
             )
             for key, item in value.items()
         }
@@ -332,6 +332,62 @@ class BgrReviewStore(BgrStore):
             self._brain(team, session_id)
             return self._round(db, team_id, round_id)[1]
 
+    def settle_incomplete_review(
+        self,
+        user_id: str,
+        session_id: str,
+        team_id: str,
+        fence: Fence,
+        *,
+        round_id: str,
+        review_id: str,
+        reason: Literal["startup_failed", "model_failed", "cancelled", "lost"],
+        stop_confirmed: Literal[True],
+    ) -> ReviewJob:
+        """Seal trusted lifecycle evidence only after confirming no reviewer can continue."""
+        reasons = {
+            "startup_failed": "Isolated reviewer startup failed",
+            "model_failed": "Reviewer execution failed",
+            "cancelled": "Review was cancelled",
+            "lost": "Reviewer runtime could not be recovered",
+        }
+        if stop_confirmed is not True or reason not in reasons:
+            raise ValueError("Incomplete settlement requires a valid reason and confirmed stop")
+
+        def apply(db: Session) -> ReviewJob:
+            team = self._owned(db, team_id, user_id)
+            self._fence(team, session_id, fence)
+            row, round = self._round(db, team_id, round_id)
+            job = self._job(round, review_id)
+            phase = (
+                "Unable to execute; no isolated reviewer was started"
+                if job.native_thread_id is None
+                else "Execution did not yield a completed independent review"
+            )
+            result = ReviewResult(
+                status="incomplete",
+                summary=(
+                    f"{phase}. {reasons[reason]}. Host lifecycle evidence, not reviewer findings."
+                ),
+            )
+            if job.state == "sealed":
+                if job.result == result:
+                    return job
+                raise _conflict("A sealed independent review cannot be overwritten")
+            attempt_row = db.get(SqlBgrAttempt, (current_workspace_id(), job.attempt_id))
+            if attempt_row is not None:
+                attempt = Attempt.model_validate_json(attempt_row.document)
+                outcome = "cancelled" if reason == "cancelled" else "failed"
+                attempt_row.document = attempt.model_copy(
+                    update={"state": outcome}
+                ).model_dump_json()
+                attempt_row.active_writer_key = None
+            job = job.model_copy(update={"state": "sealed", "result": result})
+            self._replace(row, round, job)
+            return job
+
+        return self._write("settle_incomplete_independent_review", apply)
+
     def review_rounds(
         self,
         user_id: str,
@@ -369,13 +425,14 @@ class BgrReviewStore(BgrStore):
         approved_body_sha256: str,
         claim_id: str,
         author_login: str,
+        private_values: tuple[str, ...] = (),
     ) -> ReviewJob:
         def apply(db: Session) -> ReviewJob:
             team = self._owned(db, team_id, user_id)
             self._fence(team, session_id, fence)
             row, round = self._round(db, team_id, round_id)
             job = self._job(round, review_id)
-            body = publication_body(round, review_id)
+            body = publication_body(round, review_id, private_values=private_values)
             if hashlib.sha256(body.encode()).hexdigest() != approved_body_sha256:
                 raise _conflict("Brain approval does not match the sanitized sealed publication")
             if job.publication.state != "pending":
@@ -387,6 +444,8 @@ class BgrReviewStore(BgrStore):
                         claim_id=claim_id,
                         author_login=author_login,
                         attempted_at_us=self._now_us(),
+                        approved_body=body,
+                        approved_body_sha256=approved_body_sha256,
                     )
                 }
             )
