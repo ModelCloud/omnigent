@@ -556,6 +556,11 @@ activated, reviewer messages require the exact live assignment and head, and
 can only address Brain. Structured results are sanitized and sealed atomically
 with durable mailbox acceptance. Reviewers cannot read a round or sibling
 results. These ledger checks do not implement the native sandbox themselves.
+After a trusted host confirms a failed/cancelled reviewer has stopped (or never
+started), `settle_incomplete_review` seals fixed incomplete lifecycle evidence.
+It never manufactures findings or claims a model ran. Pre-start failures say
+"Unable to execute; no isolated reviewer was started". Successful sibling results
+can then publish; late callbacks cannot overwrite either sealed result.
 
 The trusted host `BgrGitHubPublisher` reuses existing GitHub credential and
 comment helpers outside reviewers. It requires every independent result to be
@@ -567,6 +572,22 @@ and exact body, and never automatically reposts. This avoids duplicate writes
 but may require operator reconciliation when the write never reached GitHub.
 Pattern redaction cannot establish that arbitrary prose contains no private
 information; approval of the sanitized body remains mandatory.
+
+Credential-key context (including nested API keys, credentials, authorization,
+private/access keys and headers) is removed before reviewer messages enter the
+mailbox. Publication independently resolves known private values in the trusted
+host: credential-named environment entries, user/project config, MultiDex provider
+registration, resolved Codex auth/provider config and the selected forge credential.
+None of that inventory is given
+to reviewers or stored in the outbox. `preview` renders the body for Brain approval;
+`publish` re-resolves the privacy context and refuses an approval for a different
+body. Only the sanitized body/hash are frozen durably with the write claim. A
+changed privacy context after an ambiguous write needs operator reconciliation,
+never another POST. A missing credential inventory also blocks publication.
+
+Publication remains **pending authorization** until the trusted controller stages
+approval. This core does not yet automatically stage or drain jobs on completion
+or restart; it must not be described as automatic per-review posting.
 
 The additional review-round migration remains independently executable and
 caps actual stored document bytes at 16,383. These core components are not yet

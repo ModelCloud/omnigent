@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import html
 import re
 from typing import Annotated, Literal, Self
@@ -76,6 +77,19 @@ class Publication(Record):
     comment_url: Annotated[str, Field(max_length=1024)] | None = None
     reason: Annotated[str, Field(max_length=512)] | None = None
     reconcile_page: Annotated[int, Field(ge=1)] = 1
+    approved_body: Annotated[str, Field(max_length=16_000)] | None = None
+    approved_body_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = None
+
+    @model_validator(mode="after")
+    def approved_body_identity(self) -> Self:
+        if (self.approved_body is None) != (self.approved_body_sha256 is None):
+            raise ValueError("publication body and approval hash must be recorded together")
+        if self.approved_body is not None and (
+            len(self.approved_body.encode()) > 16_000
+            or hashlib.sha256(self.approved_body.encode()).hexdigest() != self.approved_body_sha256
+        ):
+            raise ValueError("publication body does not match the bounded approved identity")
+        return self
 
 
 class ReviewJob(Record):
@@ -117,6 +131,39 @@ class ReviewRound(Record):
         return self
 
 
+def sensitive_review_key(key: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]", "", key.lower())
+    return normalized in {"key", "auth", "pem", "headers", "httpheaders", "queryparams"} or any(
+        word in normalized
+        for word in (
+            "token",
+            "password",
+            "passwd",
+            "passphrase",
+            "secret",
+            "cookie",
+            "credential",
+            "apikey",
+            "accesskey",
+            "privatekey",
+            "signingkey",
+            "encryptionkey",
+            "sessionkey",
+            "authorization",
+            "authentication",
+            "authheader",
+            "basicauth",
+            "oauth",
+            "sshkey",
+            "keypair",
+            "clientkey",
+            "authkey",
+            "masterkey",
+            "accountkey",
+        )
+    )
+
+
 def sanitize_review_text(value: str, *, private_values: tuple[str, ...] = ()) -> str:
     """Remove known secrets, contact data and untrusted URLs, without echoing the input."""
     for private in sorted(set(private_values), key=len, reverse=True):
@@ -149,7 +196,9 @@ def sanitize_review(result: ReviewResult, *, private_values: tuple[str, ...] = (
     )
 
 
-def publication_body(round: ReviewRound, review_id: str) -> str:
+def publication_body(
+    round: ReviewRound, review_id: str, *, private_values: tuple[str, ...] = ()
+) -> str:
     """Render one independent result only after all sibling outputs are sealed."""
     if any(job.state != "sealed" for job in round.jobs):
         raise ValueError("all independent reviews must be sealed before publication")
@@ -163,7 +212,7 @@ def publication_body(round: ReviewRound, review_id: str) -> str:
             for line in value.replace("@", "[at]").splitlines()
         )
 
-    result = sanitize_review(job.result)
+    result = sanitize_review(job.result, private_values=private_values)
     lines = [
         f"<!-- omnigent-bgr-review:{job.review_id} -->",
         f"## Independent review: reviewer-{job.agent_id}",
@@ -182,6 +231,10 @@ def publication_body(round: ReviewRound, review_id: str) -> str:
             ["", "No findings reported." if result.status == "complete" else "Review incomplete."]
         )
     body = "\n".join(lines)
+    if any(private and private in body for private in private_values):
+        raise ValueError(
+            "Publication still matches a known private value; operator review required"
+        )
     if len(body.encode("utf-8")) > 16_000:
         raise ValueError("publication exceeds the bounded review body; submit a smaller result")
     return body
