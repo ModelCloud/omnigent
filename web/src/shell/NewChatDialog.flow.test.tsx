@@ -558,6 +558,10 @@ describe("NewChatLandingScreen create flow", () => {
     fireEvent.pointerDown(screen.getByTestId("new-chat-landing-agent-select"), { button: 0 });
     fireEvent.click(screen.getByTestId("new-chat-landing-bgr"));
     await waitFor(() => expect(screen.getByRole("button", { name: "Launch BGR" })).toBeEnabled());
+    fireEvent.pointerDown(screen.getByTestId("new-chat-landing-submit").parentElement!);
+    expect(await screen.findByTestId("new-chat-landing-submit-error-tooltip")).toHaveTextContent(
+      "Finish or close BGR configuration before sending a chat.",
+    );
     fireEvent.click(screen.getByRole("button", { name: "Launch BGR" }));
     expect(launchBgr).toHaveBeenCalledWith(
       "host_1",

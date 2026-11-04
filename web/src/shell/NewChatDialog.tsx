@@ -5193,7 +5193,12 @@ export function NewChatLandingScreen() {
     field: "sandboxRepo" | "other";
     message: string | null;
   } | null => {
-    if (bgrOpen) return { field: "other", message: "BGR configuration only — launch unavailable" };
+    if (bgrOpen) {
+      return {
+        field: "other",
+        message: "Finish or close BGR configuration before sending a chat.",
+      };
+    }
     if (mcpAuthorizing || mcpSelectionError !== null) {
       return {
         field: "other",
