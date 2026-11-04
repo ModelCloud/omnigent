@@ -200,9 +200,7 @@ class BgrRuntime:
                 }
             )
 
-        role.remove_observers.append(
-            role.client.add_notification_observer("bgr/message/emitted", emitted)
-        )
+        role.remove_observers.append(role.client.add_notification_observer("bgr/message", emitted))
 
     async def thread_ready(self, thread_id: str) -> None:
         if self.brain.thread_id not in {None, thread_id}:

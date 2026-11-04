@@ -2,7 +2,7 @@
 
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
@@ -16,6 +16,34 @@ from omnigent.runner.native import orchestration
 from omnigent.spec.types import AgentSpec
 from tests.harnesses.codex_native.test_bgr_messages import CAPTURED
 from tests.stores.test_bgr_store import BRAIN, CONFIG, HOST
+
+
+async def test_native_wire_callback_is_observed_and_relayed_after_redaction(tmp_path, monkeypatch):
+    observer = Mock(return_value=Mock())
+    client = SimpleNamespace(add_notification_observer=observer)
+    callback = AsyncMock()
+    role = runtime._RoleProcess(BRAIN, "brain", 1, client, SimpleNamespace(), str(uuid4()))
+    owner = runtime.BgrRuntime(
+        role, workspace=tmp_path, profiles=CONFIG, callback=callback, host_id=HOST, spec=None
+    )
+    monkeypatch.setattr(owner, "_private_values", lambda: ("fixture-private-value",))
+    owner.observe(role)
+    method, handler = observer.call_args.args
+    assert method == "bgr/message"
+    await handler(
+        {
+            "method": method,
+            "params": {
+                "threadId": role.thread_id,
+                "envelope": {"payload": {"text": "fixture-private-value"}},
+            },
+        }
+    )
+    relayed = callback.call_args.args[0]
+    assert relayed["method"] == "bgr/message/emitted"
+    assert "fixture-private-value" not in str(relayed)
+    with pytest.raises(OmnigentError, match="Foreign"):
+        await handler({"params": {"threadId": str(uuid4())}})
 
 
 async def test_brain_ready_waits_for_server_bind_and_non_bgr_is_noop(tmp_path):
