@@ -6,7 +6,7 @@ import hashlib
 from typing import Literal
 from uuid import uuid4
 
-from pydantic import ValidationError
+from pydantic import JsonValue, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
