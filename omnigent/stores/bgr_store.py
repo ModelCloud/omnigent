@@ -874,6 +874,9 @@ class BgrStore:
         with self._sessions("drain_mailbox") as db:
             self._owned(db, team_id, user_id, lock=False)
             agent = self._agent(db, team_id, session_id)
+            from omnigent.stores.bgr_review_store import sealed_review_agents
+
+            ready = sealed_review_agents(db, team_id) if agent.role == "brain" else set()
             rows = db.scalars(
                 select(SqlBgrEnvelope)
                 .where(
@@ -884,9 +887,22 @@ class BgrStore:
                     SqlBgrEnvelope.discarded_at_us.is_(None),
                 )
                 .order_by(SqlBgrEnvelope.sequence, SqlBgrEnvelope.id)
-                .limit(limit)
+                .limit(MAX_PENDING)
             )
-            return [_envelope(row) for row in rows]
+            result = []
+            for row in rows:
+                envelope = _envelope(row)
+                if (
+                    agent.role == "brain"
+                    and envelope.sender_role == "reviewer"
+                    and envelope.kind == "result"
+                    and envelope.sender_agent_id not in ready
+                ):
+                    continue
+                result.append(envelope)
+                if len(result) == limit:
+                    break
+            return result
 
     def ack(self, user_id: str, session_id: str, team_id: str, body: Ack) -> Envelope:
         def apply(db: Session) -> Envelope:
@@ -897,6 +913,17 @@ class BgrStore:
             if row is None or row.team_id != team_id or row.recipient_agent_id != agent.agent_id:
                 raise _forbidden()
             envelope = _envelope(row)
+            if (
+                agent.role == "brain"
+                and envelope.sender_role == "reviewer"
+                and envelope.kind == "result"
+            ):
+                from omnigent.stores.bgr_review_store import sealed_review_agents
+
+                if envelope.sender_agent_id not in sealed_review_agents(db, team_id):
+                    raise _conflict(
+                        "Independent review results are withheld until all siblings seal"
+                    )
             if envelope.discard is not None:
                 raise _conflict("Discarded envelopes cannot be acknowledged as consumed")
             if envelope.epoch != body.epoch:

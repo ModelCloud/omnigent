@@ -35,6 +35,23 @@ from omnigent.stores.bgr_store import MAX_TASKS, BgrStore, _conflict, _digest, _
 MAX_REVIEW_ROUNDS = 128
 
 
+def sealed_review_agents(db: Session, team_id: str) -> set[str]:
+    ready = set()
+    rows = db.scalars(
+        select(SqlBgrReviewRound)
+        .where(
+            SqlBgrReviewRound.workspace_id == current_workspace_id(),
+            SqlBgrReviewRound.team_id == team_id,
+        )
+        .limit(MAX_REVIEW_ROUNDS)
+    )
+    for row in rows:
+        round = ReviewRound.model_validate_json(row.document)
+        if all(job.state == "sealed" for job in round.jobs):
+            ready.update(job.agent_id for job in round.jobs)
+    return ready
+
+
 class _ResultPayload(Record):
     round_id: str
     review_id: str
@@ -331,6 +348,28 @@ class BgrReviewStore(BgrStore):
             team = self._owned(db, team_id, user_id, lock=False)
             self._brain(team, session_id)
             return self._round(db, team_id, round_id)[1]
+
+    def review_status(
+        self, user_id: str, session_id: str, team_id: str, round_id: str
+    ) -> dict[str, JsonValue]:
+        """Model-visible projection; trusted lifecycle reads retain sealed evidence."""
+        round = self.get_review_round(user_id, session_id, team_id, round_id)
+        ready = all(job.state == "sealed" for job in round.jobs)
+        return {
+            "round_id": round.round_id,
+            "base_sha": round.base_sha,
+            "head_sha": round.head_sha,
+            "results_ready": ready,
+            "jobs": [
+                {
+                    "review_id": job.review_id,
+                    "agent_id": job.agent_id,
+                    "state": job.state,
+                    "result": job.result.model_dump(mode="json") if ready and job.result else None,
+                }
+                for job in round.jobs
+            ],
+        }
 
     def settle_incomplete_review(
         self,

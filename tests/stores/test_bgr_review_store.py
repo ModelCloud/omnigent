@@ -7,7 +7,7 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from omnigent.bgr import ConfigUpdate, Fence, NativeBinding, Send, Workspace
+from omnigent.bgr import Ack, ConfigUpdate, Fence, NativeBinding, Send, Workspace
 from omnigent.bgr_review import (
     Publication,
     ReviewFinding,
@@ -404,6 +404,8 @@ def test_review_questions_answers_and_results_are_fenced_correlated_and_private(
             TEAM,
             message(round, first, brain, recipient_agent_id=second.agent_id),
         )
+    for envelope in reviews.drain(OWNER, BRAIN, TEAM):
+        reviews.ack(OWNER, BRAIN, TEAM, Ack(envelope_id=envelope.envelope_id, epoch=round.epoch))
     raw = message(round, first, brain)
     raw = raw.model_copy(
         update={
@@ -431,6 +433,38 @@ def test_review_questions_answers_and_results_are_fenced_correlated_and_private(
     )
     with pytest.raises(ValueError, match="all independent reviews"):
         publication_body(sealed, first.review_id)
+
+    assert restarted.drain(OWNER, BRAIN, TEAM, limit=1) == []
+    status = reviews.review_status(OWNER, BRAIN, TEAM, round.round_id)
+    assert status["results_ready"] is False
+    assert all(job["result"] is None for job in status["jobs"])
+    with pytest.raises(OmnigentError, match="withheld"):
+        restarted.ack(OWNER, BRAIN, TEAM, Ack(envelope_id=receipt.envelope_id, epoch=round.epoch))
+
+    clarification = message(
+        round,
+        second,
+        brain,
+        kind="question",
+        correlation_id=uuid4().hex,
+        payload={"question": "May I report no findings?"},
+    )
+    reviews.send(OWNER, second.session_id, TEAM, clarification)
+    assert restarted.drain(OWNER, BRAIN, TEAM, limit=1)[0].message_id == clarification.message_id
+    reviews.send(OWNER, second.session_id, TEAM, message(round, second, brain))
+    ready = reviews.review_status(OWNER, BRAIN, TEAM, round.round_id)
+    assert ready["results_ready"] is True
+    assert all(job["result"] is not None for job in ready["jobs"])
+    results = [
+        envelope for envelope in restarted.drain(OWNER, BRAIN, TEAM) if envelope.kind == "result"
+    ]
+    assert {envelope.sender_agent_id for envelope in results} == {first.agent_id, second.agent_id}
+    assert (
+        restarted.ack(
+            OWNER, BRAIN, TEAM, Ack(envelope_id=receipt.envelope_id, epoch=round.epoch)
+        ).consumed_at
+        is not None
+    )
 
 
 @pytest.mark.parametrize("path", ["/etc/passwd", "../private", ".env", ".aws/credentials", "a//b"])
@@ -660,6 +694,8 @@ def test_failed_reviewer_settles_incomplete_without_starving_sibling_publication
     brain = reviews.get_team(OWNER, BRAIN, TEAM).brain_agent_id
     activate(reviews, round, completed)
     reviews.send(OWNER, completed.session_id, TEAM, message(round, completed, brain))
+    assert reviews.drain(OWNER, BRAIN, TEAM) == []
+    assert reviews.review_status(OWNER, BRAIN, TEAM, round.round_id)["results_ready"] is False
     if started:
         activate(reviews, round, failed)
     arguments = {
@@ -681,6 +717,8 @@ def test_failed_reviewer_settles_incomplete_without_starving_sibling_publication
         assert "Unable to execute; no isolated reviewer was started" in settled.result.summary
     restarted = BgrReviewStore(db_uri)
     assert restarted.settle_incomplete_review(OWNER, BRAIN, TEAM, FENCE, **arguments) == settled
+    assert restarted.review_status(OWNER, BRAIN, TEAM, round.round_id)["results_ready"] is True
+    assert restarted.drain(OWNER, BRAIN, TEAM)[0].sender_agent_id == completed.agent_id
     round = restarted.get_review_round(OWNER, BRAIN, TEAM, round.round_id)
     publisher = BgrGitHubPublisher(restarted, "/trusted/workspace")
     for job in round.jobs:
