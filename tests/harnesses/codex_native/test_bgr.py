@@ -222,6 +222,7 @@ async def test_external_brain_query_roundtrip_replay_and_explicit_consumption(
             "features.multi_agent": False,
             "features.multi_agent_v2": False,
             "features.defer_mailbox_preemption": True,
+            "features.mcp_tool_list_changed": True,
         },
         "dynamicTools": [CAPABILITIES["reportTool"]],
     }

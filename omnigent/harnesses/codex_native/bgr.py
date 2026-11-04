@@ -34,6 +34,7 @@ def bgr_thread_config() -> dict[str, JsonValue]:
         "features.multi_agent": False,
         "features.multi_agent_v2": False,
         "features.defer_mailbox_preemption": True,
+        "features.mcp_tool_list_changed": True,
     }
 
 

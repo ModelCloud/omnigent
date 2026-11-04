@@ -5148,6 +5148,7 @@ def create_runner_app(
             post_tools_changed,
             start_tool_relay,
         )
+        from omnigent.runner.bgr_runtime import bgr_brain_registered
 
         try:
             spec_entry = await _resolve_session_spec_entry(session_id)
@@ -5183,7 +5184,13 @@ def create_runner_app(
         # can reassign it independently — the terminal-launch and per-harness
         # startup paths — all pass a bridge hint and take the branch below.
         current = _session_comment_relays.get(session_id)
-        if current is not None and current.spec_entry is spec_entry and known_bridge_dir is None:
+        bgr_brain = bgr_brain_registered(session_id)
+        if (
+            current is not None
+            and current.spec_entry is spec_entry
+            and current.bgr_brain == bgr_brain
+            and known_bridge_dir is None
+        ):
             return
 
         bridge_dir = known_bridge_dir
@@ -5203,6 +5210,7 @@ def create_runner_app(
         if (
             current is not None
             and current.spec_entry is spec_entry
+            and current.bgr_brain == bgr_brain
             and current.bridge_dir == bridge_dir
         ):
             return
@@ -5211,9 +5219,7 @@ def create_runner_app(
 
         relay_spec = _unwrap_spec_entry(spec_entry)
         relay_schemas: list[_JsonObject] = build_native_relay_tool_schemas(relay_spec)
-        from omnigent.runner.bgr_runtime import bgr_brain_registered
-
-        if bgr_brain_registered(session_id):
+        if bgr_brain:
             from omnigent.tools.builtins.bgr_control import SysBgrControlTool
 
             relay_schemas.append(SysBgrControlTool().get_schema()["function"])
@@ -5232,6 +5238,7 @@ def create_runner_app(
             if (
                 current is not None
                 and current.spec_entry is spec_entry
+                and current.bgr_brain == bgr_brain
                 and current.bridge_dir == bridge_dir
             ):
                 return
@@ -5359,6 +5366,7 @@ def create_runner_app(
             relay=relay,
             spec_entry=spec_entry,
             bridge_dir=bridge_dir,
+            bgr_brain=bgr_brain,
         )
         # Close last: the new advertisement is already written, and
         # ClaudeNativeToolRelay.close only unlinks a tool_relay.json that

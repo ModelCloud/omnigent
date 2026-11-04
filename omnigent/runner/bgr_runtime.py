@@ -135,6 +135,41 @@ async def bgr_thread_start_options(client: CodexAppServerClient) -> CodexMessage
     return {"config": bgr_thread_config(), "dynamicTools": tools}
 
 
+async def wait_bgr_control_ready(
+    client: CodexAppServerClient, thread_id: str, *, timeout: float = 30
+) -> None:
+    from omnigent.bgr_control import BGR_CONTROL_TOOL
+
+    try:
+        async with asyncio.timeout(timeout):
+            while True:
+                response = await client.request(
+                    "mcpServerStatus/list",
+                    {
+                        "threadId": thread_id,
+                        "serverName": "omnigent",
+                        "detail": "toolsAndAuthOnly",
+                    },
+                )
+                result = response.get("result")
+                rows = result.get("data", []) if isinstance(result, dict) else []
+                for row in rows:
+                    if not isinstance(row, dict) or row.get("name") != "omnigent":
+                        continue
+                    if row.get("toolsError") is not None:
+                        raise RuntimeError("Native Brain control catalog failed to load")
+                    tools = row.get("tools")
+                    if (
+                        row.get("runtimeStatus") == "connected"
+                        and isinstance(tools, dict)
+                        and BGR_CONTROL_TOOL in tools
+                    ):
+                        return
+                await asyncio.sleep(0.1)
+    except TimeoutError as exc:
+        raise RuntimeError("Native Brain control tool is unavailable") from exc
+
+
 async def unregister_bgr_brain(
     session_id: str, *, app_server: CodexNativeAppServer | None = None
 ) -> bool:

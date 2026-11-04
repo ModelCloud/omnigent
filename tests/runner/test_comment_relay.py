@@ -642,16 +642,35 @@ async def test_session_delete_removes_comment_relay(relay_env: _RelayEnv) -> Non
 
 
 @pytest.mark.asyncio
-async def test_repeated_terminal_launch_keeps_single_relay(relay_env: _RelayEnv) -> None:
+@pytest.mark.parametrize(
+    "brain_before,brain_after", [(False, False), (False, True), (True, False)]
+)
+async def test_repeated_terminal_launch_keeps_single_relay(
+    relay_env: _RelayEnv, monkeypatch: pytest.MonkeyPatch, brain_before: bool, brain_after: bool
+) -> None:
     """A second bridge_inject_dir launch reuses the relay instead of rebinding."""
+    brain_sessions = {relay_env.session_id} if brain_before else set()
+    monkeypatch.setattr(
+        "omnigent.runner.bgr_runtime.bgr_brain_registered",
+        lambda session_id: session_id in brain_sessions,
+    )
     first = await _launch_terminal(relay_env.client, relay_env.session_id, bridge_inject_dir=True)
     assert first.status_code == 200
     relay_file = relay_env.bridge_dir / _TOOL_RELAY_FILE
-    first_url = json.loads(relay_file.read_text())["url"]
+    first_relay = json.loads(relay_file.read_text())
+    first_url = first_relay["url"]
+    assert ("sys_bgr_control" in {tool["name"] for tool in first_relay["tools"]}) is brain_before
 
+    if brain_after:
+        brain_sessions.add(relay_env.session_id)
+    else:
+        brain_sessions.clear()
     second = await _launch_terminal(relay_env.client, relay_env.session_id, bridge_inject_dir=True)
     assert second.status_code == 200
-    second_url = json.loads(relay_file.read_text())["url"]
+    second_relay = json.loads(relay_file.read_text())
+    second_url = second_relay["url"]
+    assert ("sys_bgr_control" in {tool["name"] for tool in second_relay["tools"]}) is brain_after
+    assert first_relay["token"] == second_relay["token"]
 
     # The relay URL (its bound port) must be unchanged. A different port means
     # _ensure_comment_relay_started bound a second relay instead of

@@ -1,6 +1,7 @@
 """Host ownership and readiness gates; no SQL or fake provider-execution claims."""
 
 import asyncio
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
@@ -335,11 +336,13 @@ async def test_startup_options_advertise_exact_native_tools_and_disable_schedule
         "features.multi_agent": False,
         "features.multi_agent_v2": False,
         "features.defer_mailbox_preemption": True,
+        "features.mcp_tool_list_changed": True,
     }
     assert runtime.bgr_native_config_overrides() == (
         "features.multi_agent=false",
         "features.multi_agent_v2=false",
         "features.defer_mailbox_preemption=true",
+        "features.mcp_tool_list_changed=true",
     )
 
 
@@ -405,7 +408,7 @@ async def test_stop_generation_serializes_spawn_and_never_claims_domain_quiescen
 
 
 @pytest.mark.parametrize("fresh", [False, True])
-@pytest.mark.parametrize("failure", [None, "bind", "materialize"])
+@pytest.mark.parametrize("failure", [None, "relay", "catalog", "bind", "materialize"])
 async def test_brain_preparation_retains_tool_enabled_thread_without_a_turn(
     monkeypatch, tmp_path, fresh, failure
 ):
@@ -413,6 +416,19 @@ async def test_brain_preparation_retains_tool_enabled_thread_without_a_turn(
     native = SimpleNamespace(proc=SimpleNamespace(returncode=None))
     thread_id = str(uuid4())
     calls = []
+
+    async def ensure_relay(session_id, *, explicit_bridge_dir, await_notify):
+        calls.append("relay")
+        assert session_id == BRAIN
+        assert explicit_bridge_dir == tmp_path
+        assert await_notify is False
+        assert runtime.bgr_brain_registered(BRAIN)
+        assert not runtime._RUNTIMES[BRAIN].ready.is_set()
+        assert runtime._RUNTIMES[BRAIN].brain.thread_id is None
+        if failure != "relay":
+            (tmp_path / "tool_relay.json").write_text(
+                json.dumps({"tools": [{"name": "sys_bgr_control"}]})
+            )
 
     async def request(method, params):
         calls.append(method)
@@ -425,6 +441,25 @@ async def test_brain_preparation_retains_tool_enabled_thread_without_a_turn(
             ]
             assert params["config"]["features.multi_agent"] is False
             return {"result": {"thread": {"id": thread_id}}}
+        if method == "mcpServerStatus/list":
+            assert params == {
+                "threadId": thread_id,
+                "serverName": "omnigent",
+                "detail": "toolsAndAuthOnly",
+            }
+            assert not runtime._RUNTIMES[BRAIN].ready.is_set()
+            return {
+                "result": {
+                    "data": [
+                        {
+                            "name": "omnigent",
+                            "runtimeStatus": "connected",
+                            "tools": {"sys_bgr_control": {}},
+                            "toolsError": "catalog" if failure == "catalog" else None,
+                        }
+                    ]
+                }
+            }
         assert method == "thread/name/set"
         assert params == {"threadId": thread_id, "name": "Brain"}
         assert runtime._RUNTIMES[BRAIN].ready.is_set()
@@ -459,16 +494,22 @@ async def test_brain_preparation_retains_tool_enabled_thread_without_a_turn(
             spec=AgentSpec(spec_version=1),
             thread_id=None if fresh else thread_id,
             model="registered",
+            bridge_dir=tmp_path,
+            ensure_comment_relay=ensure_relay,
         )
-        if failure == "bind" or (fresh and failure == "materialize"):
+        if failure in {"relay", "catalog", "bind"} or (fresh and failure == "materialize"):
             with pytest.raises(RuntimeError, match=failure):
                 await pending
         else:
             assert await pending == thread_id
-        expected = ["bgr/capabilities/read", "thread/start"] if fresh else []
-        expected += ["bind"]
-        if fresh and failure != "bind":
-            expected += ["thread/name/set"]
+        expected = ["relay"]
+        if failure != "relay":
+            expected += ["bgr/capabilities/read", "thread/start"] if fresh else []
+            expected += ["mcpServerStatus/list"]
+            if failure != "catalog":
+                expected += ["bind"]
+                if fresh and failure != "bind":
+                    expected += ["thread/name/set"]
         assert calls == expected
         assert runtime.bgr_brain_registered(BRAIN)
         await orchestration._close_codex_native_app_server(BRAIN, native)
@@ -477,3 +518,37 @@ async def test_brain_preparation_retains_tool_enabled_thread_without_a_turn(
     finally:
         runtime._RUNTIMES.pop(BRAIN, None)
         await client.close()
+
+
+@pytest.mark.parametrize("state", ["ready", "late", "missing", "starting", "error", "foreign"])
+async def test_control_catalog_barrier_requires_actual_ready_tool(state):
+    thread_id = str(uuid4())
+    calls = 0
+
+    async def request(method, params):
+        nonlocal calls
+        assert method == "mcpServerStatus/list"
+        assert params["threadId"] == thread_id
+        calls += 1
+        return {
+            "result": {
+                "data": [
+                    {
+                        "name": "other" if state == "foreign" else "omnigent",
+                        "runtimeStatus": "starting" if state == "starting" else "connected",
+                        "tools": {}
+                        if state == "missing" or (state == "late" and calls == 1)
+                        else {"sys_bgr_control": {}},
+                        "toolsError": "not ready" if state == "error" else None,
+                    }
+                ]
+            }
+        }
+
+    client = SimpleNamespace(request=request)
+    if state in {"ready", "late"}:
+        await runtime.wait_bgr_control_ready(client, thread_id, timeout=1)
+        assert calls == (2 if state == "late" else 1)
+    else:
+        with pytest.raises(RuntimeError, match="control"):
+            await runtime.wait_bgr_control_ready(client, thread_id, timeout=0.01)

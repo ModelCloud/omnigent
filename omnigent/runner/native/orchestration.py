@@ -5283,13 +5283,34 @@ async def _prepare_bgr_brain_thread(
     spec: AgentSpec | None,
     thread_id: str | None,
     model: str | None,
+    bridge_dir: Path,
+    ensure_comment_relay: _EnsureCommentRelay,
 ) -> str:
+    from omnigent.bgr_control import BGR_CONTROL_TOOL
+    from omnigent.harnesses.claude_native.bridge import _read_relay_tool_specs
     from omnigent.runner.bgr_runtime import (
         bgr_thread_start_options,
         register_bgr_brain,
         wait_bgr_brain_ready,
+        wait_bgr_control_ready,
     )
 
+    await register_bgr_brain(
+        session_id,
+        client,
+        app_server,
+        workspace,
+        profiles,
+        callback,
+        host_id=host_id,
+        spec=spec,
+        server_client=server_client,
+        team_id=team_id,
+    )
+    await ensure_comment_relay(session_id, explicit_bridge_dir=bridge_dir, await_notify=False)
+    catalog = await asyncio.to_thread(_read_relay_tool_specs, bridge_dir)
+    if not any(tool.get("name") == BGR_CONTROL_TOOL for tool in catalog):
+        raise RuntimeError("BGR Brain requires its native control relay")
     fresh = thread_id is None
     if fresh:
         options = await bgr_thread_start_options(client)
@@ -5302,19 +5323,7 @@ async def _prepare_bgr_brain_thread(
             raise RuntimeError("Native BGR thread creation returned no thread identity")
         thread_id = thread["id"]
     assert thread_id is not None
-    await register_bgr_brain(
-        session_id,
-        client,
-        app_server,
-        workspace,
-        profiles,
-        callback,
-        host_id=host_id,
-        thread_id=thread_id,
-        spec=spec,
-        server_client=server_client,
-        team_id=team_id,
-    )
+    await wait_bgr_control_ready(client, thread_id)
     await wait_bgr_brain_ready(session_id, thread_id)
     if fresh:
         # Materialize the zero-turn rollout so the TUI can resume without a bootstrap task.
@@ -6036,6 +6045,8 @@ async def _auto_create_codex_terminal(
 
         if server_client is None or not bgr_labels.get("omnigent.bgr.host_id"):
             raise RuntimeError("BGR Brain requires an authenticated host/server binding")
+        if ensure_comment_relay is None:
+            raise RuntimeError("BGR Brain requires its native control relay")
         bgr_profiles = await load_bgr_team_config(
             server_client=server_client,
             session_id=session_id,
@@ -6299,6 +6310,7 @@ async def _auto_create_codex_terminal(
             response.raise_for_status()
 
         try:
+            assert ensure_comment_relay is not None
             thread_id = await _prepare_bgr_brain_thread(
                 session_id=session_id,
                 client=event_client,
@@ -6312,6 +6324,8 @@ async def _auto_create_codex_terminal(
                 server_client=server_client,
                 team_id=bgr_team_id,
                 model=_codex_launch.model,
+                bridge_dir=bridge_dir,
+                ensure_comment_relay=ensure_comment_relay,
             )
             launch_config = dataclasses.replace(launch_config, external_session_id=thread_id)
             retained_resume_client = event_client
