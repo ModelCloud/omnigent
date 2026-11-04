@@ -710,8 +710,21 @@ Its response is **not** stop evidence:
 }
 ```
 
+An owner can initiate revocation even without a live controller via
+`POST /v1/bgr/teams/{team_id}/recover` with JSON `{}` and ordinary authenticated
+owner credentials. The team, Brain, host and generation come from durable records;
+caller-supplied fences or stop attestations are rejected. Revocation commits before
+any runner RPC. The server checks the bound host/generation before requesting
+`stop_generation`. Retries reuse the pending recovery. An unreachable runner,
+generation mismatch or the current unverified process-group stop returns HTTP 202
+with `stop_status:"unknown"`, `replacement_enabled:false` and recovery `stopping`.
+Even a positive bare host boolean is not accepted as complete stop evidence. No epoch
+advance, replacement launch or initial-input replay occurs through this endpoint.
+
 The durable store APIs are:
 
+- `runtime_recovery_target(user, team)`: owner-only durable Brain/native identity;
+  intentionally does not require a live lease or live controller object.
 - `begin_runtime_recovery(user, brain_session, team, fence, *, recovery_id,
   runtime_id, replacement_controller_id)`: valid even after old lease expiry;
   atomically revokes the old lease, blocks launch and records the previous

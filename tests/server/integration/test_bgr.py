@@ -892,3 +892,95 @@ async def test_public_input_and_mcp_deny_durable_roles_after_authority_loss(
         ordinary = worker()
         conversations.set_labels(ordinary, {"omnigent.bgr.team_id": team_id})
         await check_bgr_session_input(app.state, ordinary, restart=True)
+
+
+@pytest.mark.parametrize("host_result", ["unknown", "unavailable", "error", "foreign", "positive"])
+async def test_owner_recovery_fences_before_host_rpc_without_live_controller(
+    bgr_environment, monkeypatch, host_result
+):
+    application, brain, _, permissions, now = bgr_environment
+    app = application()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        team, fence_data = await create_team(client, brain)
+        team_id = team["team_id"]
+        store = app.state.bgr_store
+        binding = NativeBrainBinding(
+            team_id=team_id, epoch=1, thread_id=str(uuid4()), runtime_id=uuid4().hex, host_id=HOST
+        )
+        store.native_brain_binding(
+            "alice", brain, team_id, Fence.model_validate(fence_data), binding=binding
+        )
+        with pytest.raises(OmnigentError, match="not attached"):
+            app.state.bgr_controllers.get(brain)
+        now[0] += 301
+        operations = []
+
+        async def handle(request):
+            assert request.url.path == f"/v1/sessions/{brain}/bgr/runtime"
+            current = store.get_team("alice", brain, team_id)
+            assert current.runtime_recoveries[-1].state == "stopping"
+            assert current.epoch == 1 and current.lease_expires_at == 0
+            with pytest.raises(OmnigentError):
+                store.check_session_runtime_input(brain)
+            payload = json.loads(request.content)
+            operations.append(payload["operation"])
+            if host_result == "error":
+                raise httpx.ConnectError("private host detail", request=request)
+            if payload["operation"] == "brain":
+                return httpx.Response(
+                    200,
+                    json={
+                        "thread_id": binding.thread_id,
+                        "host_id": binding.host_id,
+                        "runtime_id": uuid4().hex
+                        if host_result == "foreign"
+                        else binding.runtime_id,
+                    },
+                )
+            assert payload == {
+                "operation": "stop_generation",
+                "parameters": {"runtime_id": binding.runtime_id},
+            }
+            return httpx.Response(200, json={"domain_stop_confirmed": host_result == "positive"})
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handle), base_url="http://bound-runner"
+        ) as host:
+
+            async def get_runner(session_id, router):
+                assert session_id == brain
+                return None if host_result == "unavailable" else host
+
+            monkeypatch.setattr("omnigent.server.routes.sessions._get_runner_client", get_runner)
+            url = f"{PREFIX}/teams/{team_id}/recover"
+            owner = {"X-Forwarded-Email": "alice"}
+            for forbidden in (
+                {"evidence": {"domain_stop_confirmed": True}},
+                {"runtime_id": uuid4().hex},
+            ):
+                response = await client.post(url, headers=owner, json=forbidden)
+                assert response.status_code == 422
+                assert store.get_team("alice", brain, team_id).runtime_recoveries == []
+            response = await client.post(url, headers={"X-Forwarded-Email": "bob"}, json={})
+            assert response.status_code == 403
+            assert store.get_team("alice", brain, team_id).runtime_recoveries == []
+            response = await client.post(url, headers=owner, json={})
+            assert response.status_code == 202, response.text
+            result = response.json()
+            assert result["stop_status"] == "unknown" and not result["replacement_enabled"]
+            assert result["recovery"]["state"] == "stopping"
+            assert "private host detail" not in response.text
+            again = await client.post(url, headers=owner, json={})
+            assert again.status_code == 202 and again.json() == result
+            permissions.revoke("alice", brain)
+            denied = await client.post(url, headers=owner, json={})
+            assert denied.status_code == 404
+        expected = [] if host_result == "unavailable" else ["brain"]
+        if host_result in {"unknown", "positive"}:
+            expected.append("stop_generation")
+        assert operations == expected * 2
+        after = store.get_team("alice", brain, team_id)
+        assert after.epoch == 1 and after.lease_expires_at == 0
+        assert len(after.runtime_recoveries) == 1

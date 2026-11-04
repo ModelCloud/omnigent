@@ -458,6 +458,22 @@ class BgrStore:
 
         return self._write("acquire_controller", apply)
 
+    def runtime_recovery_target(
+        self, user_id: str, team_id: str
+    ) -> tuple[str, Team, NativeBrainBinding]:
+        """Resolve the owner/Brain/native generation without requiring a live lease."""
+        with self._sessions("resolve_runtime_recovery_owner") as db:
+            row = self._owned(db, team_id, user_id, lock=False)
+            team = _team(row)
+            agent = db.get(SqlBgrAgent, (current_workspace_id(), team.brain_agent_id))
+            mapping = db.get(SqlBgrNativeBinding, (current_workspace_id(), team.brain_agent_id))
+            if agent is None or mapping is None:
+                raise _conflict("Recovery requires an exact native Brain owner")
+            binding = NativeBrainBinding.model_validate_json(mapping.document)
+            if binding.epoch != row.epoch or binding.runtime_id is None or binding.host_id is None:
+                raise _conflict("Recovery requires the recorded native runtime generation")
+            return agent.session_id, team, binding
+
     def begin_runtime_recovery(
         self,
         user_id: str,

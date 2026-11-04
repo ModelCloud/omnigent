@@ -338,3 +338,13 @@ def test_session_input_uses_durable_membership_and_denies_all_roles_during_loss(
     with pytest.raises(OmnigentError):
         store.check_session_runtime_input(session_id)
     store.check_session_runtime_input(uuid4().hex)
+
+
+def test_owner_recovery_target_uses_durable_binding_after_lease_expiry(recovery_store):
+    store, intent, binding, fence = recovery_store
+    store._clock = lambda: 10**15
+    brain, team, target = store.runtime_recovery_target(OWNER, TEAM)
+    assert brain == intent.brain_session_id and target == binding
+    assert team.epoch == fence.epoch and team.controller_id == fence.controller_id
+    with pytest.raises(OmnigentError):
+        store.runtime_recovery_target("other-owner", TEAM)
