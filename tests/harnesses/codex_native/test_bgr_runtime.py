@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import pytest
 
-from omnigent.bgr import Profile
+from omnigent.bgr import Profile, Workspace
 from omnigent.errors import OmnigentError
 from omnigent.harnesses.codex_native.app_server import CodexAppServerClient
 from omnigent.harnesses.multidex_native.config import MultiDexConfig, MultiDexModelRegistration
@@ -16,6 +16,100 @@ from omnigent.runner.native import orchestration
 from omnigent.spec.types import AgentSpec
 from tests.harnesses.codex_native.test_bgr_messages import CAPTURED
 from tests.stores.test_bgr_store import BRAIN, CONFIG, HOST
+
+
+@pytest.mark.parametrize("hardened", [False, True])
+@pytest.mark.parametrize("connect_failed", [False, True])
+async def test_probe_uses_explicit_loopback_transport_and_closes_resources(
+    monkeypatch, hardened, connect_failed
+):
+    server = SimpleNamespace(listen_url=None, close=AsyncMock())
+    client = SimpleNamespace(
+        connect=AsyncMock(side_effect=RuntimeError("offline") if connect_failed else None),
+        close=AsyncMock(),
+        request=AsyncMock(
+            return_value={
+                "result": {**CAPTURED, "reviewerSnapshotNoLazyFetch": hardened},
+            }
+        ),
+    )
+
+    async def start():
+        assert server.listen_url == "ws://127.0.0.1:18084"
+
+    server.start = start
+    factory = Mock(return_value=client)
+    monkeypatch.setattr(runtime, "build_codex_native_server", Mock(return_value=server))
+    monkeypatch.setattr(runtime, "_allocate_loopback_port", lambda: 18084)
+    monkeypatch.setattr(runtime, "client_for_transport", factory)
+    result = await runtime.probe_bgr_runtime()
+    assert result["launch_supported"] is (hardened and not connect_failed)
+    factory.assert_called_once_with(server.listen_url, client_name="omnigent-bgr-probe")
+    if connect_failed:
+        client.request.assert_not_awaited()
+    else:
+        client.request.assert_awaited_once_with("bgr/capabilities/read", {})
+    client.close.assert_awaited_once()
+    server.close.assert_awaited_once()
+
+
+@pytest.mark.parametrize("role_name", ["grunt", "reviewer"])
+async def test_role_spawn_uses_explicit_loopback_transport(monkeypatch, tmp_path, role_name):
+    profile = CONFIG.grunt if role_name == "grunt" else CONFIG.reviewers[0]
+    thread_id = str(uuid4())
+    server = SimpleNamespace(listen_url=None, close=AsyncMock(), config_overrides=[])
+    client = SimpleNamespace(
+        connect=AsyncMock(),
+        close=AsyncMock(),
+        add_notification_observer=Mock(return_value=Mock()),
+        request=AsyncMock(
+            side_effect=[{"result": CAPTURED}, {"result": {"thread": {"id": thread_id}}}]
+        ),
+    )
+
+    async def start():
+        assert server.listen_url == "ws://127.0.0.1:18084"
+
+    server.start = start
+    monkeypatch.setattr(runtime, "build_codex_native_server", Mock(return_value=server))
+    monkeypatch.setattr(runtime, "_allocate_loopback_port", lambda: 18084)
+    factory = Mock(return_value=client)
+    monkeypatch.setattr(runtime, "client_for_transport", factory)
+    monkeypatch.setattr(
+        runtime,
+        "resolve_bgr_profile",
+        lambda *_: runtime.NativeCodexLaunch(
+            model=profile.model, profile=None, summary="fixture", config_overrides=[]
+        ),
+    )
+    brain = runtime._RoleProcess(
+        BRAIN,
+        "brain",
+        1,
+        SimpleNamespace(),
+        SimpleNamespace(codex_home=tmp_path / "home", codex_path="fixture"),
+    )
+    owner = runtime.BgrRuntime(
+        brain, workspace=tmp_path, profiles=CONFIG, callback=AsyncMock(), host_id=HOST, spec=None
+    )
+    assigned = Workspace(
+        host_id=HOST, repository=str(tmp_path), worktree=str(tmp_path), base_sha="a" * 40
+    )
+    owner._workspaces[uuid4().hex] = assigned
+    session_id = uuid4().hex
+    result = await owner._spawn(
+        {
+            "session_id": session_id,
+            "role": role_name,
+            "profile": profile.model_dump(mode="json"),
+            "epoch": 1,
+            "workspace": assigned.model_dump(mode="json"),
+        }
+    )
+    factory.assert_called_once_with(server.listen_url, client_name="omnigent-bgr-worker")
+    assert result["thread_id"] == (thread_id if role_name == "grunt" else None)
+    assert owner.roles[session_id].server is server
+    assert all(call.args[0] != "turn/start" for call in client.request.await_args_list)
 
 
 async def test_native_wire_callback_is_observed_and_relayed_after_redaction(tmp_path, monkeypatch):
