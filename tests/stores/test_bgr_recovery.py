@@ -15,6 +15,7 @@ from omnigent.bgr import (
     RuntimeStop,
     RuntimeStopEvidence,
     TaskReserve,
+    Team,
     TeamCreate,
     Workspace,
 )
@@ -28,6 +29,7 @@ from omnigent.errors import OmnigentError
 from omnigent.runner.identity import token_bound_runner_id
 from omnigent.stores.bgr_control_store import BgrControlActions
 from omnigent.stores.bgr_review_store import BgrReviewStore
+from omnigent.stores.bgr_store import BgrStore
 from tests.stores.test_bgr_store import CONFIG, CONTRACT, HOST, OWNER, SHA, TEAM, question
 
 
@@ -290,6 +292,173 @@ def test_supervised_document_byte_limit_is_fail_closed(recovery_store, supervise
     with pytest.raises(OmnigentError):
         store.generation_for_runner(history[0].generation.runner_id)
     assert store.get_launch(OWNER, TEAM) == oversized
+
+
+@pytest.mark.parametrize("ready", [False, True])
+def test_recovery_admission_selects_original_revoked_identity_after_restart(
+    recovery_store, supervised_admission, db_uri, ready
+):
+    store, intent, binding, fence = recovery_store
+    recovery_id, replacement_controller_id = uuid4().hex, uuid4().hex
+    with pytest.raises(OmnigentError):
+        store.recovery_admission(OWNER, TEAM, recovery_id)
+    store.reserve_supervised_generation(OWNER, supervised_admission.generation)
+    store.activate_supervised_generation(OWNER, supervised_admission)
+    store.begin_runtime_recovery(
+        OWNER,
+        intent.brain_session_id,
+        TEAM,
+        fence,
+        recovery_id=recovery_id,
+        runtime_id=binding.runtime_id,
+        replacement_controller_id=replacement_controller_id,
+    )
+    if ready:
+        with store._sessions("restore_ready_recovery_with_original_revoked_admission") as db:
+            row = db.get(SqlBgrTeam, (current_workspace_id(), TEAM))
+            document = Team.model_validate_json(row.document)
+            recovery = document.runtime_recoveries[-1].model_copy(
+                update={"state": "ready", "stop_manifest_sha256": "f" * 64}
+            )
+            row.document = document.model_copy(
+                update={"runtime_recoveries": [recovery]}
+            ).model_dump_json()
+            row.epoch = fence.epoch + 1
+            row.controller_id = replacement_controller_id
+    cold = BgrStore(db_uri)
+    before = cold.get_launch(OWNER, TEAM)
+    assert cold.recovery_admission(OWNER, TEAM, recovery_id) == supervised_admission
+    assert cold.get_launch(OWNER, TEAM) == before
+    assert before.state == "blocked"
+    assert before.supervised_generations[0].state == "revoked"
+    for owner, team_id, selected_id in (
+        ("foreign", TEAM, recovery_id),
+        (OWNER, uuid4().hex, recovery_id),
+        (OWNER, TEAM, uuid4().hex),
+    ):
+        with pytest.raises(OmnigentError):
+            cold.recovery_admission(owner, team_id, selected_id)
+    with pytest.raises(OmnigentError):
+        cold.claim_launch(OWNER, TEAM, uuid4().hex)
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "corrupt",
+        "duplicate",
+        "oversized",
+        "padding",
+        "missing",
+        "unadmitted",
+        "active",
+        "admission-mismatch",
+        "team_id",
+        "brain_session_id",
+        "controller_id",
+        "epoch",
+        "runtime_id",
+        "host_id",
+        "fence",
+        "team-document",
+        "duplicate-recovery",
+        "retired-recovery",
+    ],
+)
+def test_recovery_admission_rejects_inexact_or_unbounded_history(
+    recovery_store, supervised_admission, fault
+):
+    store, intent, binding, fence = recovery_store
+    recovery_id = uuid4().hex
+    store.reserve_supervised_generation(OWNER, supervised_admission.generation)
+    store.activate_supervised_generation(OWNER, supervised_admission)
+    store.begin_runtime_recovery(
+        OWNER,
+        intent.brain_session_id,
+        TEAM,
+        fence,
+        recovery_id=recovery_id,
+        runtime_id=binding.runtime_id,
+        replacement_controller_id=uuid4().hex,
+    )
+    launch = store.get_launch(OWNER, TEAM)
+    item = launch.supervised_generations[0]
+    if fault in {"team_id", "brain_session_id", "controller_id", "epoch", "runtime_id", "host_id"}:
+        generation = item.generation.model_copy(
+            update={fault: 2 if fault == "epoch" else uuid4().hex}
+        )
+        item = item.model_copy(
+            update={
+                "generation": generation,
+                "admission": supervised_admission.model_copy(update={"generation": generation}),
+            }
+        )
+    elif fault == "unadmitted":
+        item = item.model_copy(update={"admission": None})
+    elif fault == "active":
+        item = item.model_copy(update={"state": "active"})
+    elif fault == "admission-mismatch":
+        item = item.model_copy(
+            update={
+                "admission": supervised_admission.model_copy(
+                    update={
+                        "generation": item.generation.model_copy(
+                            update={"runtime_id": uuid4().hex}
+                        )
+                    }
+                )
+            }
+        )
+    history = [] if fault == "missing" else [item]
+    if fault in {"duplicate", "oversized"}:
+        for _ in range(15 if fault == "oversized" else 1):
+            generation = item.generation.model_copy(
+                update={
+                    "runner_id": uuid4().hex,
+                    "generation_id": uuid4().hex,
+                    "credential_id": uuid4().hex,
+                    "launch_id": uuid4().hex,
+                }
+            )
+            admission = supervised_admission.model_copy(
+                update={
+                    "generation": generation,
+                    "domain": supervised_admission.domain.model_copy(
+                        update={"path": "/" + "x" * 4000}
+                    ),
+                }
+            )
+            history.append(
+                item.model_copy(update={"generation": generation, "admission": admission})
+            )
+    document = launch.model_copy(update={"supervised_generations": history}).model_dump_json()
+    if fault == "padding":
+        document += " " * 60_000
+    if fault == "oversized":
+        assert len(document.encode()) > 60_000
+    with store._sessions("inject_inexact_recovery_admission_history") as db:
+        row = db.get(SqlBgrLaunch, (current_workspace_id(), TEAM))
+        row.document = "{" if fault == "corrupt" else document
+        if fault == "fence":
+            db.get(SqlBgrTeam, (current_workspace_id(), TEAM)).controller_id = uuid4().hex
+        elif fault in {"team-document", "duplicate-recovery", "retired-recovery"}:
+            team_row = db.get(SqlBgrTeam, (current_workspace_id(), TEAM))
+            team = Team.model_validate_json(team_row.document)
+            if fault == "team-document":
+                team = team.model_copy(update={"team_id": uuid4().hex})
+            else:
+                extra = team.runtime_recoveries[-1]
+                if fault == "retired-recovery":
+                    extra = extra.model_copy(update={"recovery_id": uuid4().hex})
+                team = team.model_copy(
+                    update={"runtime_recoveries": [*team.runtime_recoveries, extra]}
+                )
+            team_row.document = team.model_dump_json()
+    with pytest.raises((OmnigentError, ValueError)):
+        store.recovery_admission(OWNER, TEAM, recovery_id)
+    if fault in {"oversized", "padding"}:
+        with pytest.raises(OmnigentError):
+            store.generation_for_runner(supervised_admission.generation.runner_id)
 
 
 def stopped(session_id, thread_id, role="brain", **changes):

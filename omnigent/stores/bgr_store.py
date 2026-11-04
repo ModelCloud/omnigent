@@ -221,10 +221,78 @@ class BgrStore:
             raise _conflict("Supervised generation history is full; tombstones cannot be evicted")
         return document
 
+    @classmethod
+    def _supervised_intent(cls, document: str) -> LaunchIntent:
+        if len(document) > 60_000 or len(document.encode()) > 60_000:
+            raise _conflict("Supervised generation document exceeds its byte limit")
+        intent = LaunchIntent.model_validate_json(document)
+        cls._supervised_document(intent)
+        return intent
+
     def generation_for_runner(self, runner_id: str) -> SupervisedGeneration | None:
         """Retain classification after revocation, rebinding, and cold restarts."""
         with self._sessions("classify_supervised_runner") as db:
             return self._generation_for_runner(db, runner_id)
+
+    def recovery_admission(
+        self, user_id: str, team_id: str, recovery_id: str
+    ) -> GenerationAdmission:
+        """Resolve original revoked admission for trusted stop, never activate a generation."""
+        with self._sessions("resolve_original_supervised_recovery_admission") as db:
+            row = self._owned(db, team_id, user_id, lock=False)
+            team = _team(row)
+            if (
+                team.team_id != team_id
+                or team.owner_id != user_id
+                or team.brain_session_id != row.brain_session_id
+            ):
+                raise _conflict("Recovery team identity changed")
+            matches = [item for item in team.runtime_recoveries if item.recovery_id == recovery_id]
+            if len(matches) != 1 or matches[0] != team.runtime_recoveries[-1]:
+                raise _conflict("Exact current runtime recovery is required")
+            recovery = matches[0]
+            stopping = recovery.state == "stopping"
+            expected_epoch = recovery.previous_epoch if stopping else recovery.previous_epoch + 1
+            expected_controller = (
+                recovery.previous_controller_id if stopping else recovery.replacement_controller_id
+            )
+            if (
+                row.epoch != expected_epoch
+                or row.controller_id != expected_controller
+                or (not stopping and recovery.stop_manifest_sha256 is None)
+            ):
+                raise _conflict("Runtime recovery controller fence changed")
+            launch = db.get(SqlBgrLaunch, (current_workspace_id(), team_id))
+            if launch is None or launch.owner_id != user_id:
+                raise _forbidden()
+            intent = self._supervised_intent(launch.document)
+            if (
+                intent.team_id != team_id
+                or intent.brain_session_id != team.brain_session_id
+                or intent.host_id != recovery.host_id
+            ):
+                raise _conflict("Recovery launch identity changed")
+            candidates = [
+                item
+                for item in intent.supervised_generations
+                if item.generation.team_id == team_id
+                and item.generation.brain_session_id == team.brain_session_id
+                and item.generation.controller_id == recovery.previous_controller_id
+                and item.generation.epoch == recovery.previous_epoch
+                and item.generation.runtime_id == recovery.runtime_id
+                and item.generation.host_id == recovery.host_id
+            ]
+            if len(candidates) != 1:
+                raise _conflict("Recovery requires one exact original supervised admission")
+            item = candidates[0]
+            if (
+                item.state != "revoked"
+                or item.admission is None
+                or item.admission.generation != item.generation
+            ):
+                raise _conflict("Original supervised admission must be retained and revoked")
+            require_active_account(db, user_id, generation=item.account_generation)
+            return item.admission
 
     @staticmethod
     def _generation_for_runner(db: Session, runner_id: str) -> SupervisedGeneration | None:
@@ -235,8 +303,7 @@ class BgrStore:
         )
         found = None
         for row in rows:
-            intent = LaunchIntent.model_validate_json(row.document)
-            BgrStore._supervised_document(intent)
+            intent = BgrStore._supervised_intent(row.document)
             for item in intent.supervised_generations:
                 if item.generation.runner_id == runner_id:
                     if found is not None:
@@ -260,7 +327,7 @@ class BgrStore:
             row = db.get(SqlBgrLaunch, (current_workspace_id(), generation.team_id))
             if row is None or row.owner_id != user_id:
                 raise _forbidden()
-            intent = LaunchIntent.model_validate_json(row.document)
+            intent = self._supervised_intent(row.document)
             if (
                 intent.host_id != generation.host_id
                 or intent.brain_session_id != generation.brain_session_id
@@ -307,7 +374,7 @@ class BgrStore:
             row = db.get(SqlBgrLaunch, (current_workspace_id(), generation.team_id))
             if row is None or row.owner_id != user_id:
                 raise _forbidden()
-            intent = LaunchIntent.model_validate_json(row.document)
+            intent = self._supervised_intent(row.document)
             items = list(intent.supervised_generations)
             for index, item in enumerate(items):
                 if item.generation != generation:
@@ -333,8 +400,7 @@ class BgrStore:
             row = db.get(SqlBgrLaunch, (current_workspace_id(), generation.team_id))
             if row is None:
                 raise _forbidden()
-            intent = LaunchIntent.model_validate_json(row.document)
-            self._supervised_document(intent)
+            intent = self._supervised_intent(row.document)
             if not any(
                 item.generation == generation
                 and item.state == "active"

@@ -854,6 +854,13 @@ bytes blocks reservation/authorization. Malformed or ambiguous classification
 fails closed, including owner-token mint attempts. Classification scans existing
 workspace launch documents in bounded batches; there is no new SQL index/table.
 
+The internal `recovery_admission(owner, team, recovery_id)` selector returns only
+the uniquely retained original admission for the latest exact recovery fence,
+including after cold restart. It checks bounded history, original
+team/Brain/controller/epoch/runtime/host identity, revoked state and pinned
+account registration. This is historical stop evidence, not active worker
+authority or permission to launch a replacement; it changes no state.
+
 Admitted generations use a separate `bgr1.` bearer, with a domain-separated
 signing key, generation/workspace identity and a 120-second lifetime. It never
 resolves to an ordinary user or enters the owner JWT cache. The existing token
