@@ -115,6 +115,14 @@ def validate_review_message(
 
 
 class BgrReviewStore(BgrStore):
+    @classmethod
+    def for_ledger(cls, store: BgrStore) -> BgrReviewStore:
+        """Share the server ledger's scoped transaction factory and controller clock."""
+        reviews = cls.__new__(cls)
+        reviews._sessions = store._sessions
+        reviews._clock = store._clock
+        return reviews
+
     @staticmethod
     def _round(db: Session, team_id: str, round_id: str) -> tuple[SqlBgrReviewRound, ReviewRound]:
         row = db.get(SqlBgrReviewRound, (current_workspace_id(), round_id))

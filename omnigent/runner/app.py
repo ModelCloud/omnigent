@@ -5211,6 +5211,12 @@ def create_runner_app(
 
         relay_spec = _unwrap_spec_entry(spec_entry)
         relay_schemas: list[_JsonObject] = build_native_relay_tool_schemas(relay_spec)
+        from omnigent.runner.bgr_runtime import bgr_brain_registered
+
+        if bgr_brain_registered(session_id):
+            from omnigent.tools.builtins.bgr_control import SysBgrControlTool
+
+            relay_schemas.append(SysBgrControlTool().get_schema()["function"])
         if relay_spec is not None and relay_spec.mcp_servers:
             # Native terminals consume the persistent relay, not per-turn schemas.
             mcp = await ProxyMcpManager(session_id, server_client).schemas_for(relay_spec)
@@ -8661,6 +8667,9 @@ def create_runner_app(
     else:
         app.state.native_pane_reaper = None
 
+    from omnigent.runner.bgr_runtime import create_bgr_runtime_router
+
+    app.include_router(create_bgr_runtime_router())
     return app
 
 

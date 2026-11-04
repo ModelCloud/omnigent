@@ -74,6 +74,7 @@ class NativeCapabilities(_Wire):
     reviewer_start: bool = False
     review_snapshot_tool: dict[str, JsonValue] | None = None
     host_record: bool = False
+    reviewer_snapshot_no_lazy_fetch: bool = False
 
     @model_validator(mode="after")
     def supported_contract(self) -> Self:

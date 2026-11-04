@@ -111,7 +111,11 @@ class NativeIsolatedReviewer:
             capabilities = NativeCapabilities.model_validate(
                 _result(await request("bgr/capabilities/read", {}))
             )
-            if not capabilities.reviewer_start or not capabilities.host_record:
+            if (
+                not capabilities.reviewer_start
+                or not capabilities.host_record
+                or not capabilities.reviewer_snapshot_no_lazy_fetch
+            ):
                 raise native_contract_error()
             started = NativeReviewStarted.model_validate(
                 _result(await request("bgr/reviewer/start", params.wire()))

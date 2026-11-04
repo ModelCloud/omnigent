@@ -1350,6 +1350,32 @@ class CodexAppServerClient:
         self._events: asyncio.Queue[CodexMessage | None] = asyncio.Queue()
         self._next_id = 1
         self._subscribed_thread_ids: set[str] = set()
+        self._notification_observers: dict[
+            str, tuple[asyncio.Queue[CodexMessage], asyncio.Task[None]]
+        ] = {}
+
+    def add_notification_observer(
+        self, method: str, callback: Callable[[CodexMessage], Awaitable[None]]
+    ) -> Callable[[], None]:
+        """Observe without competing with the forwarder's event queue or blocking RPC replies."""
+        if method in self._notification_observers:
+            raise ValueError("A notification observer already owns this method")
+        queue: asyncio.Queue[CodexMessage] = asyncio.Queue(maxsize=128)
+
+        async def observe() -> None:
+            while True:
+                await callback(await queue.get())
+
+        task = asyncio.create_task(observe(), name=f"codex-native-observer-{method}")
+        self._notification_observers[method] = queue, task
+
+        def remove() -> None:
+            current = self._notification_observers.get(method)
+            if current is not None and current[1] is task:
+                del self._notification_observers[method]
+                task.cancel()
+
+        return remove
 
     async def connect(self) -> None:
         """
@@ -1398,6 +1424,11 @@ class CodexAppServerClient:
 
         :returns: None.
         """
+        observers = list(self._notification_observers.values())
+        self._notification_observers.clear()
+        for _, task in observers:
+            task.cancel()
+        await asyncio.gather(*(task for _, task in observers), return_exceptions=True)
         try:
             if self._reader_task is not None:
                 self._reader_task.cancel()
@@ -1571,6 +1602,16 @@ class CodexAppServerClient:
                     if future is not None and not future.done():
                         future.set_result(message)
                     continue
+                method = message.get("method")
+                observer = (
+                    self._notification_observers.get(method) if isinstance(method, str) else None
+                )
+                if observer is not None and "id" not in message:
+                    queue, task = observer
+                    if task.done():
+                        task.result()
+                        raise RuntimeError("Native notification observer stopped")
+                    queue.put_nowait(message)
                 await self._events.put(message)
         finally:
             # Wake iter_events() consumers: no further events can arrive.

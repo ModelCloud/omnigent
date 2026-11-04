@@ -20,6 +20,8 @@ from tests.harnesses.codex_native.test_bgr_messages import route as route
 from tests.stores.test_bgr_review_store import request as review_request
 from tests.stores.test_bgr_store import BRAIN, HOST, OWNER, PROFILE, SHA, TEAM
 
+CAPTURED = {**CAPTURED, "reviewerSnapshotNoLazyFetch": True}
+
 
 @pytest.fixture
 def start_request():
@@ -138,7 +140,9 @@ def test_atomic_reviewer_rejects_unsafe_launch_fields_and_extra_peers(start_requ
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("flag", ["reviewerStart", "reviewerSandbox", "hostRecord"])
+@pytest.mark.parametrize(
+    "flag", ["reviewerStart", "reviewerSandbox", "hostRecord", "reviewerSnapshotNoLazyFetch"]
+)
 async def test_factory_requires_negotiated_isolation_and_source_record_before_start(
     start_request, flag
 ):
@@ -148,6 +152,21 @@ async def test_factory_requires_negotiated_isolation_and_source_record_before_st
         calls.append(method)
         assert method == "bgr/capabilities/read"
         return {"result": {**CAPTURED, flag: False}}
+
+    with pytest.raises(OmnigentError):
+        await NativeIsolatedReviewer.start(request, start_request)
+    assert calls == ["bgr/capabilities/read"]
+
+
+@pytest.mark.asyncio
+async def test_factory_rejects_old_candidate_without_lazy_fetch_safety(start_request):
+    calls = []
+
+    async def request(method, params):
+        calls.append(method)
+        native = dict(CAPTURED)
+        native.pop("reviewerSnapshotNoLazyFetch")
+        return {"result": native}
 
     with pytest.raises(OmnigentError):
         await NativeIsolatedReviewer.start(request, start_request)
