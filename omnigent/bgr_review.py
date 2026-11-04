@@ -308,3 +308,25 @@ def publication_body(
     if len(body.encode("utf-8")) > 16_000:
         raise ValueError("publication exceeds the bounded review body; submit a smaller result")
     return body
+
+
+def validate_publication_redactions(canonical: str, prepared: str) -> str:
+    """Host-only secrets may remove text, never add or rewrite review content."""
+    header = canonical.partition("\n\n")[0] + "\n\n"
+    if not prepared.startswith(header):
+        raise ValueError("Publication identity cannot change")
+    chunks = prepared.split(r"\[REDACTED\]")
+    if not canonical.startswith(chunks[0]):
+        raise ValueError("Publication content cannot change")
+    cursor = len(chunks[0])
+    for chunk in chunks[1:-1]:
+        position = canonical.find(chunk, cursor)
+        if position < 0:
+            raise ValueError("Publication content cannot change")
+        cursor = position + len(chunk)
+    if len(chunks) == 1:
+        if prepared != canonical:
+            raise ValueError("Publication content cannot change")
+    elif not canonical.endswith(chunks[-1]) or cursor > len(canonical) - len(chunks[-1]):
+        raise ValueError("Publication content cannot change")
+    return prepared

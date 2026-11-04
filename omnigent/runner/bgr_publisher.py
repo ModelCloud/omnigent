@@ -8,6 +8,7 @@ import os
 import tomllib
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Protocol
 from uuid import uuid4
 
 from yaml import YAMLError
@@ -19,7 +20,41 @@ from omnigent.harnesses.multidex_native.config import load_multidex_config, mult
 from omnigent.inner.codex_executor import _codex_home_config_source_from_env
 from omnigent.runner import github_resource
 from omnigent.runner.session_prs import PullRequestRef
-from omnigent.stores.bgr_review_store import BgrReviewStore
+
+
+class PublicationLedger(Protocol):
+    def get_review_round(
+        self, user_id: str, session_id: str, team_id: str, round_id: str
+    ) -> ReviewRound: ...
+
+    def claim_publication(
+        self,
+        user_id: str,
+        session_id: str,
+        team_id: str,
+        fence: Fence,
+        *,
+        round_id: str,
+        review_id: str,
+        approved_body_sha256: str,
+        claim_id: str,
+        author_login: str,
+        private_values: tuple[str, ...] = (),
+    ) -> ReviewJob: ...
+
+    def reconcile_publication(
+        self,
+        user_id: str,
+        session_id: str,
+        team_id: str,
+        fence: Fence,
+        *,
+        round_id: str,
+        review_id: str,
+        claim_id: str,
+        comment_id: int | None,
+        next_page: int = 1,
+    ) -> ReviewJob: ...
 
 
 def _config_private_values(value: object, *, sensitive: bool = False) -> Iterator[str]:
@@ -120,7 +155,7 @@ def _comment_page(root: str, reference: PullRequestRef, page: int) -> list[dict[
 class BgrGitHubPublisher:
     """One write attempt per sealed job; uncertain attempts reconcile without reposting."""
 
-    def __init__(self, store: BgrReviewStore, root: str):
+    def __init__(self, store: PublicationLedger, root: str):
         self.store = store
         self.root = root
 
@@ -142,13 +177,16 @@ class BgrGitHubPublisher:
         round_id: str,
         review_id: str,
         approved_body_sha256: str,
+        reconcile_only: bool = False,
     ) -> ReviewJob:
         round = self.store.get_review_round(user_id, session_id, team_id, round_id)
         private_values = _private_values(self.root, _reference(round))
         body = publication_body(round, review_id, private_values=private_values)
         if hashlib.sha256(body.encode()).hexdigest() != approved_body_sha256:
             raise ValueError("Brain must approve the sanitized sealed publication body")
-        old = self.store._job(round, review_id)
+        old = next((job for job in round.jobs if job.review_id == review_id), None)
+        if old is None:
+            raise ValueError("Unknown sealed review")
         reference = _reference(round)
         if old.publication.state != "pending":
             if old.publication.approved_body != body or (
@@ -160,6 +198,8 @@ class BgrGitHubPublisher:
             if old.publication.state == "published":
                 return old
             return self._reconcile(user_id, session_id, team_id, fence, round, old, body)
+        if reconcile_only:
+            return old
         account = github_resource._pr_api(self.root, reference, "user")
         login = account.get("login")
         if not isinstance(login, str) or not 1 <= len(login) <= 100:

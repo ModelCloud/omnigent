@@ -13,6 +13,7 @@ from omnigent.server.bgr_controller import BgrControllers, BgrHostRuntime
 from tests.harnesses.codex_native.test_bgr_lifecycle import CAPTURED
 from tests.harnesses.codex_native.test_bgr_messages import NativeProcess
 from tests.harnesses.codex_native.test_bgr_messages import route as route
+from tests.stores.test_bgr_review_store import message as review_message
 from tests.stores.test_bgr_store import BRAIN, CONTRACT, HOST, OWNER, SHA, TEAM
 
 
@@ -156,5 +157,60 @@ async def test_review_factory_starts_two_independent_roles_and_projects_barrier(
                 action_id=uuid4().hex,
                 round_id=result["round_id"],
                 review_id=result["jobs"][0]["review_id"],
+            ),
+        )
+
+
+async def test_publish_uncertain_retries_are_read_only_reconciliation_with_same_action(controller):
+    current, _, _, _ = controller
+    result = await current.execute(
+        OWNER,
+        BRAIN,
+        BgrControl(
+            action="start_review",
+            action_id=uuid4().hex,
+            repository="ModelCloud/omnigent",
+            pr_number=1,
+            base_sha=SHA,
+            head_sha="e" * 40,
+        ),
+    )
+    round = current.store.get_review_round(OWNER, BRAIN, TEAM, result["round_id"])
+    for job in round.jobs:
+        current.store.send(
+            OWNER,
+            job.session_id,
+            TEAM,
+            review_message(round, job, current.brain.identity.agent_id),
+        )
+    command = BgrControl(
+        action="publish",
+        action_id=uuid4().hex,
+        round_id=round.round_id,
+        review_id=round.jobs[0].review_id,
+        approved_body_sha256="d" * 64,
+    )
+    current.runtime.call = AsyncMock(
+        side_effect=[
+            {"publication": {"state": "uncertain"}},
+            {"publication": {"state": "published", "comment_id": 21}},
+        ]
+    )
+    assert (await current.execute(OWNER, BRAIN, command))["publication"]["state"] == "uncertain"
+    published = await current.execute(OWNER, BRAIN, command)
+    assert published["publication"]["state"] == "published"
+    assert await current.execute(OWNER, BRAIN, command) == published
+    assert [call.args[0] for call in current.runtime.call.await_args_list] == [
+        "publish",
+        "publication_reconcile",
+    ]
+    with pytest.raises(OmnigentError, match="conflict"):
+        await current.execute(
+            OWNER,
+            BRAIN,
+            command.model_copy(
+                update={
+                    "approved_body_sha256": "f" * 64,
+                }
             ),
         )

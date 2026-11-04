@@ -46,6 +46,42 @@ async def test_native_wire_callback_is_observed_and_relayed_after_redaction(tmp_
         await handler({"params": {"threadId": str(uuid4())}})
 
 
+@pytest.mark.parametrize("operation", ["publication_preview", "publish", "publication_reconcile"])
+async def test_publication_uses_brain_workspace_and_authenticated_server_only(
+    tmp_path, monkeypatch, operation
+):
+    from omnigent.runner import bgr_publications
+
+    publication = AsyncMock(return_value={"publication": {"state": "published"}})
+    monkeypatch.setattr(bgr_publications, "run_publication", publication)
+    server_client = SimpleNamespace()
+    team_id = uuid4().hex
+    role = runtime._RoleProcess(BRAIN, "brain", 1, SimpleNamespace(), SimpleNamespace())
+    owner = runtime.BgrRuntime(
+        role,
+        workspace=tmp_path,
+        profiles=CONFIG,
+        callback=AsyncMock(),
+        host_id=HOST,
+        spec=None,
+        server_client=server_client,
+        team_id=team_id,
+    )
+    parameters = {"team_id": team_id}
+    await owner.operation(operation, parameters)
+    publication.assert_awaited_once_with(
+        operation,
+        parameters,
+        client=server_client,
+        session_id=BRAIN,
+        team_id=team_id,
+        root=str(tmp_path),
+    )
+    owner.server_client = None
+    with pytest.raises(OmnigentError, match="unavailable"):
+        await owner.operation(operation, parameters)
+
+
 async def test_brain_ready_waits_for_server_bind_and_non_bgr_is_noop(tmp_path):
     client = CodexAppServerClient(ws_url="ws://127.0.0.1:9")
     native = SimpleNamespace(proc=None, close=AsyncMock())

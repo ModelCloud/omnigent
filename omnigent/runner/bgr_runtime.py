@@ -219,6 +219,21 @@ class BgrRuntime:
     async def operation(
         self, operation: str, parameters: dict[str, JsonValue]
     ) -> dict[str, JsonValue]:
+        if operation in {"publication_preview", "publish", "publication_reconcile"}:
+            from omnigent.runner.bgr_publications import run_publication
+
+            if self.server_client is None or self.team_id is None:
+                raise OmnigentError(
+                    "Trusted publication ledger unavailable", code=ErrorCode.CONFLICT
+                )
+            return await run_publication(
+                operation,
+                parameters,
+                client=self.server_client,
+                session_id=self.brain.session_id,
+                team_id=self.team_id,
+                root=str(self.workspace),
+            )
         if operation == "brain":
             if self.brain.thread_id is None:
                 raise OmnigentError("Brain thread not discovered", code=ErrorCode.CONFLICT)
@@ -489,7 +504,14 @@ async def probe_bgr_runtime() -> dict[str, JsonValue]:
 
 class RuntimeCall(Record):
     operation: Literal[
-        "brain", "workspace", "spawn", "rpc", "stop", "publication_preview", "publish"
+        "brain",
+        "workspace",
+        "spawn",
+        "rpc",
+        "stop",
+        "publication_preview",
+        "publish",
+        "publication_reconcile",
     ]
     parameters: dict[str, JsonValue]
 

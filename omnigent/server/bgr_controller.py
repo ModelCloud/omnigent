@@ -146,20 +146,32 @@ class BgrController:
                 user_id, source_session_id, self.team_id, self.fence, command
             )
             if previous is not None:
-                return previous
+                if previous.get("_publication_reconcile") is not True:
+                    return previous
             try:
-                result = await self._execute(command)
+                result = await self._execute(command, reconcile_publication=previous is not None)
             except BaseException:
                 self.actions.finish(
                     user_id, source_session_id, self.team_id, self.fence, command.action_id, None
                 )
                 raise
+            publication = result.get("publication")
+            unsettled = command.action == "publish" and (
+                not isinstance(publication, dict) or publication.get("state") != "published"
+            )
             self.actions.finish(
-                user_id, source_session_id, self.team_id, self.fence, command.action_id, result
+                user_id,
+                source_session_id,
+                self.team_id,
+                self.fence,
+                command.action_id,
+                None if unsettled else result,
             )
             return result
 
-    async def _execute(self, command: BgrControl) -> dict[str, JsonValue]:
+    async def _execute(
+        self, command: BgrControl, *, reconcile_publication: bool = False
+    ) -> dict[str, JsonValue]:
         if command.action == "create_grunt":
             return await self._create_grunt(command)
         if command.action == "start_review":
@@ -202,7 +214,7 @@ class BgrController:
                 "Independent sibling results are withheld", code=ErrorCode.CONFLICT
             )
         return await self.runtime.call(
-            command.action,
+            "publication_reconcile" if reconcile_publication else command.action,
             {
                 "team_id": self.team_id,
                 "round_id": command.round_id,

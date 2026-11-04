@@ -11,6 +11,7 @@ from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.server.auth import AuthProvider
 from omnigent.server.bgr_controller import BgrControllers, BgrHostRuntime
 from omnigent.server.routes._auth_helpers import require_user
+from omnigent.server.routes.bgr_publications import create_bgr_publication_router
 from omnigent.server.session_orchestration import require_orchestration_source
 from omnigent.stores.conversation_store import ConversationStore
 from omnigent.stores.permission_store import PermissionStore
@@ -95,4 +96,5 @@ def create_bgr_control_router(
         await controller.native_callback(**body.model_dump())
         return {"accepted": True, "consumption_receipt": False}
 
+    router.include_router(create_bgr_publication_router(controllers, source))
     return router

@@ -39,6 +39,8 @@ class BgrControlActions:
                     raise OmnigentError("Control action ID conflict", code=ErrorCode.CONFLICT)
                 if existing.state == "completed" and existing.response is not None:
                     return _OBJECT.validate_json(existing.response)
+                if command.action == "publish":
+                    return {"_publication_reconcile": True}
                 raise OmnigentError(
                     "Control action is pending or uncertain; reconcile before retry",
                     code=ErrorCode.CONFLICT,

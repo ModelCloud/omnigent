@@ -21,6 +21,7 @@ from omnigent.bgr_review import (
     publication_body,
     sanitize_review,
     sanitize_review_payload,
+    validate_publication_redactions,
 )
 from omnigent.db import current_workspace_id
 from omnigent.db.bgr_models import (
@@ -497,6 +498,7 @@ class BgrReviewStore(BgrStore):
         claim_id: str,
         author_login: str,
         private_values: tuple[str, ...] = (),
+        approved_body: str | None = None,
     ) -> ReviewJob:
         def apply(db: Session) -> ReviewJob:
             team = self._owned(db, team_id, user_id)
@@ -504,6 +506,8 @@ class BgrReviewStore(BgrStore):
             row, round = self._round(db, team_id, round_id)
             job = self._job(round, review_id)
             body = publication_body(round, review_id, private_values=private_values)
+            if approved_body is not None:
+                body = validate_publication_redactions(body, approved_body)
             if hashlib.sha256(body.encode()).hexdigest() != approved_body_sha256:
                 raise _conflict("Brain approval does not match the sanitized sealed publication")
             if job.publication.state != "pending":
