@@ -704,7 +704,13 @@ class BgrStore:
         return self._write("close_stopped_attempt", apply)
 
     def _insert_envelope(
-        self, db: Session, team: SqlBgrTeam, sender: Agent, body: Send
+        self,
+        db: Session,
+        team: SqlBgrTeam,
+        sender: Agent,
+        body: Send,
+        *,
+        request_hash: str | None = None,
     ) -> Receipt:
         retained = list(
             db.scalars(
@@ -751,7 +757,7 @@ class BgrStore:
                 sender_agent_id=sender.agent_id,
                 recipient_agent_id=body.recipient_agent_id,
                 message_id=body.message_id,
-                request_hash=_digest(body.model_dump()),
+                request_hash=request_hash or _digest(body.model_dump()),
                 sequence=envelope.sequence,
                 document=envelope.model_dump_json(),
             )
@@ -764,6 +770,7 @@ class BgrStore:
 
     def send(self, user_id: str, session_id: str, team_id: str, body: Send) -> Receipt:
         def apply(db: Session) -> Receipt:
+            delivered = body
             team = self._owned(db, team_id, user_id)
             self._epoch(team, body.epoch)
             sender = self._agent(db, team_id, session_id)
@@ -794,8 +801,14 @@ class BgrStore:
             ):
                 raise _forbidden()
             target = Agent.model_validate_json(recipient.document)
-            if "reviewer" in (sender.role, target.role):
-                raise _conflict("Reviewer channels require enforced independent-review lifecycle")
+            reviewing = "reviewer" in (sender.role, target.role)
+            if reviewing:
+                # Legacy/imported identities have no verified isolation lifecycle.
+                candidate = self._attempt(db, team_id, body.attempt_id)
+                if Attempt.model_validate_json(candidate.document).review_round_id is None:
+                    raise _conflict(
+                        "Reviewer channels require enforced independent-review lifecycle"
+                    )
             row = self._attempt(db, team_id, body.attempt_id)
             attempt = Attempt.model_validate_json(row.document)
             if (
@@ -811,6 +824,10 @@ class BgrStore:
                 raise _forbidden()
             if body.kind in ("task", "cancel", "status_query") and sender.role != "brain":
                 raise _forbidden()
+            if reviewing:
+                from omnigent.stores.bgr_review_store import validate_review_message
+
+                delivered = validate_review_message(db, team_id, sender, target, attempt, body)
             if body.in_reply_to is not None:
                 original = db.scalar(
                     select(SqlBgrEnvelope).where(
@@ -843,7 +860,9 @@ class BgrStore:
                         "Question already has a reply; retry the original reply message_id"
                     )
                 original.replied_at_us = self._now_us()
-            return self._insert_envelope(db, team, sender, body)
+            return self._insert_envelope(
+                db, team, sender, delivered, request_hash=_digest(body.model_dump())
+            )
 
         return self._write("accept_envelope", apply)
 

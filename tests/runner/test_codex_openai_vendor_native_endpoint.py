@@ -259,8 +259,9 @@ def test_explicit_openai_key_default_serves_openai_vendor_models(
     """A keyed default aimed at OpenAI itself is still honored."""
     _write(
         config_home,
-        _WITH_NATIVE_OPENAI.replace("    default: openai\n", "")
-        .replace("openai-key:\n    kind: key", "openai-key:\n    kind: key\n    default: openai"),
+        _WITH_NATIVE_OPENAI.replace("    default: openai\n", "").replace(
+            "openai-key:\n    kind: key", "openai-key:\n    kind: key\n    default: openai"
+        ),
     )
     from omnigent.harnesses.codex_native import app_server
 

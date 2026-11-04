@@ -28,12 +28,12 @@ def test_bgr_upgrade_downgrade_and_model_parity(database):
             ),
             {"id": session},
         )
-    _migrate(uri, engine, "upgrade", "a6d8e0f2b435")
+    _migrate(uri, engine, "upgrade", "b7e9f1a3c546")
     inspector = sa.inspect(engine)
     models = [
         table for name, table in OmnigentBase.metadata.tables.items() if name.startswith("bgr_")
     ]
-    assert len(models) == 6
+    assert len(models) == 7
     for table in models:
         assert set(table.c.keys()) == {
             column["name"] for column in inspector.get_columns(table.name)
@@ -84,14 +84,14 @@ def test_bgr_upgrade_downgrade_and_model_parity(database):
 def test_bgr_ddl_without_application_metadata(database):
     uri, engine = database
     scripts = ScriptDirectory.from_config(_build_alembic_config(uri))
-    revisions = ["e4b6c8d0f213", "f5c7d9e1a324", "a6d8e0f2b435"]
+    revisions = ["e4b6c8d0f213", "f5c7d9e1a324", "a6d8e0f2b435", "b7e9f1a3c546"]
     with engine.begin() as connection, Operations.context(MigrationContext.configure(connection)):
         for revision in revisions:
             namespace = runpy.run_path(scripts.get_revision(revision).path)
             namespace["upgrade"]()
         inspector = sa.inspect(connection)
         assert (
-            len([table for table in inspector.get_table_names() if table.startswith("bgr_")]) == 6
+            len([table for table in inspector.get_table_names() if table.startswith("bgr_")]) == 7
         )
         for table in inspector.get_table_names():
             assert all(column["default"] is None for column in inspector.get_columns(table))

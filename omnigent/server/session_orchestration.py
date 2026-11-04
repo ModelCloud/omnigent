@@ -10,7 +10,7 @@ from omnigent.runner.identity import (
     RUNNER_TUNNEL_TOKEN_HEADER,
     token_bound_runner_id,
 )
-from omnigent.server.auth import LEVEL_OWNER
+from omnigent.server.auth import LEVEL_EDIT, LEVEL_OWNER, LEVEL_READ
 from omnigent.server.feature_flags import Feature
 from omnigent.server.schemas import SessionStartupInput
 from omnigent.stores.conversation_store import (
@@ -22,6 +22,24 @@ from omnigent.stores.permission_store import PermissionStore
 from omnigent.util.session_lifecycle import is_session_closed
 
 
+def _has_disallowed_sharing(
+    session_id: str,
+    user_id: str,
+    permissions: PermissionStore,
+    *,
+    allow_read_only_sharing: bool = True,
+) -> bool:
+    """Whether another grant exceeds the caller's permitted sharing boundary."""
+    minimum_level = LEVEL_EDIT if allow_read_only_sharing else LEVEL_READ
+    cursor: str | None = None
+    while True:
+        grants, cursor = permissions.list_for_session(session_id, after_user_id=cursor)
+        if any(g.user_id != user_id and g.level >= minimum_level for g in grants):
+            return True
+        if cursor is None:
+            return False
+
+
 def require_owned_session(
     identifier: str,
     user_id: str,
@@ -29,6 +47,7 @@ def require_owned_session(
     permissions: PermissionStore,
     *,
     private: bool = False,
+    allow_read_only_sharing: bool = True,
 ) -> Conversation:
     """Resolve actual ownership and inherited sharing, without administrator bypass."""
     session_id = normalize_uuid(identifier)
@@ -47,11 +66,18 @@ def require_owned_session(
         if grant is None or grant.level != LEVEL_OWNER:
             break
         if private:
-            # Child access comes from the root, including public/read-only grants.
-            grants, cursor = permissions.list_for_session(current.id, limit=2)
-            if cursor is not None or any(g.user_id != user_id for g in grants):
+            # Child access comes from the root. Read-only viewers, including the
+            # public grant, cannot add input, so they cannot steer other sessions.
+            if _has_disallowed_sharing(
+                current.id, user_id, permissions, allow_read_only_sharing=allow_read_only_sharing
+            ):
                 raise OmnigentError(
-                    "Shared sessions cannot send messages or launch independent sessions",
+                    (
+                        "Sessions shared with edit access cannot send messages or launch "
+                        "independent sessions"
+                        if allow_read_only_sharing
+                        else "BGR requires an unshared private session"
+                    ),
                     code=ErrorCode.FORBIDDEN,
                 )
             if current.labels.get(SIDE_CHAT_LABEL_KEY) == "1":
@@ -71,6 +97,7 @@ def require_orchestration_source(
     permissions: PermissionStore | None,
     *,
     target_id: str | None = None,
+    allow_read_only_sharing: bool = True,
 ) -> Conversation:
     """Check the bound runner, private sender and optional same-owner destination."""
     if not request.app.state.feature_flags.enabled(Feature.SESSION_ORCHESTRATION):
@@ -83,6 +110,7 @@ def require_orchestration_source(
         conversations,
         permissions,
         private=True,
+        allow_read_only_sharing=allow_read_only_sharing,
     )
     token = (request.headers.get(RUNNER_TUNNEL_TOKEN_HEADER) or "").strip()
     if not token or not source.runner_id or token_bound_runner_id(token) != source.runner_id:
