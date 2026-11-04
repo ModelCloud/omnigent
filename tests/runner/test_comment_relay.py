@@ -1524,6 +1524,72 @@ async def test_native_relay_discovers_session_mcp_tools_through_gateway(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("brain_before,brain_after", [(False, True), (True, False)])
+async def test_slow_relay_discovery_preserves_newer_brain_membership(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, brain_before: bool, brain_after: bool
+) -> None:
+    from types import SimpleNamespace
+
+    from omnigent.runner.proxy_mcp_manager import ProxyMcpManager
+
+    session_id = f"conv_{uuid.uuid4().hex[:12]}"
+    brain_sessions = {session_id} if brain_before else set()
+    monkeypatch.setattr(
+        "omnigent.runner.bgr_runtime.bgr_brain_registered",
+        lambda target: target in brain_sessions,
+    )
+    discovery_started = asyncio.Event()
+    release_discovery = asyncio.Event()
+    calls = 0
+
+    async def discover(self, spec):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            discovery_started.set()
+            await release_discovery.wait()
+        return SimpleNamespace(schemas=[], failures={})
+
+    monkeypatch.setattr(ProxyMcpManager, "schemas_for", discover)
+    spec = AgentSpec(
+        spec_version=1,
+        mcp_servers=[MCPServerConfig(name="github", transport="registry")],
+    )
+    app = _switch_app(
+        tmp_path,
+        _SwitchableServerClient("with-mcp"),
+        {"with-mcp": ResolvedSpec(spec=spec, workdir=tmp_path)},
+    )
+    bridge_dir = prepare_bridge_dir(session_id, workspace=tmp_path)
+    relay_file = bridge_dir / _TOOL_RELAY_FILE
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://runner"
+        ) as client:
+            old_launch = asyncio.create_task(_launch_bridged(client, session_id))
+            try:
+                await asyncio.wait_for(discovery_started.wait(), timeout=5)
+                if brain_after:
+                    brain_sessions.add(session_id)
+                else:
+                    brain_sessions.clear()
+                await _launch_bridged(client, session_id)
+                current = json.loads(relay_file.read_text())
+                assert ("sys_bgr_control" in _relay_tool_names(relay_file)) is brain_after
+            finally:
+                release_discovery.set()
+                await asyncio.wait_for(old_launch, timeout=5)
+            assert calls == 2
+            assert ("sys_bgr_control" in _relay_tool_names(relay_file)) is brain_after
+            latest = json.loads(relay_file.read_text())
+            assert latest["url"] == current["url"]
+            assert latest["token"] == current["token"]
+            await client.delete(f"/v1/sessions/{session_id}")
+    finally:
+        shutil.rmtree(bridge_dir, ignore_errors=True)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("initial_revision", [None, "bundle.zip"])
 @pytest.mark.parametrize("harness_name", ["claude-native", "kiro-native", "pi-native"])
 async def test_native_revision_refreshes_relay_before_turn_without_reset(
