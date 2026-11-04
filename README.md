@@ -73,6 +73,13 @@ retain the binary's reasoning metadata, and an `openrouter` registration uses
 the native provider id so `[model_providers.openrouter.provider]` routing
 preferences, including Wafer-only selection, reach the correct endpoint.
 
+New chat, chat settings, scheduled tasks, and session forks share the same
+Model → Provider → Speed (variant) → Reasoning selector for grouped MultiDex
+catalogs. It shows provider health and advertised speeds, and clears incompatible
+reasoning overrides when changing models. Forks inherit untouched settings.
+See the [session feature map](feature-map/sessions.md) for fork entry points and
+verification coverage.
+
 ### 1. Install
 
 One command installs Omnigent and everything it needs:
@@ -333,6 +340,9 @@ See the [native agy gateway guide](docs/native-agy-gateways.md) for compatibilit
 requirements, model and authentication behavior, troubleshooting, and smoke
 steps. These settings configure native agy; the Antigravity Python SDK retains
 its separate key/Vertex setup.
+`omnigent opencode` requires OpenCode 2.0.x (`npm i -g @opencode/cli@2.0.32`).
+Its free models need no sign-in; run `opencode auth login` to add your own
+providers. See the [OpenCode harness guide](docs/opencode-native.md).
 
 Using OpenClaw? See the [OpenClaw integration guide](docs/openclaw.md) to import
 its coding agents or drive a live OpenClaw Gateway session over ACP.

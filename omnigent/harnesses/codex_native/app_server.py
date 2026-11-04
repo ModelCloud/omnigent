@@ -107,8 +107,9 @@ from omnigent.inner.databricks_executor import (
     _read_databrickscfg_host,
 )
 from omnigent.models.codex_model_vocabulary import codex_reachable_model_slug, codex_spawn_model
-from omnigent.native import policy_allow_cache
+from omnigent.native import native_bridge_common, policy_allow_cache
 from omnigent.process_logging import (
+    DATA_DIR_ENV_VAR,
     harness_stderr_capture_enabled,
     log_info_once,
     log_once,
@@ -363,10 +364,12 @@ def _codex_mcp_server_config_section(
         f'[mcp_servers.omnigent.tools.{tool}]\napproval_mode = "approve"\n'
         for tool in framework_approved_tools(routed_spawns=routed_spawns)
     )
+    relay_data_dir = native_bridge_common.native_bridge_data_dir()
     return (
         f"[mcp_servers.omnigent]\n"
         f"command = {json.dumps(python)}\n"
-        f"args = [{args_toml}]\n\n"
+        f"args = [{args_toml}]\n"
+        f"env = {{ {DATA_DIR_ENV_VAR} = {json.dumps(str(relay_data_dir))} }}\n\n"
         f"{approvals}"
     )
 
@@ -2642,7 +2645,7 @@ class CodexNativeAppServer:
                             "session auth marker (%s)",
                             auth_path,
                         )
-                    except OSError:  # noqa: BLE001 - a repair failure is not fatal here
+                    except OSError:
                         _logger.warning(
                             "codex-native: could not repair the empty session auth marker "
                             "at %s; Codex will ask the user to sign in again.",
@@ -4742,9 +4745,7 @@ def _openai_vendor_pin_forbids(entry: object, model: str | None) -> bool:
             effective_model = entry.family_default_model("openai")  # type: ignore[attr-defined]
         except Exception:  # noqa: BLE001 - an unroutable entry is judged below
             effective_model = None
-    return _is_openai_vendor_model(effective_model) and not _serves_openai_vendor_natively(
-        entry
-    )
+    return _is_openai_vendor_model(effective_model) and not _serves_openai_vendor_natively(entry)
 
 
 def _codex_login_launch(model: str | None, *, summary: str) -> NativeCodexLaunch:

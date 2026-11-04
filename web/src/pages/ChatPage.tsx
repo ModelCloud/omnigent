@@ -1,5 +1,6 @@
 import { SelectionPopup } from "@/components/chat/SelectionPopup";
 import { NativeModelSelectors } from "@/components/NativeModelSelectors";
+import { hasGroupedModelOptions } from "@/lib/modelSelection";
 import { useLoadedConversations } from "@/hooks/useSidebarData";
 import { useConversationRedirect } from "@/hooks/useConversationRedirect";
 import { MAIN_CANVAS_ID } from "@/canvas/canvasLayout";
@@ -5284,7 +5285,7 @@ function SessionHarnessPicker({
           <DropdownMenuSeparator />
         </>
       )}
-      {modelPickerKind === "codex" && showModels && modelOptions.some((row) => row.modelFamily) ? (
+      {modelPickerKind === "codex" && showModels && hasGroupedModelOptions(modelOptions) ? (
         <NativeModelSelectors
           options={modelOptions}
           selectedModel={pickerSelectedModel}

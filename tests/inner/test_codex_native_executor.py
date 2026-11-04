@@ -317,10 +317,13 @@ def test_multidex_turn_routes_official_model_to_openai(
     assert actual == {"model": "gpt-5.6-sol", "modelProvider": "openai"}
 
 
-def test_multidex_switch_restores_the_resolved_non_local_provider(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize("explicit_provider", [None, "omnigent_provider"])
+def test_multidex_switch_routes_openai_model_to_native_provider(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    explicit_provider: str | None,
 ) -> None:
-    """Leaving a MultiDex model restores the session's configured provider."""
+    """A retained OpenRouter launch table cannot capture an OpenAI switch."""
     from omnigent.harnesses.multidex_native import config as multidex_config
 
     registration = multidex_config.MultiDexConfig(
@@ -338,19 +341,32 @@ def test_multidex_switch_restores_the_resolved_non_local_provider(
         ),
     )
     monkeypatch.setattr(multidex_config, "load_multidex_config", lambda **_kwargs: registration)
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    (home / "config.toml").write_text(
+        'model = "DS v4.1 Flash 1017"\n'
+        'model_provider = "multidex"\n'
+        "[model_providers.omnigent_provider]\n"
+        'name = "Omnigent Provider"\n'
+        'base_url = "https://openrouter.ai/api/v1"\n'
+        'wire_api = "responses"\n'
+    )
     state = CodexNativeBridgeState(
         session_id="session_123",
         socket_path=str(tmp_path / "app-server.sock"),
         thread_id="thread_123",
-        codex_home=str(tmp_path / "codex-home"),
-        default_model_provider="gateway",
+        codex_home=str(home),
+        default_model_provider="omnigent_provider",
     )
 
+    settings = {"model": "gpt-6-astra"}
+    if explicit_provider is not None:
+        settings["modelProvider"] = explicit_provider
     actual = asyncio.run(
-        codex_native_executor._multidex_runtime_settings_overrides(state, {"model": "gpt-5.6-sol"})
+        codex_native_executor._multidex_runtime_settings_overrides(state, settings)
     )
 
-    assert actual == {"model": "gpt-5.6-sol", "modelProvider": "gateway"}
+    assert actual == {"model": "gpt-6-astra", "modelProvider": "openai"}
 
 
 def test_named_multidex_provider_routes_its_model_without_capability_probe(
@@ -3149,6 +3165,7 @@ def test_web_model_pick_applied_via_thread_settings_update(
             {
                 "threadId": "thread_123",
                 "model": "gpt-5.3-codex",
+                "modelProvider": "openai",
                 "effort": "high",
             },
         ),

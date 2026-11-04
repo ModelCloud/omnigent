@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Literal
 from omnigent.harnesses.codex_egress import CertificateFailure
 from omnigent.native import native_bridge_common, policy_allow_cache
 from omnigent.onboarding.codex_auth_readiness import provider_table_auth_token
+from omnigent.process_logging import DATA_DIR_ENV_VAR
 
 if TYPE_CHECKING:
     from omnigent.inner.terminal import TerminalInstance
@@ -93,7 +94,7 @@ _MCP_CONFIG_FILE = "bridge.json"
 # prep time (the Omnigent URL + auth do not change across thread rotations),
 # whereas ``state.json`` mutates on every turn/thread change.
 _POLICY_HOOK_FILE = "policy_hook.json"
-_BRIDGE_ROOT = Path.home() / ".omnigent" / "codex-native"
+_BRIDGE_ROOT = native_bridge_common.native_bridge_data_dir() / "codex-native"
 _ORPHAN_RETENTION_SECONDS = 7 * 24 * 60 * 60
 
 
@@ -435,6 +436,7 @@ def codex_mcp_config_overrides(
     return [
         f'mcp_servers.omnigent.command="{python}"',
         f"mcp_servers.omnigent.args={args_toml}",
+        f"mcp_servers.omnigent.env.{DATA_DIR_ENV_VAR}={json.dumps(str(native_bridge_common.native_bridge_data_dir()))}",
     ]
 
 

@@ -41,6 +41,7 @@ import {
 } from "@/components/composer/ComposerConfigSections";
 import { NativeModelSelectors } from "@/components/NativeModelSelectors";
 import { BgrLaunchDialog } from "@/components/BgrLaunchDialog";
+import { compatibleModelEffort, hasGroupedModelOptions } from "@/lib/modelSelection";
 import { useComposerConfigCycleHotkeys } from "@/hooks/useComposerConfigCycleHotkeys";
 import { buildFusionSections } from "@/components/composer/fusionSections";
 import {
@@ -154,6 +155,7 @@ import {
   harnessWarningBadgeText,
   isCodexHarness,
   isNativeCursorHarness,
+  isNativeOpenCodeHarness,
   skillInvocationPrefix,
 } from "@/lib/harnessSetup";
 
@@ -878,6 +880,16 @@ function harnessWarningMessage(
       <>
         {agentName} needs Cursor login on {hostName} — run <code>cursor-agent login</code> on that
         machine.
+      </>
+    );
+  }
+  // OpenCode 2.x ships as a new npm package; an in-place 1.x upgrade can't reach it.
+  if (reason === "version-too-low" && !!harness && isNativeOpenCodeHarness(harness)) {
+    return (
+      <>
+        {agentName} needs OpenCode 2.0 on {hostName} — run{" "}
+        <code>npm i -g @opencode/cli@2.0.32</code> (after <code>npm rm -g opencode-ai</code>) or{" "}
+        <code>omni setup</code> on that machine.
       </>
     );
   }
@@ -3840,16 +3852,12 @@ export function NewChatLandingScreen() {
     }
     const picked = model === MODEL_SELECT_DEFAULT ? "" : model;
     // Gateway catalogs carry no default row, so Default keeps no effort.
-    const effortModel = sandboxDefaultModelsEnabled
-      ? picked
-      : picked || codexModelOptions.find((option) => option.isDefault)?.id;
-    const effort =
-      (sandboxDefaultModelsEnabled || selectedNativeHarness === "codex-native") &&
-      !codexEffortLevelsForModel(
-        sandboxDefaultModelsEnabled ? pickerModelOptions : codexModelOptions,
-        effortModel,
-      ).includes(pickedEffort)
-        ? ""
+    const effort = sandboxDefaultModelsEnabled
+      ? codexEffortLevelsForModel(pickerModelOptions, picked).includes(pickedEffort)
+        ? pickedEffort
+        : ""
+      : selectedNativeHarness === "codex-native"
+        ? (compatibleModelEffort(codexModelOptions, picked, pickedEffort || null) ?? "")
         : pickedEffort;
     setPickedModel(picked);
     setPickedEffort(effort);
@@ -3913,7 +3921,7 @@ export function NewChatLandingScreen() {
     rememberPickerOptions(selectedNativeHarness, { model: modelUid, effort: "", routing: "off" });
   };
   const nativeModelSelectors =
-    selectedNativeHarness === "codex-native" && pickerModelOptions.some((row) => row.modelFamily);
+    selectedNativeHarness === "codex-native" && hasGroupedModelOptions(pickerModelOptions);
   const modelSection: ComposerConfigSection | undefined = nativeModelSelectors
     ? {
         testId: "new-chat-landing-agent-models",
