@@ -2,6 +2,8 @@
 
 import json
 from random import Random
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import httpx
@@ -158,6 +160,61 @@ async def test_http_control_and_callback_fail_closed_before_brain_attach(bgr_env
             json={"action": "status", "action_id": uuid4().hex},
         )
         assert response.status_code == 403
+    await app.state.bgr_controllers.close()
+
+
+@pytest.mark.parametrize("rejected_at", [None, "thread", "launch"])
+async def test_native_ready_hands_off_startup_only_after_verified_attachment(
+    bgr_environment, monkeypatch, rejected_at
+):
+    application, brain, _, _, _ = bgr_environment
+    app = application()
+    order = []
+    thread_id = str(uuid4())
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        team, fence = await create_team(client, brain)
+
+        async def attach(**kwargs):
+            order.append("attach")
+            return SimpleNamespace(
+                brain=SimpleNamespace(
+                    thread_id=str(uuid4()) if rejected_at == "thread" else thread_id
+                ),
+                fence=Fence.model_validate(fence),
+            )
+
+        def mark_running(*args):
+            order.append("running")
+            if rejected_at == "launch":
+                raise OmnigentError("Stale launch fence")
+
+        async def ready(*args):
+            order.append("startup")
+
+        monkeypatch.setattr(
+            "omnigent.server.routes.sessions._get_runner_client", AsyncMock(return_value=client)
+        )
+        monkeypatch.setattr(app.state.bgr_controllers, "attach", attach)
+        monkeypatch.setattr(app.state.bgr_controllers.store, "mark_launch_running", mark_running)
+        monkeypatch.setattr(app.state.startup_inputs, "session_ready", ready)
+        response = await client.post(
+            f"{PREFIX}/teams/{team['team_id']}/native-callback",
+            headers=headers(brain),
+            json={
+                "session_id": brain,
+                "thread_id": thread_id,
+                "method": "runtime/thread-ready",
+                "params": {},
+            },
+        )
+        if rejected_at:
+            assert response.status_code >= 400
+            assert "startup" not in order
+        else:
+            assert response.status_code == 200, response.text
+            assert order == ["attach", "running", "startup"]
     await app.state.bgr_controllers.close()
 
 

@@ -151,6 +151,9 @@ def create_bgr_control_router(
             await asyncio.to_thread(
                 controllers.store.mark_launch_running, user, session, team_id, controller.fence
             )
+            startup = getattr(request.app.state, "startup_inputs", None)
+            if startup is not None:
+                await startup.session_ready(request.app, session)
             return {"accepted": True, "consumption_receipt": False}
         controller = controllers.get(session)
         controller.authorize(user, session)

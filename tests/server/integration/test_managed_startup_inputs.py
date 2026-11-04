@@ -42,6 +42,7 @@ from omnigent.stores.conversation_store.sqlalchemy_store import SqlAlchemyConver
 from omnigent.stores.file_store.sqlalchemy_store import SqlAlchemyFileStore
 from omnigent.stores.host_store import HostStore
 from omnigent.stores.permission_store.sqlalchemy_store import SqlAlchemyPermissionStore
+from tests._helpers.polling import poll_until_async
 from tests.server.helpers import build_agent_bundle, create_test_agent
 from tests.server.integration.test_managed_launch_failure_teardown import (
     _Env,
@@ -226,6 +227,139 @@ async def test_saved_input_survives_service_recreation_and_dispatches_once(
         assert snapshot["pending_inputs"] == []
     finally:
         await runner.aclose()
+
+
+async def test_attached_session_drains_only_its_queue_once_on_an_ordinary_host(
+    startup_env: _Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = startup_env
+    forwarded: list[dict[str, Any]] = []
+    runner = _stub_runner(monkeypatch, forwarded)
+    startup = env.app.state.startup_inputs
+    restarted = ManagedStartupInputs(env.conv_store, startup.hosts)
+    restarted.dispatch = startup.dispatch
+
+    def turns():
+        return [event for event in forwarded if event.get("type") == "message"]
+
+    try:
+        session_id = await _create(env, name=CODEX_NATIVE_CODING_AGENT.agent_name)
+        _bind(env, session_id)
+        env.conv_store.set_runner_id(session_id, uuid4().hex)
+        conv = env.conv_store.get_conversation(session_id)
+        connection = startup.hosts.register(
+            conv.host_id,
+            AsyncMock(),
+            HostHelloFrame(version="test", frame_protocol_version=1, name="ordinary"),
+            owner=None,
+        )
+        assert not connection.registered_with_managed_token
+        sibling = await _create(env, name=CODEX_NATIVE_CODING_AGENT.agent_name)
+        env.conv_store.set_host_id(sibling, conv.host_id, "/work/sibling")
+        env.conv_store.set_runner_id(sibling, uuid4().hex)
+        second_text = "Run only after the first native receipt."
+        await startup.enqueue(
+            session_id,
+            SessionEventInput(
+                type="message",
+                data={"role": "user", "content": [{"type": "input_text", "text": second_text}]},
+            ),
+            user_id=None,
+            headers=Headers({}),
+            first=False,
+        )
+        startup.host_changed(env.app, conv.host_id)
+        assert not startup._workers
+        await startup.session_ready(env.app, session_id)
+        await startup.session_ready(env.app, session_id)
+        assert len(startup._session_workers) == 1
+        await poll_until_async(lambda: len(turns()) == 1)
+        await poll_until_async(lambda: not startup._deliveries)
+        assert env.conv_store.list_pending_inputs(session_id)[0].status == "incomplete"
+        await restarted.session_ready(env.app, session_id)
+        await poll_until_async(lambda: len(restarted._session_workers) == 1)
+        assert len(turns()) == 1
+
+        pending_inputs.reset_for_tests()
+        await _simulate_transcript_forwarder_echo(env.client, session_id, _TEXT)
+        await poll_until_async(lambda: len(turns()) == 2)
+        await poll_until_async(lambda: not startup._deliveries and not restarted._deliveries)
+        await _simulate_transcript_forwarder_echo(env.client, session_id, second_text)
+        await poll_until_async(
+            lambda: not startup._session_workers and not restarted._session_workers
+        )
+        assert env.conv_store.list_pending_inputs(session_id) == []
+        assert STARTUP_LABEL not in env.conv_store.get_conversation(session_id).labels
+        assert len(turns()) == 2
+        assert len(env.conv_store.list_pending_inputs(sibling)) == 1
+    finally:
+        await restarted.shutdown()
+        await runner.aclose()
+
+
+@pytest.mark.parametrize("changed_runner", [None, "replacement-runner", "host-reconnected"])
+@pytest.mark.parametrize("changed_at", ["worker", "delivery", "claim"])
+async def test_attached_startup_never_launches_a_lost_or_changed_runner(
+    startup_env: _Env,
+    monkeypatch: pytest.MonkeyPatch,
+    changed_runner: str | None,
+    changed_at: str,
+) -> None:
+    env = startup_env
+    session_id = await _create(env)
+    _bind(env, session_id)
+    env.conv_store.set_runner_id(session_id, uuid4().hex)
+    conv = env.conv_store.get_conversation(session_id)
+    connection = startup_env.app.state.host_registry.register(
+        conv.host_id,
+        AsyncMock(),
+        HostHelloFrame(version="test", frame_protocol_version=1, name="ordinary"),
+        owner=None,
+    )
+    startup = env.app.state.startup_inputs
+    launch = _stub_launch(env, monkeypatch)
+
+    def change_binding():
+        if changed_runner == "host-reconnected":
+            startup.hosts.register(
+                conv.host_id,
+                AsyncMock(),
+                HostHelloFrame(version="test", frame_protocol_version=1, name="replacement"),
+                owner=None,
+            )
+            return
+        env.conv_store.clear_runner_id(session_id)
+        if changed_runner is not None:
+            env.conv_store.set_runner_id(session_id, changed_runner)
+
+    async def claim(context, target, event):
+        change_binding()
+        assert not await context.claim(env.conv_store, target)
+        assert not context.submitted
+        return {"accepted": False}
+
+    dispatch = AsyncMock(side_effect=claim if changed_at == "claim" else None)
+    startup.dispatch = dispatch
+    if changed_at == "worker":
+        await startup.session_ready(env.app, session_id)
+    else:
+        assert await startup._recover_session(
+            env.app, session_id, connection, expected_runner_id=conv.runner_id
+        )
+        assert startup._deliveries
+    if changed_at != "claim":
+        change_binding()
+    await poll_until_async(lambda: not startup._deliveries)
+    await poll_until_async(lambda: not startup._session_workers)
+    assert not await startup._recover_session(
+        env.app, session_id, connection, expected_runner_id=conv.runner_id
+    )
+    if changed_at == "claim":
+        dispatch.assert_awaited_once()
+    else:
+        dispatch.assert_not_awaited()
+    launch.assert_not_awaited()
+    assert env.conv_store.list_pending_inputs(session_id)[0].status == "in_progress"
 
 
 async def test_refused_delivery_retains_input_until_explicit_retry(
@@ -927,7 +1061,10 @@ async def test_input_saved_while_startup_finishes_is_still_delivered(
     assert conv is not None and conv.labels[STARTUP_LABEL] == "ready"
     delivered: list[str] = []
 
-    async def deliver(_app: Any, _session_id: str, item: Any) -> None:
+    async def deliver(
+        _app: Any, _session_id: str, item: Any, *, expected_binding: Any = None
+    ) -> None:
+        assert expected_binding is None
         delivered.append(item.id)
 
     monkeypatch.setattr(startup, "_deliver", deliver)
