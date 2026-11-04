@@ -35,6 +35,8 @@ from omnigent.bgr import (
     MailboxDiscard,
     NativeAssignment,
     NativeBinding,
+    NativeBrainBinding,
+    NativeMessageOrigin,
     Receipt,
     Record,
     Recovery,
@@ -378,6 +380,8 @@ class BgrStore:
                     epoch=team.epoch,
                     controller_id=body.controller_id,
                     kind="task",
+                    correlation_id=body.task_id,
+                    head_sha=body.workspace.base_sha,
                     payload={"contract": json.loads(body.contract.model_dump_json())},
                 ),
             )
@@ -656,6 +660,83 @@ class BgrStore:
 
         return self._write("read_persisted_native_query", read)
 
+    def native_brain_binding(
+        self,
+        user_id: str,
+        session_id: str,
+        team_id: str,
+        fence: Fence,
+        *,
+        binding: NativeBrainBinding | None = None,
+    ) -> NativeBrainBinding:
+        """Reserve or read the Brain mapping without inventing a worker assignment."""
+
+        def apply(db: Session) -> NativeBrainBinding:
+            team = self._owned(db, team_id, user_id)
+            self._fence(team, session_id, fence)
+            if _team(team).config.brain.harness != "codex-native":
+                raise _conflict("Native Brain requires an explicit codex-native profile")
+            brain_agent_id = _team(team).brain_agent_id
+            key = (current_workspace_id(), brain_agent_id)
+            existing = db.get(SqlBgrNativeBinding, key)
+            if binding is not None:
+                if binding.team_id != team_id or binding.epoch != fence.epoch:
+                    raise _conflict("Native Brain binding does not match the team epoch")
+                if existing is None:
+                    db.add(
+                        SqlBgrNativeBinding(
+                            workspace_id=current_workspace_id(),
+                            id=brain_agent_id,
+                            team_id=team_id,
+                            thread_id=binding.thread_id,
+                            document=binding.model_dump_json(),
+                        )
+                    )
+                elif NativeBrainBinding.model_validate_json(existing.document) != binding:
+                    raise _conflict("Brain already has another immutable native binding")
+            elif existing is None:
+                raise _conflict("Brain has no native binding")
+            else:
+                binding_value = NativeBrainBinding.model_validate_json(existing.document)
+                if binding_value.epoch != fence.epoch:
+                    raise _conflict("Brain native binding requires a proven epoch transition")
+                return binding_value
+            return binding
+
+        return self._write("reserve_or_read_native_brain_mapping", apply)
+
+    def native_message(
+        self,
+        user_id: str,
+        session_id: str,
+        team_id: str,
+        fence: Fence,
+        *,
+        sender_agent_id: str,
+        message_id: str,
+    ) -> Envelope:
+        """Read an exact durable source anchor under the live Brain controller fence."""
+
+        def read(db: Session) -> Envelope:
+            team = self._owned(db, team_id, user_id)
+            self._fence(team, session_id, fence)
+            row = db.scalar(
+                select(SqlBgrEnvelope).where(
+                    SqlBgrEnvelope.workspace_id == current_workspace_id(),
+                    SqlBgrEnvelope.team_id == team_id,
+                    SqlBgrEnvelope.sender_agent_id == sender_agent_id,
+                    SqlBgrEnvelope.message_id == message_id,
+                )
+            )
+            if row is None:
+                raise _conflict("Native message has no durable source anchor")
+            envelope = _envelope(row)
+            if envelope.epoch != fence.epoch or envelope.discard is not None:
+                raise _conflict("Native source anchor is stale or discarded")
+            return envelope
+
+        return self._write("read_exact_native_source_anchor", read)
+
     def checkpoint(self, user_id: str, session_id: str, team_id: str, body: Checkpoint) -> Attempt:
         def apply(db: Session) -> Attempt:
             team = self._owned(db, team_id, user_id)
@@ -711,6 +792,7 @@ class BgrStore:
         body: Send,
         *,
         request_hash: str | None = None,
+        native_origin: NativeMessageOrigin | None = None,
     ) -> Receipt:
         retained = list(
             db.scalars(
@@ -745,6 +827,7 @@ class BgrStore:
             sender_session_id=sender.session_id,
             sender_role=sender.role,
             sender_name=sender.name,
+            native_origin=native_origin,
             sequence=team.next_sequence,
             created_at=self._now_us() / _MICROSECONDS,
         )
@@ -768,7 +851,15 @@ class BgrStore:
             sequence=envelope.sequence,
         )
 
-    def send(self, user_id: str, session_id: str, team_id: str, body: Send) -> Receipt:
+    def send(
+        self,
+        user_id: str,
+        session_id: str,
+        team_id: str,
+        body: Send,
+        *,
+        native_origin: NativeMessageOrigin | None = None,
+    ) -> Receipt:
         def apply(db: Session) -> Receipt:
             delivered = body
             team = self._owned(db, team_id, user_id)
@@ -788,7 +879,10 @@ class BgrStore:
                 )
             )
             if existing is not None:
-                if existing.request_hash != _digest(body.model_dump()):
+                identity = body.model_dump()
+                if native_origin is not None:
+                    identity["native_origin"] = native_origin.model_dump()
+                if existing.request_hash != _digest(identity):
                     raise _conflict("message_id already has different content")
                 return Receipt(
                     envelope_id=existing.id, message_id=body.message_id, sequence=existing.sequence
@@ -842,7 +936,10 @@ class BgrStore:
                 question = _envelope(original)
                 if question.discard is not None:
                     raise _conflict("Discarded questions cannot be replied to")
-                expected = "status_query" if body.kind == "status_reply" else "question"
+                expected = {
+                    "status_reply": "status_query",
+                    "answer": "question",
+                }.get(body.kind, "task")
                 if (
                     question.recipient_agent_id != sender.agent_id
                     or question.kind != expected
@@ -855,13 +952,22 @@ class BgrStore:
                     raise _conflict(
                         "Reply question, sender, correlation, attempt or revision mismatch"
                     )
-                if original.replied_at_us is not None:
+                if body.kind in ("answer", "status_reply") and original.replied_at_us is not None:
                     raise _conflict(
                         "Question already has a reply; retry the original reply message_id"
                     )
-                original.replied_at_us = self._now_us()
+                if body.kind in ("answer", "status_reply"):
+                    original.replied_at_us = self._now_us()
+            identity = body.model_dump()
+            if native_origin is not None:
+                identity["native_origin"] = native_origin.model_dump()
             return self._insert_envelope(
-                db, team, sender, delivered, request_hash=_digest(body.model_dump())
+                db,
+                team,
+                sender,
+                delivered,
+                request_hash=_digest(identity),
+                native_origin=native_origin,
             )
 
         return self._write("accept_envelope", apply)

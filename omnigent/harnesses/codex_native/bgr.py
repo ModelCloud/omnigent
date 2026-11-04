@@ -35,7 +35,7 @@ class _Wire(BaseModel):
 
 def _require_tool(tool: dict[str, JsonValue] | None, name: str, required: set[str]) -> None:
     schema = tool.get("inputSchema") if tool else None
-    fields = schema.get("required") if isinstance(schema, dict) else None
+    fields = schema.get("required", []) if isinstance(schema, dict) else None
     if (
         not tool
         or tool.get("type") != "function"
@@ -71,23 +71,30 @@ class NativeCapabilities(_Wire):
     message_callbacks: bool = False
     consumption_receipts: bool = False
     status_evidence: Annotated[str, Field(min_length=1, max_length=512)] | None = None
+    reviewer_start: bool = False
+    review_snapshot_tool: dict[str, JsonValue] | None = None
+    host_record: bool = False
 
     @model_validator(mode="after")
     def supported_contract(self) -> Self:
         if (
-            set(self.roles) != {"brain", "grunt"}
+            set(self.roles)
+            != ({"brain", "grunt", "reviewer"} if self.reviewer_start else {"brain", "grunt"})
             or not self.host_delivery
             or not self.live_reattach
             or any(
                 (
                     self.durable_mailbox,
                     self.restart_recovery,
-                    self.reviewer_sandbox,
                     self.cross_host_delivery,
                 )
             )
         ):
             raise ValueError("requires the v1 host-delivery brain/grunt capability contract")
+        if self.reviewer_start != self.reviewer_sandbox:
+            raise ValueError("reviewer start and enforced sandbox must be negotiated together")
+        if self.reviewer_start:
+            _require_tool(self.review_snapshot_tool, "bgr_read_review_snapshot", set())
         _require_tool(self.report_tool, "bgr_report_status", {"messageId", "inReplyTo", "payload"})
         if self.general_messaging:
             if (
@@ -125,6 +132,9 @@ class NativeCapabilities(_Wire):
             or self.send_tool is not None
             or self.reply_tool is not None
             or self.status_evidence is not None
+            or self.reviewer_start
+            or self.review_snapshot_tool is not None
+            or self.host_record
         ):
             raise ValueError("requires the v1 host-delivery status-only capability contract")
         return self

@@ -47,7 +47,9 @@ def _codex_private_values() -> Iterator[str]:
         yield from _config_private_values(document, sensitive=name == "auth.json")
 
 
-def _private_values(root: str, reference: PullRequestRef) -> tuple[str, ...]:
+def _private_values(
+    root: str, reference: PullRequestRef | None = None, *, require_forge: bool = True
+) -> tuple[str, ...]:
     """Resolve only in the trusted host, never in reviewer requests or persisted metadata."""
     values = [value for key, value in os.environ.items() if sensitive_review_key(key)]
     try:
@@ -66,13 +68,16 @@ def _private_values(root: str, reference: PullRequestRef) -> tuple[str, ...]:
         if config is not None:
             for model in multidex_models(config):
                 values.extend(_config_private_values(model.provider_config))
-        token = github_resource._pr_token(root, reference)
+        token = github_resource._pr_token(root, reference) if reference is not None else None
         if not token:
             code, token, _ = github_resource._gh(
-                ["auth", "token", "--hostname", reference.host], cwd=root
+                ["auth", "token", "--hostname", reference.host if reference else "github.com"],
+                cwd=root,
             )
-            if code != 0 or not token.strip():
+            if require_forge and (code != 0 or not token.strip()):
                 raise ValueError("Publisher credential inventory is unavailable")
+            if code != 0:
+                token = ""
         values.append(token.strip())
     except (ValueError, OSError, YAMLError):
         raise ValueError("Could not establish trusted publication privacy context") from None

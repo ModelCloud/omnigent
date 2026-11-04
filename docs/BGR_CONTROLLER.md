@@ -108,6 +108,30 @@ merge or deploy. No separate schema PR has been opened.
 
 ## Authentication and existing session integration
 
+### Additive native general-message adapter
+
+The opt-in `BgrNativeMailbox` accepts already-bound private native connections;
+it does not create sessions, install callbacks, start turns or schedule workers.
+Host-created messages must exist in the SQL ledger before native source recording
+and destination delivery. Both operations are idempotent. Native `hostRecord`
+is required; native acceptance is never recorded as durable consumption. Pending
+host messages survive loss of native process-local mailbox metadata.
+
+Native arbitrary message IDs (including `clarify-contract-1`) retain their source
+identity and exact reply anchors through durable origin metadata. Task-linked
+questions, progress and results may share one task anchor; only answers and status
+replies settle a one-shot reply slot. Source thread, role, assignment, epoch,
+correlation and immutable head are checked before persistence and routing.
+
+Callback payloads are recursively sanitized with trusted-host private values
+before SQL persistence. Native `no_findings` and `incomplete` results are translated
+factually into validated sealed results without inventing coverage. Native result
+forwarding waits until all sibling jobs seal; questions remain live. The captured
+capability fixture keeps native durability, restart recovery and consumption
+receipts false. These adapter checks do not demonstrate isolated process startup,
+provider execution, a complete Brain-facing store projection barrier, controller
+lease recovery or automatic publication draining. Launch remains unavailable.
+
 Every endpoint uses the existing session-orchestration checks:
 
 - An authenticated owner, not an editor, reader, or administrator bypass.
