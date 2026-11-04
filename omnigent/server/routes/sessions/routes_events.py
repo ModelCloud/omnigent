@@ -1778,10 +1778,11 @@ def register_events_routes(
             await _require_access(
                 user_id, session_id, LEVEL_OWNER, permission_store, conversation_store
             )
+        discarded_inputs: list[dict[str, Any]] = []
         if body.type in (_INTERRUPT_TYPE, _STOP_SESSION_TYPE):
             startup = getattr(request.app.state, "startup_inputs", None)
             if startup is not None:
-                await startup.cancel(session_id)
+                discarded_inputs = await startup.cancel(session_id)
         stop_codex_side_chat = (
             body.type == _STOP_SESSION_TYPE
             and _is_codex_native_subagent(conv)
@@ -1876,6 +1877,8 @@ def register_events_routes(
                     session_id,
                     {CLOSED_LABEL_KEY: CLOSED_LABEL_VALUE},
                 )
+            if discarded_inputs and body.type == _INTERRUPT_TYPE:
+                return {"queued": False, "discarded_inputs": discarded_inputs}
             return {"queued": False}
         if body.type == _STOP_SESSION_TYPE:
             # Fence the cancelled turn, same as interrupt.
