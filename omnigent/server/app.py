@@ -2225,6 +2225,9 @@ def create_app(
             )
             if startup_inputs is not None:
                 await startup_inputs.shutdown()
+            controllers = getattr(app.state, "bgr_controllers", None)
+            if controllers is not None:
+                await controllers.close()
             await background_title_coordinator.shutdown()
             _uninstall_subagent_block_notifier()
             set_resource_registry(None)
@@ -3985,8 +3988,19 @@ def create_app(
         )
 
     if bgr_store is not None:
+        from omnigent.server.bgr_controller import create_bgr_controllers
         from omnigent.server.routes.bgr import create_bgr_router
+        from omnigent.server.routes.bgr_control import create_bgr_control_router
 
+        controllers = create_bgr_controllers(bgr_store, conversation_store, permission_store)
+        app.state.bgr_controllers = controllers
+        app.include_router(
+            create_bgr_control_router(
+                controllers, conversation_store, permission_store, auth_provider
+            ),
+            prefix="/v1",
+            tags=["bgr"],
+        )
         app.include_router(
             create_bgr_router(bgr_store, conversation_store, permission_store, auth_provider),
             prefix="/v1",
