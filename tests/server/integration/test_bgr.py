@@ -10,7 +10,7 @@ import httpx
 import pytest
 from starlette.requests import Request
 
-from omnigent.bgr import Fence, NativeBrainBinding
+from omnigent.bgr import Fence, LaunchRequest, LeaseRequest, NativeBrainBinding, TeamCreate
 from omnigent.errors import OmnigentError
 from omnigent.runner.bgr_runtime import load_bgr_team_config
 from omnigent.runner.identity import (
@@ -19,6 +19,7 @@ from omnigent.runner.identity import (
     token_bound_runner_id,
 )
 from omnigent.runtime.agent_cache import AgentCache
+from omnigent.server.accounts_store import SqlAlchemyAccountStore
 from omnigent.server.app import create_app
 from omnigent.server.auth import LEVEL_OWNER, LEVEL_READ, UnifiedAuthProvider
 from omnigent.server.bgr_input import check_bgr_session_input
@@ -32,6 +33,9 @@ from omnigent.stores.conversation_store import CREATED_BY_SESSION_LABEL_KEY
 from omnigent.stores.conversation_store.sqlalchemy_store import SqlAlchemyConversationStore
 from omnigent.stores.file_store.sqlalchemy_store import SqlAlchemyFileStore
 from omnigent.stores.permission_store.sqlalchemy_store import SqlAlchemyPermissionStore
+from tests.host.test_bgr_supervisor import request_stop as request_stop
+from tests.server.test_bgr_generation_auth import accounts_provider as accounts_provider
+from tests.stores.test_bgr_store import CONFIG
 
 pytestmark = pytest.mark.asyncio
 PREFIX = "/v1/bgr"
@@ -63,7 +67,7 @@ def bgr_environment(runtime_init, db_uri, tmp_path):
             permissions.grant(owner, child.id, LEVEL_OWNER)
         return child.id
 
-    def application(features=None):
+    def application(features=None, provider=None):
         artifacts = LocalArtifactStore(str(tmp_path / "artifacts"))
         return create_app(
             agent_store=SqlAlchemyAgentStore(db_uri),
@@ -72,8 +76,10 @@ def bgr_environment(runtime_init, db_uri, tmp_path):
             artifact_store=artifacts,
             agent_cache=AgentCache(artifact_store=artifacts, cache_dir=tmp_path / "cache"),
             permission_store=SqlAlchemyPermissionStore(db_uri),
-            auth_provider=UnifiedAuthProvider(source="header", local_single_user=False),
+            auth_provider=provider
+            or UnifiedAuthProvider(source="header", local_single_user=False),
             bgr_store=BgrStore(db_uri, clock=lambda: now[0]),
+            account_store=SqlAlchemyAccountStore(db_uri) if provider is not None else None,
             feature_flags=resolve_feature_flags({"OMNIGENT_FEATURES": features or ""}),
         )
 
@@ -121,6 +127,92 @@ async def create_team(client, brain):
     )
     assert response.status_code == 200, response.text
     return team, {"controller_id": controller_id, "epoch": response.json()["epoch"]}
+
+
+async def test_generation_http_foundation_uses_real_ledger_without_launch_enablement(
+    bgr_environment, accounts_provider, request_stop, db_uri
+):
+    application, _, _, permissions, _ = bgr_environment
+    app = application(provider=accounts_provider)
+    store = app.state.bgr_store
+    intent = store.reserve_launch(
+        "alice",
+        HOST,
+        LaunchRequest(
+            team_id=uuid4().hex,
+            agent_id="bgr-test",
+            workspace="/work",
+            config=CONFIG,
+            initial_prompt="Keep the supervised launcher disabled",
+        ),
+    )
+    generation = request_stop.admission.generation.model_copy(
+        update={
+            "host_id": HOST,
+            "team_id": intent.team_id,
+            "brain_session_id": intent.brain_session_id,
+            "controller_id": intent.controller_id,
+            "runner_id": token_bound_runner_id("generation-http"),
+        }
+    )
+    conversations = SqlAlchemyConversationStore(db_uri)
+    conversations.create_conversation(
+        conversation_id=intent.brain_session_id, host_id=HOST, workspace="/work"
+    )
+    conversations.set_runner_id(intent.brain_session_id, generation.runner_id)
+    permissions.grant("alice", intent.brain_session_id, LEVEL_OWNER)
+    store.create(
+        "alice", intent.brain_session_id, TeamCreate(team_id=intent.team_id, config=CONFIG)
+    )
+    store.acquire(
+        "alice",
+        intent.brain_session_id,
+        intent.team_id,
+        LeaseRequest(controller_id=intent.controller_id),
+    )
+    store.reserve_supervised_generation("alice", generation)
+    admission = request_stop.admission.model_copy(update={"generation": generation})
+    store.activate_supervised_generation("alice", admission)
+    bound = {RUNNER_TUNNEL_TOKEN_HEADER: "generation-http"}
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(f"/v1/runners/{generation.runner_id}/token", headers=bound)
+        assert response.status_code == 200, response.text
+        token = response.json()["token"]
+        assert token.startswith("bgr1.")
+        authorized = {
+            **bound,
+            "Authorization": f"Bearer {token}",
+            ORCHESTRATION_SOURCE_HEADER: intent.brain_session_id,
+        }
+        response = await client.get(f"{PREFIX}/teams/{intent.team_id}", headers=authorized)
+        assert response.status_code == 200, response.text
+        assert response.json()["team"]["team_id"] == intent.team_id
+        response = await client.post(
+            f"{PREFIX}/control",
+            headers=authorized,
+            json={"action": "status", "action_id": uuid4().hex},
+        )
+        assert response.status_code == 409, response.text
+        for path in (
+            "/v1/hosts",
+            "/v1/sessions",
+            "/v1/mcp",
+            f"{PREFIX}/teams/{intent.team_id}/recover",
+        ):
+            assert (await client.get(path, headers=authorized)).status_code == 403
+        with store._sessions("expire_supervised_http_lease") as db:
+            from omnigent.db import current_workspace_id
+            from omnigent.db.bgr_models import SqlBgrTeam
+
+            db.get(SqlBgrTeam, (current_workspace_id(), intent.team_id)).lease_expires_at_us = 0
+        assert (
+            await client.get(f"{PREFIX}/teams/{intent.team_id}", headers=authorized)
+        ).status_code == 403
+        assert (
+            await client.post(f"/v1/runners/{generation.runner_id}/token", headers=bound)
+        ).status_code >= 400
 
 
 async def test_http_control_and_callback_fail_closed_before_brain_attach(bgr_environment):

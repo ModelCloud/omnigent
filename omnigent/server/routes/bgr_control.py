@@ -12,6 +12,7 @@ from omnigent.bgr_control import BgrControl
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.server.auth import LEVEL_OWNER, AuthProvider
 from omnigent.server.bgr_controller import BgrControllers, BgrHostRuntime
+from omnigent.server.bgr_generation_auth import generation_actor
 from omnigent.server.routes._auth_helpers import require_access, require_user
 from omnigent.server.routes.bgr_publications import create_bgr_publication_router
 from omnigent.server.session_orchestration import require_orchestration_source
@@ -53,7 +54,7 @@ def create_bgr_control_router(
     router = APIRouter(prefix="/bgr")
 
     def source(request: Request) -> tuple[str, str]:
-        user = require_user(request, auth_provider)
+        user = generation_actor(request) or require_user(request, auth_provider)
         session = require_orchestration_source(
             request, user, conversations, permissions, allow_read_only_sharing=False
         )

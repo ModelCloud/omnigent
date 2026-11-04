@@ -45,12 +45,15 @@ from omnigent.bgr import (
     RuntimeRecovery,
     RuntimeStopEvidence,
     Send,
+    SupervisedLaunch,
     Task,
     TaskClose,
     TaskReserve,
     Team,
     TeamCreate,
 )
+from omnigent.bgr_supervision import GenerationAdmission, SupervisedGeneration
+from omnigent.db.account_authority import require_active_account
 from omnigent.db.bgr_models import (
     SqlBgrAgent,
     SqlBgrAttempt,
@@ -210,6 +213,160 @@ class BgrStore:
             return LaunchIntent.model_validate_json(row.document)
 
         return self._write("claim_launch_intent", apply)
+
+    @staticmethod
+    def _supervised_document(intent: LaunchIntent) -> str:
+        document = intent.model_dump_json()
+        if len(intent.supervised_generations) > 16 or len(document.encode()) > 60_000:
+            raise _conflict("Supervised generation history is full; tombstones cannot be evicted")
+        return document
+
+    def generation_for_runner(self, runner_id: str) -> SupervisedGeneration | None:
+        """Retain classification after revocation, rebinding, and cold restarts."""
+        with self._sessions("classify_supervised_runner") as db:
+            return self._generation_for_runner(db, runner_id)
+
+    @staticmethod
+    def _generation_for_runner(db: Session, runner_id: str) -> SupervisedGeneration | None:
+        rows = db.scalars(
+            select(SqlBgrLaunch)
+            .where(SqlBgrLaunch.workspace_id == current_workspace_id())
+            .execution_options(yield_per=32)
+        )
+        found = None
+        for row in rows:
+            intent = LaunchIntent.model_validate_json(row.document)
+            BgrStore._supervised_document(intent)
+            for item in intent.supervised_generations:
+                if item.generation.runner_id == runner_id:
+                    if found is not None:
+                        raise _conflict("Supervised runner identity is ambiguous")
+                    found = item.generation
+        return found
+
+    def reserve_supervised_generation(
+        self, user_id: str, generation: SupervisedGeneration
+    ) -> SupervisedLaunch:
+        """Persist an immutable classification before any supervised launch side effects."""
+
+        def apply(db: Session) -> SupervisedLaunch:
+            account_generation = require_active_account(db, user_id)
+            team = self._owned(db, generation.team_id, user_id)
+            self._fence(
+                team,
+                generation.brain_session_id,
+                Fence(controller_id=generation.controller_id, epoch=generation.epoch),
+            )
+            row = db.get(SqlBgrLaunch, (current_workspace_id(), generation.team_id))
+            if row is None or row.owner_id != user_id:
+                raise _forbidden()
+            intent = LaunchIntent.model_validate_json(row.document)
+            if (
+                intent.host_id != generation.host_id
+                or intent.brain_session_id != generation.brain_session_id
+            ):
+                raise _conflict("Supervised launch target does not match its intent")
+            self._supervised_document(intent)
+            for item in intent.supervised_generations:
+                if item.generation == generation:
+                    return item
+                if (
+                    any(
+                        getattr(item.generation, field) == getattr(generation, field)
+                        for field in ("runner_id", "generation_id", "credential_id", "launch_id")
+                    )
+                    or item.state != "revoked"
+                ):
+                    raise _conflict("Supervised identities cannot be reused or overlap")
+            if self._generation_for_runner(db, generation.runner_id) is not None:
+                raise _conflict("Supervised runner is already classified")
+            item = SupervisedLaunch(generation=generation, account_generation=account_generation)
+            row.document = self._supervised_document(
+                intent.model_copy(
+                    update={"supervised_generations": [*intent.supervised_generations, item]}
+                )
+            )
+            return item
+
+        return self._write("reserve_supervised_generation", apply)
+
+    def activate_supervised_generation(
+        self, user_id: str, admission: GenerationAdmission
+    ) -> SupervisedLaunch:
+        """Internal only: the trusted supervisor transport must authenticate admission first."""
+
+        def apply(db: Session) -> SupervisedLaunch:
+            generation = admission.generation
+            require_active_account(db, user_id)
+            team = self._owned(db, generation.team_id, user_id)
+            self._fence(
+                team,
+                generation.brain_session_id,
+                Fence(controller_id=generation.controller_id, epoch=generation.epoch),
+            )
+            row = db.get(SqlBgrLaunch, (current_workspace_id(), generation.team_id))
+            if row is None or row.owner_id != user_id:
+                raise _forbidden()
+            intent = LaunchIntent.model_validate_json(row.document)
+            items = list(intent.supervised_generations)
+            for index, item in enumerate(items):
+                if item.generation != generation:
+                    continue
+                require_active_account(db, user_id, generation=item.account_generation)
+                if item.state == "revoked" or (
+                    item.admission is not None and item.admission != admission
+                ):
+                    raise _conflict("Supervised admission is revoked or changed")
+                active = item.model_copy(update={"state": "active", "admission": admission})
+                items[index] = active
+                row.document = self._supervised_document(
+                    intent.model_copy(update={"supervised_generations": items})
+                )
+                return active
+            raise _conflict("Supervised admission has no durable reservation")
+
+        return self._write("activate_supervised_generation", apply)
+
+    def validate_supervised_generation(self, generation: SupervisedGeneration) -> str:
+        """Resolve internal ownership only for the exact live, admitted generation."""
+        with self._sessions("validate_supervised_generation_authority") as db:
+            row = db.get(SqlBgrLaunch, (current_workspace_id(), generation.team_id))
+            if row is None:
+                raise _forbidden()
+            intent = LaunchIntent.model_validate_json(row.document)
+            self._supervised_document(intent)
+            if not any(
+                item.generation == generation
+                and item.state == "active"
+                and item.admission is not None
+                for item in intent.supervised_generations
+            ):
+                raise _forbidden()
+            team = self._owned(db, generation.team_id, row.owner_id, lock=False)
+            item = next(
+                item for item in intent.supervised_generations if item.generation == generation
+            )
+            require_active_account(db, row.owner_id, generation=item.account_generation)
+            self._fence(
+                team,
+                generation.brain_session_id,
+                Fence(controller_id=generation.controller_id, epoch=generation.epoch),
+            )
+            mapping = db.get(
+                SqlBgrNativeBinding, (current_workspace_id(), _team(team).brain_agent_id)
+            )
+            if mapping is not None:
+                binding = NativeBrainBinding.model_validate_json(mapping.document)
+                if (
+                    binding.team_id != generation.team_id
+                    or binding.epoch != generation.epoch
+                    or binding.runtime_id != generation.runtime_id
+                    or binding.host_id != generation.host_id
+                ):
+                    raise _conflict(
+                        "Supervised generation does not match its native Brain mapping"
+                    )
+            return row.owner_id
 
     def finish_launch(
         self,
@@ -555,6 +712,12 @@ class BgrStore:
                         update={
                             "state": "blocked",
                             "reason": "Native runtime stop is not yet confirmed",
+                            "supervised_generations": [
+                                item.model_copy(update={"state": "revoked"})
+                                for item in LaunchIntent.model_validate_json(
+                                    launch.document
+                                ).supervised_generations
+                            ],
                         }
                     )
                     .model_dump_json()

@@ -7,26 +7,18 @@ import posixpath
 from datetime import UTC, datetime
 from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
+from pydantic import Field, JsonValue, field_validator, model_validator
 
-Identifier = Annotated[str, Field(pattern=r"^[0-9a-f]{32}$")]
+from omnigent.bgr_records import Identifier as Identifier
+from omnigent.bgr_records import Label as Label
+from omnigent.bgr_records import Record as Record
+from omnigent.bgr_records import Role as Role
+from omnigent.bgr_supervision import GenerationAdmission, SupervisedGeneration
+
 Commit = Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
-Label = Annotated[str, Field(min_length=1, max_length=256)]
-Role = Literal["brain", "grunt", "reviewer"]
 Kind = Literal[
     "task", "question", "answer", "progress", "status_query", "status_reply", "result", "cancel"
 ]
-
-
-class Record(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-
-    @field_validator("protocol_version", mode="before", check_fields=False)
-    @classmethod
-    def strict_protocol_version(cls, value: object) -> object:
-        if type(value) is not int or value != 1:
-            raise ValueError("protocol_version must be integer 1")
-        return value
 
 
 class Profile(Record):
@@ -74,6 +66,21 @@ class LaunchRequest(Record):
         return value
 
 
+class SupervisedLaunch(Record):
+    generation: SupervisedGeneration
+    account_generation: Identifier | None = None
+    state: Literal["reserved", "active", "revoked"] = "reserved"
+    admission: GenerationAdmission | None = None
+
+    @model_validator(mode="after")
+    def exact_admission(self) -> Self:
+        if self.admission is not None and self.admission.generation != self.generation:
+            raise ValueError("Admission must match the reserved generation")
+        if self.state == "active" and self.admission is None:
+            raise ValueError("Active generations require trusted admission")
+        return self
+
+
 class LaunchIntent(Record):
     team_id: Identifier
     brain_session_id: Identifier
@@ -82,6 +89,23 @@ class LaunchIntent(Record):
     request: LaunchRequest
     state: Literal["pending", "starting", "running", "blocked"] = "pending"
     reason: Annotated[str, Field(max_length=2000)] | None = None
+    supervised_generations: Annotated[list[SupervisedLaunch], Field(max_length=16)] = Field(
+        default_factory=list
+    )
+
+    @model_validator(mode="after")
+    def unique_generation_history(self) -> Self:
+        for field in ("runner_id", "generation_id", "credential_id", "launch_id"):
+            values = [getattr(item.generation, field) for item in self.supervised_generations]
+            if len(values) != len(set(values)):
+                raise ValueError("Supervised identities cannot be reused")
+        if any(
+            item.generation.team_id != self.team_id
+            or item.generation.brain_session_id != self.brain_session_id
+            for item in self.supervised_generations
+        ):
+            raise ValueError("Supervised history belongs to another team or Brain")
+        return self
 
 
 class LeaseRequest(Record):
@@ -116,8 +140,8 @@ class Contract(Record):
     objective: Annotated[str, Field(min_length=1, max_length=2000)]
     instructions: Annotated[str, Field(min_length=1, max_length=4000)]
     acceptance: Annotated[list[Label], Field(min_length=1, max_length=16)]
-    checks: Annotated[list[Label], Field(max_length=16)] = []
-    artifact_refs: Annotated[list[Label], Field(max_length=16)] = []
+    checks: Annotated[list[Label], Field(max_length=16)] = Field(default_factory=list)
+    artifact_refs: Annotated[list[Label], Field(max_length=16)] = Field(default_factory=list)
 
 
 class TaskReserve(Fence):
@@ -141,7 +165,7 @@ class Checkpoint(Record):
     phase: Label
     summary: Annotated[str, Field(max_length=2000)]
     head_sha: Commit | None = None
-    artifact_refs: Annotated[list[Label], Field(max_length=16)] = []
+    artifact_refs: Annotated[list[Label], Field(max_length=16)] = Field(default_factory=list)
 
 
 class StatusScope(Record):
@@ -288,7 +312,9 @@ class Team(Record):
     epoch: int
     controller_id: Identifier | None
     lease_expires_at: float
-    runtime_recoveries: Annotated[list[RuntimeRecovery], Field(max_length=32)] = []
+    runtime_recoveries: Annotated[list[RuntimeRecovery], Field(max_length=32)] = Field(
+        default_factory=list
+    )
 
 
 class Agent(Record):

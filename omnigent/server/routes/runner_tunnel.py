@@ -55,6 +55,7 @@ from omnigent.runner.transports.ws_tunnel.registry import (
 )
 from omnigent.server import managed_host_keepalive, session_live_state, shutdown_state
 from omnigent.server.auth import RESERVED_USER_LOCAL, AuthProvider
+from omnigent.server.bgr_generation_auth import generation_principal
 from omnigent.server.host_registry import RunnerExitReports
 from omnigent.server.routes._auth_helpers import require_user
 from omnigent.server.tunnel_handshake import receive_tunnel_hello
@@ -392,6 +393,14 @@ def create_runner_tunnel_router(
             owner; 400 when the active auth mode can't mint server-side
             (header/proxy, or no auth provider).
         """
+        generation_auth = getattr(request.app.state, "bgr_generation_auth", None)
+        if generation_auth is not None:
+            generation = await asyncio.to_thread(generation_auth.resolve, runner_id)
+            if generation is not None:
+                token = (request.headers.get(RUNNER_TUNNEL_TOKEN_HEADER) or "").strip()
+                if not token or token_bound_runner_id(token) != runner_id:
+                    raise OmnigentError("unauthenticated", code=ErrorCode.UNAUTHORIZED)
+                return await asyncio.to_thread(generation_auth.mint, generation)
         if auth_provider is None:
             # No auth configured: the runner authenticates by binding
             # token alone and needs no bearer — minting is meaningless.
@@ -498,10 +507,15 @@ def create_runner_tunnel_router(
         # session-binding check each skip enforcement when the runner's
         # ``owner is None``, so an owner-less runner becomes visible to —
         # and bindable by — every other tenant.
-        tunnel_owner = _resolve_tunnel_owner(
-            ws,
-            auth_provider=auth_provider,
-            is_loopback=is_loopback,
+        principal = generation_principal(ws)
+        tunnel_owner = (
+            principal.owner_id
+            if principal is not None
+            else _resolve_tunnel_owner(
+                ws,
+                auth_provider=auth_provider,
+                is_loopback=is_loopback,
+            )
         )
         binding_token_owner = tunnel_owner is None and auth_provider is not None
         if tunnel_owner is None and auth_provider is not None:
@@ -592,6 +606,11 @@ def create_runner_tunnel_router(
                 )
                 return
 
+            if principal is not None:
+                await asyncio.to_thread(
+                    ws.app.state.bgr_generation_auth.check_connection, ws, principal
+                )
+
             # 5. Register — the authenticated tunnel owner was resolved
             #    (and an unauthenticated non-loopback peer already
             #    rejected) before ``accept()`` above, so runner-binding
@@ -655,8 +674,17 @@ def create_runner_tunnel_router(
 
                 owned.extend((sender_task, ping_task, keepalive_task, receive_task))
 
-                if EVENT_INGEST_CAPABILITY in frame.capabilities and callable(
-                    getattr(ws.app.state, "runner_event_ingest", None)
+                if principal is not None:
+                    owned.append(
+                        asyncio.create_task(
+                            _generation_watch(ws), name=f"generation-watch:{runner_id}"
+                        )
+                    )
+
+                if (
+                    principal is None
+                    and EVENT_INGEST_CAPABILITY in frame.capabilities
+                    and callable(getattr(ws.app.state, "runner_event_ingest", None))
                 ):
                     await registry.send_text(session, encode_frame(EventReadyFrame()))
 
@@ -842,7 +870,17 @@ async def _sender_loop(ws: WebSocket, session: RunnerSession) -> None:
         frame = await session.outbound_queue.get()
         if frame is None:
             return
+        principal = generation_principal(ws)
+        if principal is not None:
+            await asyncio.to_thread(
+                ws.app.state.bgr_generation_auth.check_connection, ws, principal
+            )
         session.diagnostics.dequeued(frame)
+        if principal is not None and not isinstance(
+            decode_frame(frame.data), (PingFrame, PongFrame)
+        ):
+            await ws.close(code=4004, reason="generation proxy transport is not supported")
+            return
         try:
             await session.diagnostics.send(ws.send_text, frame.data, app_ping_ts=frame.app_ping_ts)
         except RuntimeError:
@@ -852,6 +890,20 @@ async def _sender_loop(ws: WebSocket, session: RunnerSession) -> None:
                 _logger.debug("Runner %s send raced a concurrent close", session.runner_id)
                 return
             raise
+
+
+async def _generation_watch(ws: WebSocket) -> None:
+    principal = generation_principal(ws)
+    assert principal is not None
+    while True:
+        try:
+            await asyncio.to_thread(
+                ws.app.state.bgr_generation_auth.check_connection, ws, principal
+            )
+        except (OmnigentError, ValueError):
+            await ws.close(code=4004, reason="generation authority revoked")
+            return
+        await asyncio.sleep(1)
 
 
 async def _receive_tunnel_text(ws: WebSocket, runner_id: str) -> str | None:
@@ -965,6 +1017,11 @@ async def _receive_loop(
     try:
         while True:
             raw = await _receive_tunnel_text(ws, runner_id)
+            principal = generation_principal(ws)
+            if principal is not None:
+                await asyncio.to_thread(
+                    ws.app.state.bgr_generation_auth.check_connection, ws, principal
+                )
             if not registry.mark_frame_seen(session):
                 return
             session.diagnostics.frame_received()
@@ -979,6 +1036,9 @@ async def _receive_loop(
                     exc,
                 )
                 continue
+            if principal is not None and not isinstance(resp_frame, (PingFrame, PongFrame)):
+                await ws.close(code=4004, reason="generation proxy transport is not supported")
+                return
             if isinstance(resp_frame, EventBatchFrame):
                 if EVENT_INGEST_CAPABILITY not in session.hello.capabilities or not callable(
                     ingest

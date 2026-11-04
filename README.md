@@ -410,7 +410,8 @@ She's the tech lead: she plans, delegates the work to coding sub-agents
 (Claude Code, Codex, or Pi) in parallel git worktrees, then routes each diff
 to a reviewer from a different vendor than the one that wrote it. You merge.
 
-The separate [BGR controller foundation](docs/BGR_CONTROLLER.md) provides a durable,
+The separate [BGR controller foundation](docs/BGR_CONTROLLER.md) includes a
+deny-by-default supervised-generation auth foundation (not launch enablement) and a durable,
 owner-authorized team/task ledger and mailbox, plus an opt-in codex-native
 status/general-message translator with explicit host/native identity mapping,
 durable native message-ID translation and host source-record-before-delivery. The

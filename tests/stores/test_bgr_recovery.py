@@ -20,9 +20,12 @@ from omnigent.bgr import (
 )
 from omnigent.bgr_control import BgrControl
 from omnigent.bgr_review import ReviewRoundCreate
+from omnigent.bgr_supervision import GenerationAdmission, SupervisedGeneration
 from omnigent.db import current_workspace_id
-from omnigent.db.bgr_models import SqlBgrNativeBinding, SqlBgrTeam
+from omnigent.db.bgr_models import SqlBgrLaunch, SqlBgrNativeBinding, SqlBgrTeam
+from omnigent.db.db_models import SqlUser
 from omnigent.errors import OmnigentError
+from omnigent.runner.identity import token_bound_runner_id
 from omnigent.stores.bgr_control_store import BgrControlActions
 from omnigent.stores.bgr_review_store import BgrReviewStore
 from tests.stores.test_bgr_store import CONFIG, CONTRACT, HOST, OWNER, SHA, TEAM, question
@@ -55,6 +58,238 @@ def recovery_store(db_uri):
     store.native_brain_binding(OWNER, intent.brain_session_id, TEAM, fence, binding=binding)
     store.mark_launch_running(OWNER, intent.brain_session_id, TEAM, fence)
     return store, intent, binding, fence
+
+
+@pytest.fixture
+def supervised_admission(recovery_store):
+    _, intent, binding, fence = recovery_store
+    return GenerationAdmission(
+        generation=SupervisedGeneration(
+            supervisor_id=uuid4().hex,
+            host_id=HOST,
+            boot_id=str(uuid4()),
+            team_id=TEAM,
+            brain_session_id=intent.brain_session_id,
+            controller_id=fence.controller_id,
+            epoch=fence.epoch,
+            runtime_id=binding.runtime_id,
+            generation_id=uuid4().hex,
+            launch_id=uuid4().hex,
+            runner_id=token_bound_runner_id("supervised-binding"),
+            credential_id=uuid4().hex,
+        ),
+        domain={
+            "domain_id": uuid4().hex,
+            "mount_id": 1,
+            "device": 0,
+            "inode": 1,
+            "path": "/trusted/bgr",
+        },
+        manifest_id=uuid4().hex,
+        root_claim_id=uuid4().hex,
+        admission_sequence=1,
+        launch_sha256="e" * 64,
+    )
+
+
+def test_supervised_admission_requires_reservation_and_preserves_revoked_classification(
+    recovery_store, supervised_admission, db_uri
+):
+    store, intent, binding, fence = recovery_store
+    generation = supervised_admission.generation
+    with pytest.raises(OmnigentError):
+        store.activate_supervised_generation(OWNER, supervised_admission)
+    reserved = store.reserve_supervised_generation(OWNER, generation)
+    assert reserved.state == "reserved"
+    assert store.reserve_supervised_generation(OWNER, generation) == reserved
+    assert store.generation_for_runner(generation.runner_id) == generation
+    with pytest.raises(OmnigentError):
+        store.validate_supervised_generation(generation)
+    active = store.activate_supervised_generation(OWNER, supervised_admission)
+    assert store.activate_supervised_generation(OWNER, supervised_admission) == active
+    assert store.validate_supervised_generation(generation) == OWNER
+    with pytest.raises(OmnigentError):
+        store.activate_supervised_generation(
+            OWNER, supervised_admission.model_copy(update={"manifest_id": uuid4().hex})
+        )
+    store.begin_runtime_recovery(
+        OWNER,
+        intent.brain_session_id,
+        TEAM,
+        fence,
+        recovery_id=uuid4().hex,
+        runtime_id=binding.runtime_id,
+        replacement_controller_id=uuid4().hex,
+    )
+    cold = BgrReviewStore(db_uri)
+    assert cold.generation_for_runner(generation.runner_id) == generation
+    with pytest.raises(OmnigentError):
+        cold.validate_supervised_generation(generation)
+    with pytest.raises(OmnigentError):
+        cold.activate_supervised_generation(OWNER, supervised_admission)
+    assert cold.get_launch(OWNER, TEAM).supervised_generations[0].state == "revoked"
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("team_id", "e" * 32),
+        ("brain_session_id", "e" * 32),
+        ("controller_id", "e" * 32),
+        ("epoch", 2),
+        ("runtime_id", "e" * 32),
+        ("host_id", "foreign-host"),
+        ("boot_id", "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"),
+        ("supervisor_id", "e" * 32),
+        ("runner_id", "another-runner"),
+        ("generation_id", "e" * 32),
+        ("launch_id", "e" * 32),
+        ("credential_id", "e" * 32),
+    ],
+)
+def test_supervised_auth_rejects_every_foreign_identity(
+    recovery_store, supervised_admission, field, value
+):
+    store = recovery_store[0]
+    generation = supervised_admission.generation
+    store.reserve_supervised_generation(OWNER, generation)
+    store.activate_supervised_generation(OWNER, supervised_admission)
+    with pytest.raises(OmnigentError):
+        store.validate_supervised_generation(generation.model_copy(update={field: value}))
+
+
+@pytest.mark.parametrize("fault", ["corrupt", "duplicate", "overflow", "expired", "epoch"])
+def test_supervised_classification_and_validation_fail_closed(
+    recovery_store, supervised_admission, fault
+):
+    store = recovery_store[0]
+    generation = supervised_admission.generation
+    store.reserve_supervised_generation(OWNER, generation)
+    store.activate_supervised_generation(OWNER, supervised_admission)
+    intent = store.get_launch(OWNER, TEAM)
+    with store._sessions("inject_supervised_ledger_fault") as db:
+        row = db.get(SqlBgrLaunch, (current_workspace_id(), TEAM))
+        if fault == "corrupt":
+            row.document = '{"broken":true}'
+        elif fault in ("duplicate", "overflow"):
+            records = intent.supervised_generations * (2 if fault == "duplicate" else 17)
+            row.document = intent.model_copy(
+                update={"supervised_generations": records}
+            ).model_dump_json()
+        else:
+            team = db.get(SqlBgrTeam, (current_workspace_id(), TEAM))
+            if fault == "expired":
+                team.lease_expires_at_us = 0
+            else:
+                team.epoch += 1
+    if fault in ("corrupt", "duplicate", "overflow"):
+        with pytest.raises((OmnigentError, ValidationError)):
+            store.generation_for_runner(generation.runner_id)
+    else:
+        assert store.generation_for_runner(generation.runner_id) == generation
+        with pytest.raises(OmnigentError):
+            store.validate_supervised_generation(generation)
+
+
+def test_supervised_history_overflow_never_evicts_tombstones(recovery_store, supervised_admission):
+    store = recovery_store[0]
+    first = supervised_admission.generation
+    store.reserve_supervised_generation(OWNER, first)
+    intent = store.get_launch(OWNER, TEAM)
+    historical = []
+    for _ in range(16):
+        generation = first.model_copy(
+            update={
+                "runner_id": token_bound_runner_id(uuid4().hex),
+                "generation_id": uuid4().hex,
+                "credential_id": uuid4().hex,
+                "launch_id": uuid4().hex,
+            }
+        )
+        historical.append(
+            intent.supervised_generations[0].model_copy(
+                update={"generation": generation, "state": "revoked"}
+            )
+        )
+    with store._sessions("fill_supervised_history_without_eviction") as db:
+        row = db.get(SqlBgrLaunch, (current_workspace_id(), TEAM))
+        row.document = intent.model_copy(
+            update={"supervised_generations": historical}
+        ).model_dump_json()
+    before = store.get_launch(OWNER, TEAM)
+    with pytest.raises(OmnigentError):
+        store.reserve_supervised_generation(OWNER, first)
+    assert store.get_launch(OWNER, TEAM) == before
+    assert (
+        store.generation_for_runner(historical[0].generation.runner_id) == historical[0].generation
+    )
+
+
+@pytest.mark.parametrize("fault", ["deleted", "recreated", "native-runtime"])
+def test_supervised_authority_pins_account_and_native_runtime(
+    recovery_store, supervised_admission, fault
+):
+    store = recovery_store[0]
+    generation = supervised_admission.generation
+    with store._sessions("create_supervised_owner_registration") as db:
+        db.add(SqlUser(workspace_id=current_workspace_id(), id=OWNER, account_generation="a" * 32))
+    store.reserve_supervised_generation(OWNER, generation)
+    store.activate_supervised_generation(OWNER, supervised_admission)
+    assert store.validate_supervised_generation(generation) == OWNER
+    team = store.get_team(OWNER, generation.brain_session_id, TEAM)
+    with store._sessions("invalidate_supervised_owner_or_runtime") as db:
+        if fault == "native-runtime":
+            mapping = db.get(SqlBgrNativeBinding, (current_workspace_id(), team.brain_agent_id))
+            binding = NativeBrainBinding.model_validate_json(mapping.document)
+            mapping.document = binding.model_copy(
+                update={"runtime_id": uuid4().hex}
+            ).model_dump_json()
+        else:
+            user = db.get(SqlUser, (current_workspace_id(), OWNER))
+            if fault == "deleted":
+                user.deleted_at = 1
+            else:
+                user.account_generation = "b" * 32
+    assert store.generation_for_runner(generation.runner_id) == generation
+    with pytest.raises(OmnigentError):
+        store.validate_supervised_generation(generation)
+
+
+def test_supervised_document_byte_limit_is_fail_closed(recovery_store, supervised_admission):
+    store = recovery_store[0]
+    store.reserve_supervised_generation(OWNER, supervised_admission.generation)
+    intent = store.get_launch(OWNER, TEAM)
+    history = []
+    for _ in range(16):
+        generation = supervised_admission.generation.model_copy(
+            update={
+                "runner_id": uuid4().hex,
+                "generation_id": uuid4().hex,
+                "launch_id": uuid4().hex,
+                "credential_id": uuid4().hex,
+            }
+        )
+        admission = supervised_admission.model_copy(
+            update={
+                "generation": generation,
+                "domain": supervised_admission.domain.model_copy(
+                    update={"path": "/" + "x" * 4000}
+                ),
+            }
+        )
+        history.append(
+            intent.supervised_generations[0].model_copy(
+                update={"generation": generation, "admission": admission, "state": "revoked"}
+            )
+        )
+    oversized = intent.model_copy(update={"supervised_generations": history})
+    assert len(oversized.model_dump_json().encode()) > 60_000
+    with store._sessions("inject_oversized_supervised_history") as db:
+        row = db.get(SqlBgrLaunch, (current_workspace_id(), TEAM))
+        row.document = oversized.model_dump_json()
+    with pytest.raises(OmnigentError):
+        store.generation_for_runner(history[0].generation.runner_id)
+    assert store.get_launch(OWNER, TEAM) == oversized
 
 
 def stopped(session_id, thread_id, role="brain", **changes):

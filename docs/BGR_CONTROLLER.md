@@ -838,3 +838,46 @@ successful integrated process-loss recovery demonstration.
 Recovery tests inject explicit supervisor fixtures to exercise atomic state/fence
 transitions. Host tests separately prove the real process-group adapter returns
 UNKNOWN and blocks further operations; they do not claim escaped tools were reaped.
+
+### Supervised generation authorization foundation
+
+`LaunchIntent.supervised_generations` retains up to 16 immutable generation
+identities, original trusted admissions, account-registration generations and
+revoked runner tombstones. Reservation precedes any launch side effects. Only
+the internal `activate_supervised_generation` method accepts a typed admission;
+its caller must authenticate the configured supervisor first. There is no public
+admission endpoint, and receipt model validation alone is not runtime authority.
+Recovery revokes old admissions in the same transaction as the controller fence.
+
+History is never evicted. Overflow beyond 16 records or 60,000 serialized UTF-8
+bytes blocks reservation/authorization. Malformed or ambiguous classification
+fails closed, including owner-token mint attempts. Classification scans existing
+workspace launch documents in bounded batches; there is no new SQL index/table.
+
+Admitted generations use a separate `bgr1.` bearer, with a domain-separated
+signing key, generation/workspace identity and a 120-second lifetime. It never
+resolves to an ordinary user or enters the owner JWT cache. The existing token
+endpoint consults durable classification before owner minting, even for a bare
+binding token and after revocation. Accounts/OIDC signing providers are supported
+at this foundation layer; header, auth-disabled and proxy-only worker auth have
+no generation signing authority. No owner/proxy bearer fallback is provided.
+
+Every use checks the live admitted ledger, account registration, controller lease,
+epoch, exact native mapping when present, Brain session/host binding and runner
+token. HTTP permits only exact-team config/status, Brain control and native
+callbacks, with the exact source header, plus same-generation token renewal.
+Publication, recovery-owner APIs, generic hosts/sessions, agent contents, events,
+MCP, credentials, installs and grant exchange are denied. WebSocket handshakes
+use the same principal regardless of binding-token/bearer reconnect; subsequent
+inbound/outbound frames are live-checked, only keepalives are permitted, and idle
+revoked connections close on the next one-second check.
+
+This is not a working supervised launcher. Agent/event/MCP proxy transport,
+trusted admission wiring and replacement launch remain disabled pending their
+separate containment and transport integration.
+
+```bash
+.venv/bin/python -m pytest tests/server/test_bgr_generation_auth.py \
+  tests/stores/test_bgr_recovery.py tests/server/integration/test_bgr.py \
+  tests/server/integration/test_runner_tunnel_route.py --reruns 0
+```
