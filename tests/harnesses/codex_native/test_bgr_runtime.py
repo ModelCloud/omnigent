@@ -283,11 +283,21 @@ async def test_brain_ready_waits_for_server_bind_and_non_bgr_is_noop(tmp_path):
         await client.close()
 
 
-@pytest.mark.parametrize("variant,speed", [("regular", "1.25"), (None, None)])
-def test_registered_profile_preserves_provider_endpoint(monkeypatch, variant, speed):
+@pytest.mark.parametrize(
+    "provider,speed,runtime_provider",
+    [
+        ("lithos", "1.25", "lithos"),
+        ("fixture", "1.0", "omnigent-provider-fixture-f16d05ec6b"),
+        ("multidex", "1.0", "omnigent-provider-multidex-5ed753f826"),
+    ],
+)
+@pytest.mark.parametrize("variant", ["regular", None])
+def test_registered_profile_preserves_provider_endpoint(
+    monkeypatch, variant, provider, speed, runtime_provider
+):
     registration = MultiDexModelRegistration(
         model="registered",
-        provider="lithos",
+        provider=provider,
         display_name="Registered",
         base_url="http://127.0.0.1:18083/v1",
         provider_config={"experimental_bearer_token": "fixture-not-a-secret"},
@@ -302,13 +312,13 @@ def test_registered_profile_preserves_provider_endpoint(monkeypatch, variant, sp
     profile = Profile(
         harness="codex-native",
         model="registered",
-        provider="lithos",
+        provider=provider,
         variant=variant,
         speed=speed,
     )
     launch = runtime.resolve_bgr_profile(profile, None)
     assert launch.model == "registered"
-    assert 'model_provider="lithos"' in launch.config_overrides
+    assert f'model_provider="{runtime_provider}"' in launch.config_overrides
     assert any(registration.base_url in item for item in launch.config_overrides)
     for change in ({"variant": "ultra"}, {"speed": "100"}, {"provider": "openrouter"}):
         with pytest.raises(ValueError, match="does not match"):

@@ -108,7 +108,7 @@ def resolve_bgr_profile(profile: Profile, spec: AgentSpec | None) -> NativeCodex
         if not multidex_registration_bearer_token(registration):
             raise ValueError("BGR provider needs a configured credential")
         assert config is not None
-        provider = multidex_runtime_provider_id(registration.provider)
+        provider = multidex_runtime_provider_id(registration.provider, registration.model)
         return NativeCodexLaunch(
             model=registration.model,
             profile=None,

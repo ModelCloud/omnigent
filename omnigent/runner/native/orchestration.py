@@ -5535,7 +5535,9 @@ async def _auto_create_codex_terminal(
                 _codex_launch,
                 config_overrides=_local_model_config_overrides(
                     _codex_launch.config_overrides,
-                    provider=multidex_runtime_provider_id(_selected_local_registration.provider),
+                    provider=multidex_runtime_provider_id(
+                        _selected_local_registration.provider, _selected_local_registration.model
+                    ),
                     model=selected_model,
                 ),
                 model=selected_model,

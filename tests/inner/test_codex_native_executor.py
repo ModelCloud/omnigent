@@ -116,7 +116,9 @@ def test_multidex_turn_refreshes_runtime_context_capability(
 
     assert actual == {
         "model": "DS v4.1 Flash 1017",
-        "modelProvider": multidex_config.multidex_runtime_provider_id("multidex"),
+        "modelProvider": multidex_config.multidex_runtime_provider_id(
+            "multidex", "DS v4.1 Flash 1017"
+        ),
     }
     assert writes == [(tmp_path / "codex-home", 262_144)]
 
@@ -209,7 +211,9 @@ def test_multidex_discovery_failure_discards_a_stale_larger_limit(
 
     assert actual == {
         "model": "DS v4.1 Flash 1017",
-        "modelProvider": multidex_config.multidex_runtime_provider_id("multidex"),
+        "modelProvider": multidex_config.multidex_runtime_provider_id(
+            "multidex", "DS v4.1 Flash 1017"
+        ),
     }
     assert not (tmp_path / multidex_config.MULTIDEX_RUNTIME_CAPABILITIES_FILE).exists()
 
@@ -414,7 +418,7 @@ def test_named_multidex_provider_routes_its_model_without_capability_probe(
 
     assert actual == {
         "model": "vendor/model-b",
-        "modelProvider": multidex_runtime_provider_id("provider_b"),
+        "modelProvider": multidex_runtime_provider_id("provider_b", "vendor/model-b"),
     }
 
 

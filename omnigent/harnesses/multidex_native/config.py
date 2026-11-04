@@ -289,15 +289,15 @@ def multidex_models(config: MultiDexConfig) -> tuple[MultiDexModelRegistration, 
     )
 
 
-def multidex_runtime_provider_id(provider: str) -> str:
-    """Map a MultiDex config name into a private Codex provider namespace."""
-    # These endpoint ids are also inferred by MultiDex during live switches.
-    # Other registrations must not shadow official or gateway providers.
-    if provider in {"multidex", "openrouter", "lithos"}:
+def multidex_runtime_provider_id(provider: str, model: str) -> str:
+    """Match native canonical routing without reserving generic endpoint models."""
+    if model in DEEPSEEK_SELECTOR_MODELS:
+        return DEEPSEEK_SELECTOR_MODELS[model][0]
+    if provider in MULTIDEX_BUILTIN_PROVIDER_IDS:
         return provider
     slug = re.sub(r"[^A-Za-z0-9_-]+", "-", provider).strip("-_")[:24] or "provider"
     digest = hashlib.sha256(provider.encode("utf-8")).hexdigest()[:10]
-    return f"omnigent-multidex-{slug}-{digest}"
+    return f"omnigent-provider-{slug}-{digest}"
 
 
 def multidex_registration_bearer_token(
@@ -328,8 +328,9 @@ def multidex_provider_env_keys(config: MultiDexConfig) -> tuple[str, ...]:
     """
     names: set[str] = set()
     for model in multidex_models(config):
-        if model.provider in MULTIDEX_BUILTIN_PROVIDER_ENV_KEYS:
-            names.add(MULTIDEX_BUILTIN_PROVIDER_ENV_KEYS[model.provider])
+        runtime_id = multidex_runtime_provider_id(model.provider, model.model)
+        if runtime_id in MULTIDEX_BUILTIN_PROVIDER_ENV_KEYS:
+            names.add(MULTIDEX_BUILTIN_PROVIDER_ENV_KEYS[runtime_id])
             continue
         env_key = model.provider_config.get("env_key")
         if isinstance(env_key, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", env_key):
@@ -380,7 +381,7 @@ def multidex_provider_config_overrides(config: MultiDexConfig) -> tuple[str, ...
 
     providers: dict[str, dict[str, object]] = {}
     for model in multidex_models(config):
-        runtime_id = multidex_runtime_provider_id(model.provider)
+        runtime_id = multidex_runtime_provider_id(model.provider, model.model)
         provider_config = dict(model.provider_config)
         provider_config.setdefault("name", model.provider)
         provider_config.update(
@@ -391,14 +392,14 @@ def multidex_provider_config_overrides(config: MultiDexConfig) -> tuple[str, ...
             }
         )
         provider_config.pop("env_key", None)
-        if model.provider in MULTIDEX_BUILTIN_PROVIDER_IDS:
+        if runtime_id in MULTIDEX_BUILTIN_PROVIDER_IDS:
             # Built-ins have no stable credential field across MultiDex
             # releases, but ``auth`` is always accepted, so route the literal
             # token through a command and drop every other non-default field.
             # Older builds still resolve their default ``env_key`` first; the
             # launcher forwards that variable alongside this table.
             provider_config["auth"] = multidex_builtin_provider_auth(
-                model.provider, model.provider_config
+                runtime_id, model.provider_config
             )
             provider_config.pop("experimental_bearer_token", None)
             provider_config = {
@@ -406,7 +407,7 @@ def multidex_provider_config_overrides(config: MultiDexConfig) -> tuple[str, ...
                 for key, value in provider_config.items()
                 if key in MULTIDEX_BUILTIN_PROVIDER_OVERRIDE_FIELDS
             }
-        if model.provider == "multidex":
+        if runtime_id == "multidex":
             provider_config.setdefault("supports_responses_continuation", True)
         existing = providers.get(runtime_id)
         if existing is not None and existing != provider_config:
