@@ -170,6 +170,51 @@ def test_launch_request_rejects_invalid_input(changes):
         LaunchRequest.model_validate(payload)
 
 
+def test_verified_launch_attachment_fences_and_out_of_order_launch_completion(db_uri):
+    store = BgrStore(db_uri)
+    profile = PROFILE.model_copy(update={"harness": "codex-native"})
+    config = CONFIG.model_copy(update={"brain": profile})
+    intent = store.reserve_launch(
+        OWNER,
+        HOST,
+        LaunchRequest(
+            team_id=TEAM, agent_id="agent", workspace="/work", config=config, initial_prompt="Task"
+        ),
+    )
+    brain = intent.brain_session_id
+    store.create(OWNER, brain, TeamCreate(team_id=TEAM, config=config))
+    team = store.acquire(OWNER, brain, TEAM, LeaseRequest(controller_id=intent.controller_id))
+    fence = Fence(controller_id=intent.controller_id, epoch=team.epoch)
+    claim = uuid4().hex
+    store.claim_launch(OWNER, TEAM, claim)
+    with pytest.raises(OmnigentError, match="no native binding"):
+        store.mark_launch_running(OWNER, brain, TEAM, fence)
+    store.native_brain_binding(
+        OWNER,
+        brain,
+        TEAM,
+        fence,
+        binding=NativeBrainBinding(team_id=TEAM, thread_id=str(uuid4()), epoch=team.epoch),
+    )
+    for owner, session, rejected_fence in (
+        ("outsider", brain, fence),
+        (OWNER, BRAIN, fence),
+        (OWNER, brain, fence.model_copy(update={"epoch": team.epoch + 1})),
+        (OWNER, brain, fence.model_copy(update={"controller_id": uuid4().hex})),
+    ):
+        with pytest.raises(OmnigentError):
+            store.mark_launch_running(owner, session, TEAM, rejected_fence)
+    assert store.mark_launch_running(OWNER, brain, TEAM, fence).state == "running"
+    assert store.finish_launch(OWNER, TEAM, claim, state="starting").state == "running"
+    retry = uuid4().hex
+    store.claim_launch(OWNER, TEAM, retry)
+    assert (
+        store.finish_launch(OWNER, TEAM, retry, state="blocked", reason="late failure").reason
+        is None
+    )
+    assert BgrStore(db_uri).get_launch(OWNER, TEAM).state == "running"
+
+
 def test_task_anchor_supports_native_question_progress_and_results(store):
     task = store.reserve(OWNER, BRAIN, TEAM, reservation())
     assignment = question(task, kind="task", payload={"objective": "Implement"})

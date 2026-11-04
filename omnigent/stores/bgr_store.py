@@ -230,7 +230,11 @@ class BgrStore:
             if row.claim_id != claim_id or row.claim_expires_at_us <= self._now_us():
                 raise _conflict("BGR launch lease expired; reconcile the existing Brain")
             payload = json.loads(row.document)
-            payload.update(state=state, reason=reason)
+            if payload["state"] == "running":
+                state_value, reason_value = "running", None
+            else:
+                state_value, reason_value = state, reason
+            payload.update(state=state_value, reason=reason_value)
             intent = LaunchIntent.model_validate(payload)
             row.document = intent.model_dump_json()
             row.claim_id = None
@@ -238,6 +242,34 @@ class BgrStore:
             return intent
 
         return self._write("finish_launch_intent", apply)
+
+    def mark_launch_running(
+        self, user_id: str, session_id: str, team_id: str, fence: Fence
+    ) -> LaunchIntent:
+        """Record attachment under the same live controller fence as the Brain binding."""
+
+        def apply(db: Session) -> LaunchIntent:
+            team = self._owned(db, team_id, user_id)
+            self._fence(team, session_id, fence)
+            binding_row = db.get(
+                SqlBgrNativeBinding, (current_workspace_id(), _team(team).brain_agent_id)
+            )
+            if binding_row is None:
+                raise _conflict("Brain has no native binding")
+            binding = NativeBrainBinding.model_validate_json(binding_row.document)
+            if binding.epoch != fence.epoch or binding.team_id != team_id:
+                raise _conflict("Brain native binding is stale")
+            row = db.get(SqlBgrLaunch, (current_workspace_id(), team_id))
+            if row is None or row.owner_id != user_id:
+                raise _forbidden()
+            intent = LaunchIntent.model_validate_json(row.document)
+            if intent.brain_session_id != session_id:
+                raise _forbidden()
+            intent = intent.model_copy(update={"state": "running", "reason": None})
+            row.document = intent.model_dump_json()
+            return intent
+
+        return self._write("record_verified_brain_attachment", apply)
 
     def create(self, user_id: str, session_id: str, body: TeamCreate) -> Team:
         if len(user_id) > 320:

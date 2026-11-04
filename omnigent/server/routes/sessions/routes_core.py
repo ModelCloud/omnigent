@@ -1044,11 +1044,11 @@ def register_core_routes(
                         "BGR host launch was not accepted",
                         code=ErrorCode.RUNNER_CAPABILITY_MISMATCH,
                     )
-            await asyncio.to_thread(
+            finished = await asyncio.to_thread(
                 store.finish_launch, user_id, body.team_id, claim_id, state="starting"
             )
             _announce_session_added(user_id, intent.brain_session_id)
-            return {"brain_session_id": intent.brain_session_id, "state": "starting"}
+            return {"brain_session_id": intent.brain_session_id, "state": finished.state}
         except Exception:
             with contextlib.suppress(OmnigentError):
                 await asyncio.to_thread(

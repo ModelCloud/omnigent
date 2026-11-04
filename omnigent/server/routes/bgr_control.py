@@ -1,5 +1,7 @@
 """Owner/private Brain controls and trusted host callbacks, separate from launch routing."""
 
+import asyncio
+
 from fastapi import APIRouter, Request
 from pydantic import JsonValue
 
@@ -82,6 +84,9 @@ def create_bgr_control_router(
             )
             if controller.brain.thread_id != body.thread_id:
                 raise OmnigentError("Native Brain thread changed", code=ErrorCode.FORBIDDEN)
+            await asyncio.to_thread(
+                controllers.store.mark_launch_running, user, session, team_id, controller.fence
+            )
             return {"accepted": True, "consumption_receipt": False}
         controller = controllers.get(session)
         controller.authorize(user, session)

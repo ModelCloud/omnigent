@@ -55,8 +55,9 @@ def test_bgr_upgrade_downgrade_and_model_parity(database):
             index.name for index in table.indexes
         }
         columns = {column["name"]: column for column in inspector.get_columns(table.name)}
-        assert isinstance(columns["document"]["type"], sa.LargeBinary)
-        assert table.c.document.type.max_stored_bytes == (
+        payload_name = "response" if table.name == "bgr_control_actions" else "document"
+        assert isinstance(columns[payload_name]["type"], sa.LargeBinary)
+        assert table.c[payload_name].type.max_stored_bytes == (
             65_535 if table.name == "bgr_launches" else 16_383
         )
         for column in columns.values():
