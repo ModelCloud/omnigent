@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from typing import Any
 
 from omnigent.bgr import TeamConfig
@@ -12,6 +13,23 @@ from omnigent.server.host_registry import HostRegistry
 from omnigent.server.routes._host_launch import resolve_host_owner
 from omnigent.server.routes._host_model_options import request_host_model_options
 from omnigent.stores.host_store import HostStore
+
+
+def _speed_matches(advertised: object, selected: str | None) -> bool:
+    if advertised is None or selected is None:
+        return advertised is None and selected is None
+    if isinstance(advertised, bool) or not isinstance(advertised, (int, float, str)):
+        return False
+    try:
+        advertised_speed, selected_speed = float(advertised), float(selected)
+    except (ValueError, OverflowError):
+        return False
+    return (
+        math.isfinite(advertised_speed)
+        and math.isfinite(selected_speed)
+        and advertised_speed > 0
+        and advertised_speed == selected_speed
+    )
 
 
 async def probe_host(
@@ -68,7 +86,7 @@ async def validate_profiles(*, host_id: str, config: TeamConfig, registry: HostR
             and row.get("id") == profile.model
             and row.get("providerId") == profile.provider
             and (row.get("variant") or None) == profile.variant
-            and (str(row["speed"]) if row.get("speed") is not None else None) == profile.speed
+            and _speed_matches(row.get("speed"), profile.speed)
         ]
         if not matches:
             raise OmnigentError(

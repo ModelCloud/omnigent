@@ -4,6 +4,7 @@ from uuid import uuid4
 
 import pytest
 
+from omnigent.bgr import TeamConfig
 from omnigent.host.frames import (
     CAP_BGR_PROBE,
     HostLaunchRunnerFrame,
@@ -118,17 +119,33 @@ async def test_launch_retries_reuse_one_private_brain_and_one_initial_task(
     assert sum(isinstance(frame, HostLaunchRunnerFrame) for frame in frames) == 1
 
 
+@pytest.mark.parametrize("speed,selected", [(1.0, "1"), (2.0, "2"), (1.25, "1.25")])
+async def test_launch_accepts_browser_numeric_speed_without_rewriting_profile(
+    auth_client, auth_app, bgr_launch_env, speed, selected
+):
+    host_id, body, frames, row = bgr_launch_env
+    row.update(variant="regular", speed=speed)
+    body["config"]["brain"].update(variant="regular", speed=selected)
+    response = await auth_client.post(f"/v1/hosts/{host_id}/bgr/launch", json=body)
+    assert response.status_code == 200, response.text
+    brain_id = response.json()["brain_session_id"]
+    team = auth_app.state.bgr_store.get_team("alice", brain_id, body["team_id"])
+    assert team.config == TeamConfig.model_validate(body["config"])
+    assert sum(isinstance(frame, HostLaunchRunnerFrame) for frame in frames) == 1
+
+
 @pytest.mark.parametrize("role", ["brain", "grunt", "reviewer-a", "reviewer-b"])
+@pytest.mark.parametrize("field", ["provider", "variant", "speed"])
 async def test_launch_rejects_unadvertised_profiles_before_creating_brain(
-    auth_client, auth_app, bgr_launch_env, role
+    auth_client, auth_app, bgr_launch_env, role, field
 ):
     host_id, body, frames, _ = bgr_launch_env
     config = body["config"]
     if role.startswith("reviewer-"):
         index = 0 if role == "reviewer-a" else 1
-        config["reviewers"][index] = {**config["reviewers"][index], "provider": "not-configured"}
+        config["reviewers"][index] = {**config["reviewers"][index], field: "not-configured"}
     else:
-        config[role] = {**config[role], "provider": "not-configured"}
+        config[role] = {**config[role], field: "not-configured"}
     response = await auth_client.post(f"/v1/hosts/{host_id}/bgr/launch", json=body)
     assert response.status_code == 503, response.text
     assert not any(isinstance(frame, HostLaunchRunnerFrame) for frame in frames)
