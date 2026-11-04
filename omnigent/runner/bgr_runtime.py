@@ -23,6 +23,7 @@ from omnigent.harnesses.codex_native.app_server import (
     CodexMessage,
     CodexNativeAppServer,
     NativeCodexLaunch,
+    _allocate_loopback_port,
     _model_provider_override,
     build_codex_native_server,
     client_for_transport,
@@ -355,6 +356,7 @@ class BgrRuntime:
             reasoning_effort=profile.reasoning,
             reconcile_process_registry=False,
         )
+        server.listen_url = f"ws://127.0.0.1:{_allocate_loopback_port()}"
         client: CodexAppServerClient | None = None
         try:
             await server.start()
@@ -466,6 +468,7 @@ async def probe_bgr_runtime() -> dict[str, JsonValue]:
                 config_source=source,
                 reconcile_process_registry=False,
             )
+            server.listen_url = f"ws://127.0.0.1:{_allocate_loopback_port()}"
             await server.start()
             assert server.listen_url is not None
             client = client_for_transport(server.listen_url, client_name="omnigent-bgr-probe")
