@@ -109,3 +109,11 @@ class SqlBgrNativeBinding(_ScopedRow, OmnigentBase):
     thread_id: Mapped[str] = mapped_column(Uuid16())
     document: Mapped[str] = mapped_column(CompressedText(max_stored_bytes=16_383))
     __table_args__ = (UniqueConstraint("workspace_id", "thread_id", name="uq_bgr_native_thread"),)
+
+
+class SqlBgrReviewRound(_ScopedRow, OmnigentBase):
+    __tablename__ = "bgr_review_rounds"
+
+    team_id: Mapped[str] = mapped_column(Uuid16())
+    document: Mapped[str] = mapped_column(CompressedText(max_stored_bytes=16_383))
+    __table_args__ = (Index("ix_bgr_reviews_team", "workspace_id", "team_id", "id"),)

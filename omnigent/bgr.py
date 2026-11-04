@@ -233,6 +233,7 @@ class Attempt(Record):
     profile: Profile
     config_revision: int = 1
     checkpoint: Checkpoint | None = None
+    review_round_id: Identifier | None = None
 
 
 class Task(Record):

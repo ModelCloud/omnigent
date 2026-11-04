@@ -546,6 +546,39 @@ particular a native cancel ack could not justify host `stop_confirmed`/close.
 
 ## Verification and remaining stages
 
+### Independent-review and publication core
+
+`BgrReviewStore` reserves immutable repository/PR/base/head rounds with one or
+two distinct reviewer identities. A trusted native adapter must activate each
+reviewer only after atomic isolated snapshot startup; there is no browser or
+model-facing activation API. Imported reviewer identities remain blocked. Once
+activated, reviewer messages require the exact live assignment and head, and
+can only address Brain. Structured results are sanitized and sealed atomically
+with durable mailbox acceptance. Reviewers cannot read a round or sibling
+results. These ledger checks do not implement the native sandbox themselves.
+
+The trusted host `BgrGitHubPublisher` reuses existing GitHub credential and
+comment helpers outside reviewers. It requires every independent result to be
+sealed and Brain approval of the exact sanitized body hash. Each job and
+re-review gets a new comment with its own stable marker. A durable unique claim
+permits one POST attempt. A crash, timeout or ambiguous response stays uncertain:
+retry reads at most one 100-comment page, matches the original publisher account
+and exact body, and never automatically reposts. This avoids duplicate writes
+but may require operator reconciliation when the write never reached GitHub.
+Pattern redaction cannot establish that arbitrary prose contains no private
+information; approval of the sanitized body remains mandatory.
+
+The additional review-round migration remains independently executable and
+caps actual stored document bytes at 16,383. These core components are not yet
+wired to launch, native reviewer startup or publication scheduling. Existing
+capability responses therefore remain disabled. Unit tests use trusted-adapter
+fixtures and a fake forge, not model-generated reviews or external comments:
+
+```bash
+.venv/bin/python -m pytest -q tests/stores/test_bgr_review_store.py \
+  tests/db/test_migration_bgr.py --reruns 0
+```
+
 ```bash
 .venv/bin/python -m pytest -q tests/stores/test_bgr_store.py \
   tests/server/integration/test_bgr.py tests/db/test_migration_bgr.py \

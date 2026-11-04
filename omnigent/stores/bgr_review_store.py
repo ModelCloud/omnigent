@@ -1,0 +1,415 @@
+"""Bounded independent review lifecycle and ambiguity-safe publication outbox."""
+
+from __future__ import annotations
+
+import hashlib
+from uuid import uuid4
+
+from pydantic import JsonValue, ValidationError
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from omnigent.bgr import Agent, Attempt, Contract, Fence, NativeBinding, Record, Send, Workspace
+from omnigent.bgr_review import (
+    Publication,
+    ReviewJob,
+    ReviewResult,
+    ReviewRound,
+    ReviewRoundCreate,
+    publication_body,
+    sanitize_review,
+    sanitize_review_text,
+)
+from omnigent.db import current_workspace_id
+from omnigent.db.bgr_models import (
+    SqlBgrAttempt,
+    SqlBgrNativeBinding,
+    SqlBgrReviewRound,
+    SqlBgrTask,
+)
+from omnigent.errors import ErrorCode, OmnigentError
+from omnigent.stores.bgr_store import BgrStore, _conflict, _digest, _forbidden, _team
+
+
+class _ResultPayload(Record):
+    round_id: str
+    review_id: str
+    result: ReviewResult
+
+
+def _safe_payload(value: JsonValue) -> JsonValue:
+    if isinstance(value, str):
+        return sanitize_review_text(value)
+    if isinstance(value, list):
+        return [_safe_payload(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: (
+                "[REDACTED]"
+                if any(word in key.lower() for word in ("token", "password", "secret", "cookie"))
+                else _safe_payload(item)
+            )
+            for key, item in value.items()
+        }
+    return value
+
+
+def validate_review_message(
+    db: Session,
+    team_id: str,
+    sender: Agent,
+    target: Agent,
+    attempt: Attempt,
+    body: Send,
+) -> Send:
+    """Validate the live sandbox assignment and atomically seal sanitized results."""
+    row = db.get(SqlBgrReviewRound, (current_workspace_id(), attempt.review_round_id))
+    if row is None or row.team_id != team_id:
+        raise _conflict("Reviewer channels require enforced independent-review lifecycle")
+    round = ReviewRound.model_validate_json(row.document)
+    worker = sender if sender.role == "reviewer" else target
+    job = next((job for job in round.jobs if job.agent_id == worker.agent_id), None)
+    if (
+        job is None
+        or job.session_id != worker.session_id
+        or job.attempt_id != attempt.attempt_id
+        or job.task_id != attempt.task_id
+        or job.state != "running"
+        or job.native_thread_id is None
+        or job.snapshot_root != attempt.workspace.worktree
+        or round.epoch != body.epoch
+        or round.head_sha != body.head_sha
+    ):
+        raise _conflict("Review identity, live sandbox, epoch or immutable head mismatch")
+    if body.kind == "result":
+        if sender.role != "reviewer":
+            raise _forbidden()
+        try:
+            payload = _ResultPayload.model_validate(body.payload)
+            if payload.round_id != round.round_id or payload.review_id != job.review_id:
+                raise _forbidden()
+            result = sanitize_review(payload.result)
+            sealed = job.model_copy(update={"state": "sealed", "result": result})
+            BgrReviewStore._replace(row, round, sealed)
+            safe = _ResultPayload(
+                round_id=round.round_id, review_id=job.review_id, result=result
+            ).model_dump(mode="json")
+        except ValidationError:
+            raise OmnigentError(
+                "Reviewer result must use the bounded structured result contract",
+                code=ErrorCode.INVALID_INPUT,
+            ) from None
+    else:
+        safe = _safe_payload(body.payload)
+    return Send.model_validate({**body.model_dump(), "payload": safe})
+
+
+class BgrReviewStore(BgrStore):
+    @staticmethod
+    def _round(db: Session, team_id: str, round_id: str) -> tuple[SqlBgrReviewRound, ReviewRound]:
+        row = db.get(SqlBgrReviewRound, (current_workspace_id(), round_id))
+        if row is None or row.team_id != team_id:
+            raise _forbidden()
+        return row, ReviewRound.model_validate_json(row.document)
+
+    @staticmethod
+    def _job(round: ReviewRound, review_id: str) -> ReviewJob:
+        job = next((job for job in round.jobs if job.review_id == review_id), None)
+        if job is None:
+            raise _forbidden()
+        return job
+
+    @staticmethod
+    def _replace(row: SqlBgrReviewRound, round: ReviewRound, job: ReviewJob) -> ReviewRound:
+        result = round.model_copy(
+            update={"jobs": [job if old.review_id == job.review_id else old for old in round.jobs]}
+        )
+        row.document = result.model_dump_json()
+        return result
+
+    def reserve_review_round(
+        self, user_id: str, session_id: str, team_id: str, body: ReviewRoundCreate
+    ) -> ReviewRound:
+        def apply(db: Session) -> ReviewRound:
+            team = self._owned(db, team_id, user_id)
+            self._fence(team, session_id, body)
+            existing = db.get(SqlBgrReviewRound, (current_workspace_id(), body.round_id))
+            if existing is not None:
+                if existing.team_id != team_id:
+                    raise _forbidden()
+                round = ReviewRound.model_validate_json(existing.document)
+                if any(
+                    getattr(round, field) != getattr(body, field)
+                    for field in ("repository", "pr_number", "base_sha", "head_sha", "epoch")
+                ):
+                    raise _conflict("round_id already identifies another immutable review")
+                return round
+            round = ReviewRound(
+                round_id=body.round_id,
+                team_id=team_id,
+                epoch=body.epoch,
+                repository=body.repository,
+                pr_number=body.pr_number,
+                base_sha=body.base_sha,
+                head_sha=body.head_sha,
+                jobs=[
+                    ReviewJob(
+                        review_id=uuid4().hex,
+                        task_id=uuid4().hex,
+                        attempt_id=uuid4().hex,
+                        agent_id=uuid4().hex,
+                        session_id=uuid4().hex,
+                        profile=profile,
+                    )
+                    for profile in _team(team).config.reviewers
+                ],
+            )
+            db.add(
+                SqlBgrReviewRound(
+                    workspace_id=current_workspace_id(),
+                    id=round.round_id,
+                    team_id=team_id,
+                    document=round.model_dump_json(),
+                )
+            )
+            return round
+
+        return self._write("reserve_independent_review_round", apply)
+
+    def activate_reviewer(
+        self,
+        user_id: str,
+        session_id: str,
+        team_id: str,
+        fence: Fence,
+        *,
+        round_id: str,
+        review_id: str,
+        binding: NativeBinding,
+        workspace: Workspace,
+    ) -> ReviewJob:
+        """Record a reviewer only after the trusted adapter verifies atomic sandbox startup."""
+
+        def apply(db: Session) -> ReviewJob:
+            team = self._owned(db, team_id, user_id)
+            self._fence(team, session_id, fence)
+            row, round = self._round(db, team_id, round_id)
+            job = self._job(round, review_id)
+            if (
+                round.epoch != fence.epoch
+                or binding.team_id != team_id
+                or binding.attempt_id != job.attempt_id
+                or binding.epoch != fence.epoch
+                or workspace.repository != round.repository
+                or workspace.base_sha != round.base_sha
+            ):
+                raise _conflict("Reviewer binding does not match its frozen assignment")
+            if job.state != "reserved":
+                if (
+                    job.state == "running"
+                    and job.native_thread_id == binding.thread_id
+                    and job.snapshot_root == workspace.worktree
+                ):
+                    return job
+                raise _conflict("Reviewer already started or is terminal")
+            if any(
+                other.review_id != job.review_id
+                and (
+                    other.native_thread_id == binding.thread_id
+                    or other.snapshot_root == workspace.worktree
+                )
+                for other in round.jobs
+            ):
+                raise _conflict("Independent reviewers cannot share a thread or snapshot root")
+            agent = Agent(
+                team_id=team_id,
+                agent_id=job.agent_id,
+                session_id=job.session_id,
+                role="reviewer",
+                name=f"reviewer-{job.agent_id}",
+                profile=job.profile,
+            )
+            attempt = Attempt(
+                team_id=team_id,
+                task_id=job.task_id,
+                attempt_id=job.attempt_id,
+                agent_id=job.agent_id,
+                session_id=job.session_id,
+                epoch=fence.epoch,
+                state="reserved",
+                workspace=workspace,
+                profile=job.profile,
+                config_revision=_team(team).config_revision,
+                review_round_id=round_id,
+            )
+            contract = Contract(
+                objective=f"Independently review {round.repository} PR {round.pr_number}",
+                instructions=(
+                    "Review only the immutable assigned diff. Ask brain for clarification. "
+                    "Return structured findings without secrets or private data. Only the trusted "
+                    "publisher may post a new PR discussion comment for this review."
+                ),
+                acceptance=["Return complete or explicitly incomplete independent findings"],
+            )
+            db.add(self._agent_row(agent))
+            db.add(
+                SqlBgrTask(
+                    workspace_id=current_workspace_id(),
+                    id=job.task_id,
+                    team_id=team_id,
+                    request_hash=_digest([round_id, review_id]),
+                    document=contract.model_dump_json(),
+                )
+            )
+            db.add(
+                SqlBgrAttempt(
+                    workspace_id=current_workspace_id(),
+                    id=job.attempt_id,
+                    team_id=team_id,
+                    task_id=job.task_id,
+                    active_writer_key=None,
+                    document=attempt.model_dump_json(),
+                )
+            )
+            db.add(
+                SqlBgrNativeBinding(
+                    workspace_id=current_workspace_id(),
+                    id=job.attempt_id,
+                    team_id=team_id,
+                    thread_id=binding.thread_id,
+                    document=binding.model_dump_json(),
+                )
+            )
+            job = job.model_copy(
+                update={
+                    "state": "running",
+                    "native_thread_id": binding.thread_id,
+                    "snapshot_root": workspace.worktree,
+                }
+            )
+            self._replace(row, round, job)
+            return job
+
+        return self._write("activate_verified_independent_reviewer", apply)
+
+    def get_review_round(
+        self, user_id: str, session_id: str, team_id: str, round_id: str
+    ) -> ReviewRound:
+        with self._sessions("read_brain_review_round") as db:
+            team = self._owned(db, team_id, user_id, lock=False)
+            self._brain(team, session_id)
+            return self._round(db, team_id, round_id)[1]
+
+    def review_rounds(
+        self,
+        user_id: str,
+        session_id: str,
+        team_id: str,
+        *,
+        after: str | None = None,
+        limit: int = 50,
+    ) -> list[ReviewRound]:
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be 1–100")
+        with self._sessions("page_brain_review_rounds") as db:
+            team = self._owned(db, team_id, user_id, lock=False)
+            self._brain(team, session_id)
+            query = select(SqlBgrReviewRound).where(
+                SqlBgrReviewRound.workspace_id == current_workspace_id(),
+                SqlBgrReviewRound.team_id == team_id,
+            )
+            if after is not None:
+                query = query.where(SqlBgrReviewRound.id > after)
+            return [
+                ReviewRound.model_validate_json(row.document)
+                for row in db.scalars(query.order_by(SqlBgrReviewRound.id).limit(limit))
+            ]
+
+    def claim_publication(
+        self,
+        user_id: str,
+        session_id: str,
+        team_id: str,
+        fence: Fence,
+        *,
+        round_id: str,
+        review_id: str,
+        approved_body_sha256: str,
+        claim_id: str,
+        author_login: str,
+    ) -> ReviewJob:
+        def apply(db: Session) -> ReviewJob:
+            team = self._owned(db, team_id, user_id)
+            self._fence(team, session_id, fence)
+            row, round = self._round(db, team_id, round_id)
+            job = self._job(round, review_id)
+            body = publication_body(round, review_id)
+            if hashlib.sha256(body.encode()).hexdigest() != approved_body_sha256:
+                raise _conflict("Brain approval does not match the sanitized sealed publication")
+            if job.publication.state != "pending":
+                return job
+            job = job.model_copy(
+                update={
+                    "publication": Publication(
+                        state="sending",
+                        claim_id=claim_id,
+                        author_login=author_login,
+                        attempted_at_us=self._now_us(),
+                    )
+                }
+            )
+            self._replace(row, round, job)
+            return job
+
+        return self._write("claim_trusted_review_publication", apply)
+
+    def reconcile_publication(
+        self,
+        user_id: str,
+        session_id: str,
+        team_id: str,
+        fence: Fence,
+        *,
+        round_id: str,
+        review_id: str,
+        claim_id: str,
+        comment_id: int | None = None,
+        next_page: int = 1,
+    ) -> ReviewJob:
+        def apply(db: Session) -> ReviewJob:
+            team = self._owned(db, team_id, user_id)
+            self._fence(team, session_id, fence)
+            row, round = self._round(db, team_id, round_id)
+            job = self._job(round, review_id)
+            old = job.publication
+            if old.claim_id != claim_id or old.state not in {"sending", "uncertain", "published"}:
+                raise _conflict("Publication callback has a stale or foreign claim")
+            if old.state == "published":
+                if comment_id != old.comment_id:
+                    raise _conflict("Published review already identifies another comment")
+                return job
+            publication = old.model_copy(
+                update={
+                    "state": "published" if comment_id is not None else "uncertain",
+                    "comment_id": comment_id,
+                    "comment_url": (
+                        f"https://github.com/{round.repository}/pull/{round.pr_number}"
+                        f"#issuecomment-{comment_id}"
+                        if comment_id is not None
+                        else None
+                    ),
+                    "reason": None
+                    if comment_id is not None
+                    else (
+                        "Posting outcome is unconfirmed; reconcile the original marker. "
+                        "Automatic reposting is forbidden."
+                    ),
+                    "reconcile_page": next_page,
+                }
+            )
+            publication = Publication.model_validate(publication.model_dump())
+            job = job.model_copy(update={"publication": publication})
+            self._replace(row, round, job)
+            return job
+
+        return self._write("reconcile_trusted_review_publication", apply)
