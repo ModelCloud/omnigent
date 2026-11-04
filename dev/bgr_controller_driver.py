@@ -72,6 +72,7 @@ def _respond(request: dict) -> dict:
             "published": set(),
             "pending": None,
             "round": None,
+            "review_attempts": None,
             "decision": None,
             "review_rounds": 0,
             "revision_started": False,
@@ -112,11 +113,22 @@ def _respond(request: dict) -> dict:
                     raise ValueError("Controller did not confirm completed adjudication")
                 state["closed"].add(response["attempt"]["attempt_id"])
             elif action in {"start_review", "status"}:
-                response = next(item for item in responses if "round_id" in item)
-                state["round"] = response
-                if action == "start_review":
-                    state["review_rounds"] += 1
-                    state["decision"] = None
+                if action == "status" and "round_id" not in pending["arguments"]:
+                    response = next(item for item in responses if "tasks" in item)
+                    state["review_attempts"] = [
+                        task["attempt"]
+                        for task in response["tasks"]
+                        if task["attempt"].get("review_round_id") == state["round"]["round_id"]
+                    ]
+                    if len(state["review_attempts"]) != len(state["round"]["jobs"]):
+                        raise ValueError("Reviewer shutdown requires every durable assignment")
+                else:
+                    response = next(item for item in responses if "round_id" in item)
+                    state["round"] = response
+                    if action == "start_review":
+                        state["review_rounds"] += 1
+                        state["decision"] = None
+                        state["review_attempts"] = None
             elif action == "evaluate_reviews":
                 decision = next(item["decision"] for item in responses if "decision" in item)
                 evaluation = pending["arguments"]["evaluation"]
@@ -261,6 +273,11 @@ def _respond(request: dict) -> dict:
             return control(
                 "publication_preview", round_id=round["round_id"], review_id=job["review_id"]
             )
+    if state["review_attempts"] is None:
+        return control("status")
+    for attempt in state["review_attempts"]:
+        if attempt["attempt_id"] not in state["closed"]:
+            return control("adjudicate", attempt_id=attempt["attempt_id"], outcome="completed")
     decision = state["decision"]
     if decision["next_action"] == "rereview":
         if state["review_rounds"] < 2:
@@ -292,6 +309,6 @@ def _respond(request: dict) -> dict:
             "and independent review; original findings remain unaccepted."
         }
     return {
-        "text": "BGR fixture finished: Grunts adjudicated, independent reviews sealed, "
+        "text": "BGR fixture finished: Grunts and Reviewers stopped, independent reviews sealed, "
         "and sanitized publication previews checked."
     }

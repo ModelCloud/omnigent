@@ -9,7 +9,11 @@ from omnigent.bgr_control import BgrControl
 from omnigent.bgr_review import ReviewEvaluation
 from omnigent.errors import OmnigentError
 from omnigent.harnesses.codex_native.bgr import NativeCapabilities
-from omnigent.harnesses.codex_native.bgr_messages import NativeBgrConnection, NativeIdentity
+from omnigent.harnesses.codex_native.bgr_messages import (
+    NativeBgrConnection,
+    NativeEnvelope,
+    NativeIdentity,
+)
 from omnigent.server.bgr_controller import BgrControllers, BgrHostRuntime
 from tests.harnesses.codex_native.test_bgr_lifecycle import CAPTURED
 from tests.harnesses.codex_native.test_bgr_messages import NativeProcess
@@ -271,8 +275,10 @@ async def test_brain_create_is_durable_retry_stable_and_capacity_bounded(control
         await current.execute(OWNER, BRAIN, changed)
 
 
-async def test_review_factory_starts_two_independent_roles_and_projects_barrier(controller):
-    current, processes, _, role_sessions = controller
+async def test_review_factory_starts_two_independent_roles_and_projects_barrier(
+    controller, monkeypatch
+):
+    current, processes, calls, role_sessions = controller
     command = BgrControl(
         action="start_review",
         action_id=uuid4().hex,
@@ -303,6 +309,83 @@ async def test_review_factory_starts_two_independent_roles_and_projects_barrier(
                 review_id=result["jobs"][0]["review_id"],
             ),
         )
+    for round_index in range(2):
+        if round_index:
+            result = await current.execute(
+                OWNER, BRAIN, command.model_copy(update={"action_id": uuid4().hex})
+            )
+        jobs = [
+            job.model_dump()
+            for job in current.store.get_review_round(OWNER, BRAIN, TEAM, result["round_id"]).jobs
+        ]
+        callbacks = []
+        for job in jobs:
+            process = processes[job["session_id"]]
+            anchor = NativeEnvelope.model_validate(next(iter(process.pending.values())))
+            callback = process.emit(
+                current.brain,
+                anchor,
+                "review-result-" + job["review_id"],
+                "result",
+                payload={"outcome": "no_findings", "findings": [], "coverageLimits": []},
+            )
+            callbacks.append(callback)
+            await current.native_callback(
+                session_id=job["session_id"],
+                thread_id=process.connection.thread_id,
+                method="bgr/message/emitted",
+                params=callback,
+            )
+        sealed = current.store.review_status(OWNER, BRAIN, TEAM, result["round_id"])
+        assert sealed["results_ready"] is True
+        assert all(job["state"] == "sealed" for job in sealed["jobs"])
+        for index, job in enumerate(jobs):
+            assert (
+                current.store.native_assignment(
+                    OWNER, BRAIN, TEAM, job["attempt_id"], current.fence
+                ).attempt.state
+                == "reserved"
+            )
+            close = BgrControl(
+                action="adjudicate",
+                action_id=uuid4().hex,
+                attempt_id=job["attempt_id"],
+                outcome="completed",
+            )
+            connection = current.connections[job["session_id"]]
+            with monkeypatch.context() as patch:
+                patch.setattr(current.runtime, "stop", AsyncMock(return_value=False))
+                with pytest.raises(OmnigentError, match="stop is unconfirmed"):
+                    await current.execute(OWNER, BRAIN, close)
+            assert current.connections[job["session_id"]] is connection
+            assert (
+                current.store.native_assignment(
+                    OWNER, BRAIN, TEAM, job["attempt_id"], current.fence
+                ).attempt.state
+                == "reserved"
+            )
+            close = close.model_copy(update={"action_id": uuid4().hex})
+            stopped = await current.execute(OWNER, BRAIN, close)
+            assert stopped["attempt"]["state"] == "completed"
+            assert await current.execute(OWNER, BRAIN, close) == stopped
+            assert (
+                sum(
+                    operation == "stop" and parameters["session_id"] == job["session_id"]
+                    for operation, parameters in calls
+                )
+                == 1
+            )
+            assert current.store.review_status(OWNER, BRAIN, TEAM, result["round_id"]) == sealed
+            if index == 0:
+                sibling = jobs[1]
+                await current.native_callback(
+                    session_id=sibling["session_id"],
+                    thread_id=processes[sibling["session_id"]].connection.thread_id,
+                    method="bgr/message/emitted",
+                    params=callbacks[1],
+                )
+            assert job["session_id"] not in current.connections
+        assert set(current.connections) == {BRAIN}
 
 
 async def test_publish_uncertain_retries_are_read_only_reconciliation_with_same_action(controller):

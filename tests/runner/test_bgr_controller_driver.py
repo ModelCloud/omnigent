@@ -120,7 +120,10 @@ def test_driver_waits_for_siblings_and_approves_each_exact_preview(drive, publis
     )
     start = drive(output(adjudicate, {"attempt": {**attempt, "state": "completed"}}))
     assert command(start)[1]["action"] == "start_review"
-    jobs = [{"agent_id": uuid4().hex, "review_id": uuid4().hex} for _ in range(2)]
+    jobs = [
+        {"agent_id": uuid4().hex, "review_id": uuid4().hex, "attempt_id": uuid4().hex}
+        for _ in range(2)
+    ]
     round = {"round_id": uuid4().hex, "results_ready": False, "jobs": jobs}
     assert (
         "Waiting"
@@ -182,8 +185,26 @@ def test_driver_waits_for_siblings_and_approves_each_exact_preview(drive, publis
             preview = result
             if "items" in preview and job != jobs[-1]:
                 assert command(preview)[1]["action"] == "publication_preview"
+    assert command(preview)[1]["action"] == "status"
+    assert "round_id" not in command(preview)[1]
+    preview = drive(
+        output(
+            preview,
+            {
+                "tasks": [
+                    {"attempt": {**job, "review_round_id": round["round_id"]}} for job in jobs
+                ]
+                + [{"attempt": attempt}],
+            },
+        )
+    )
+    for job in jobs:
+        assert command(preview)[1]["action"] == "adjudicate"
+        assert command(preview)[1]["attempt_id"] == job["attempt_id"]
+        preview = drive(output(preview, {"attempt": {**job, "state": "completed"}}))
     if outcome == "accept":
         assert "finished" in preview["text"]
+        assert "Reviewers stopped" in preview["text"]
     elif outcome == "revise":
         assert command(preview)[1]["action"] == "create_grunt"
         assert "Parser drops malformed input" in command(preview)[1]["contract"]["instructions"]

@@ -221,19 +221,23 @@ class BgrController:
             assignment = self.store.native_assignment(
                 self.user_id, self.brain_session_id, self.team_id, command.attempt_id, self.fence
             )
+            connection = self.connections.get(assignment.attempt.session_id)
             if not await self.runtime.stop(assignment.attempt.session_id):
                 raise OmnigentError("Worker stop is unconfirmed", code=ErrorCode.CONFLICT)
-            attempt = self.store.close(
-                self.user_id,
-                self.brain_session_id,
-                self.team_id,
-                TaskClose(
-                    **self.fence.model_dump(),
-                    attempt_id=command.attempt_id,
-                    outcome=command.outcome,
-                    stop_confirmed=True,
-                ),
-            )
+            async with self._callbacks_lock:
+                attempt = self.store.close(
+                    self.user_id,
+                    self.brain_session_id,
+                    self.team_id,
+                    TaskClose(
+                        **self.fence.model_dump(),
+                        attempt_id=command.attempt_id,
+                        outcome=command.outcome,
+                        stop_confirmed=True,
+                    ),
+                )
+                if self.connections.get(attempt.session_id) is connection:
+                    self.connections.pop(attempt.session_id, None)
             return {"attempt": attempt.model_dump(mode="json")}
         assert command.round_id is not None and command.review_id is not None
         status = self.store.review_status(
