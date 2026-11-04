@@ -93,7 +93,12 @@ class ClosedGenerationManifest(Record):
     state: Literal["CLOSED"] = "CLOSED"
     closed_admission_sequence: Sequence
     journal_sequence: Sequence
-    claims: Annotated[list[TerminalClaim], Field(min_length=1, max_length=1024)]
+    claims: Annotated[tuple[TerminalClaim, ...], Field(min_length=1, max_length=1024)]
+
+    @field_validator("claims", mode="before")
+    @classmethod
+    def immutable_claims(cls, value: object) -> object:
+        return tuple(value) if isinstance(value, list) else value
 
     @model_validator(mode="after")
     def closed_inventory(self) -> Self:
@@ -159,14 +164,15 @@ class SupervisorStopped(Record):
 
     def verify(self, request: SupervisorStopRequest) -> GenerationStopReceipt:
         """Correlate trusted transport output against the durable original admission."""
+        receipt = GenerationStopReceipt.model_validate_json(self.receipt.model_dump_json())
         if (
             self.request_id != request.request_id
             or self.request_sha256 != supervision_digest(request)
-            or self.receipt.recovery_id != request.recovery_id
-            or self.receipt.manifest.admission != request.admission
+            or receipt.recovery_id != request.recovery_id
+            or receipt.manifest.admission != request.admission
         ):
             raise ValueError("Supervisor stop receipt belongs to a different request/generation")
-        return self.receipt
+        return receipt
 
 
 class SupervisorUnknown(Record):

@@ -110,6 +110,18 @@ def test_closed_manifest_includes_unbound_admission_and_stable_retry(request_sto
     assert stopped.receipt.manifest.claims[1].session_id is None
 
 
+def test_verified_manifest_cannot_be_mutated(request_stop, stopped):
+    receipt = stopped.verify(request_stop)
+    with pytest.raises(AttributeError):
+        receipt.manifest.claims.clear()
+    assert receipt.manifest_sha256 == supervision_digest(receipt.manifest)
+    copied = stopped.model_copy(
+        update={"receipt": receipt.model_copy(update={"manifest_sha256": "0" * 64})}
+    )
+    with pytest.raises(ValidationError, match="digest changed"):
+        copied.verify(request_stop)
+
+
 @pytest.mark.parametrize(
     "path,value",
     [
