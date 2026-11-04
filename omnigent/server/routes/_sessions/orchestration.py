@@ -146,6 +146,7 @@ from omnigent.server.background_session_titles import (
     background_session_titles_enabled,
     prepare_background_session_title,
 )
+from omnigent.server.bgr_input import check_bgr_session_input
 from omnigent.server.bundles import (
     agent_for_user,
     bundle_location,
@@ -5139,6 +5140,7 @@ async def ensure_runner_connected(
     if runner_client is not None:
         return runner_client, conv
 
+    await check_bgr_session_input(app_state, session_id, restart=True)
     tunnel_registry = cast(TunnelRegistry | None, getattr(app_state, "tunnel_registry", None))
     host_registry = cast(HostRegistry | None, getattr(app_state, "host_registry", None))
 
@@ -12673,6 +12675,8 @@ async def _handle_mcp_tools_call(
         unavailable, or the underlying MCP call fails.
     """
 
+    if request is not None:
+        await check_bgr_session_input(request.app.state, session_id)
     namespaced_name = params.get("name", "")
     arguments: dict[str, Any] = params.get("arguments") or {}
     request_state_str: str | None = params.get("requestState")
@@ -12899,6 +12903,9 @@ async def _handle_mcp_tools_call(
 
     from omnigent.runner.tool_dispatch import MCP_PROXY_FORWARD_TIMEOUT_S
 
+    if request is not None:
+        await check_bgr_session_input(request.app.state, session_id)
+
     runner_client: httpx.AsyncClient | None = None
     registry_config = None
     if request is not None and getattr(request.app.state, "mcp_registry", None) is not None:
@@ -12937,6 +12944,8 @@ async def _handle_mcp_tools_call(
             return _mcp_error_response(
                 rpc_id, -32000, f"No runner bound for session {session_id!r}"
             )
+        if request is not None:
+            await check_bgr_session_input(request.app.state, session_id)
         try:
             exec_resp = await runner_client.post(
                 f"/v1/sessions/{session_id}/mcp/execute",
@@ -13013,6 +13022,8 @@ async def _handle_mcp_tools_call(
             return _mcp_error_response(rpc_id, -32000, "Registry MCP elicitation is not supported")
 
         # Retry on the runner with the user's inputResponses.
+        if request is not None:
+            await check_bgr_session_input(request.app.state, session_id)
         try:
             retry_resp = await runner_client.post(
                 f"/v1/sessions/{session_id}/mcp/execute",

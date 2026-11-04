@@ -198,6 +198,10 @@ class BgrStore:
             row = db.get(SqlBgrLaunch, (current_workspace_id(), team_id))
             if row is None or row.owner_id != user_id:
                 raise _forbidden()
+            team = db.get(SqlBgrTeam, (current_workspace_id(), team_id))
+            history = _team(team).runtime_recoveries if team is not None else []
+            if history and history[-1].state != "attached":
+                raise _conflict("BGR runtime recovery must attach before any launch retry")
             now = self._now_us()
             if row.claim_id != claim_id and row.claim_expires_at_us > now:
                 return None
@@ -838,6 +842,56 @@ class BgrStore:
             self._brain(row, session_id)
             self._epoch(row, row.epoch)
             return _team(row)
+
+    def check_session_runtime_input(self, session_id: str, *, restart: bool = False) -> None:
+        """Fence any durable role; callers must authorize session access separately."""
+        with self._sessions("authorize_bgr_session_input") as db:
+            agent = db.scalar(
+                select(SqlBgrAgent).where(
+                    SqlBgrAgent.workspace_id == current_workspace_id(),
+                    SqlBgrAgent.session_id == session_id,
+                )
+            )
+            if agent is None:
+                return
+            row = db.get(SqlBgrTeam, (current_workspace_id(), agent.team_id))
+            if row is None:
+                raise _conflict("BGR membership has no durable team")
+            if restart:
+                raise _conflict("BGR lifecycle requires explicit verified runtime recovery")
+            self._epoch(row, row.epoch)
+            role = Agent.model_validate_json(agent.document).role
+            if role == "brain":
+                mapping = db.get(SqlBgrNativeBinding, (current_workspace_id(), agent.id))
+                if mapping is None:
+                    raise _conflict("BGR native runtime is not attached")
+                binding = NativeBrainBinding.model_validate_json(mapping.document)
+                if binding.epoch != row.epoch:
+                    raise _conflict("BGR Brain belongs to an old runtime epoch")
+            else:
+                attempt = next(
+                    (
+                        parsed
+                        for candidate in db.scalars(
+                            select(SqlBgrAttempt)
+                            .where(
+                                SqlBgrAttempt.workspace_id == current_workspace_id(),
+                                SqlBgrAttempt.team_id == agent.team_id,
+                            )
+                            .limit(MAX_TASKS)
+                        )
+                        if (parsed := Attempt.model_validate_json(candidate.document)).agent_id
+                        == agent.id
+                    ),
+                    None,
+                )
+                if attempt is None or attempt.epoch != row.epoch or attempt.state != "reserved":
+                    raise _conflict("BGR worker belongs to an inactive attempt or runtime epoch")
+                mapping = db.get(SqlBgrNativeBinding, (current_workspace_id(), attempt.attempt_id))
+                if mapping is None:
+                    raise _conflict("BGR native runtime is not attached")
+                if NativeBinding.model_validate_json(mapping.document).epoch != row.epoch:
+                    raise _conflict("BGR worker belongs to an old native runtime epoch")
 
     def recover(
         self,

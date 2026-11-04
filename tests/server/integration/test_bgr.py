@@ -6,7 +6,10 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from starlette.requests import Request
 
+from omnigent.bgr import Fence, NativeBrainBinding
+from omnigent.errors import OmnigentError
 from omnigent.runner.identity import (
     ORCHESTRATION_SOURCE_HEADER,
     RUNNER_TUNNEL_TOKEN_HEADER,
@@ -15,7 +18,10 @@ from omnigent.runner.identity import (
 from omnigent.runtime.agent_cache import AgentCache
 from omnigent.server.app import create_app
 from omnigent.server.auth import LEVEL_OWNER, LEVEL_READ, UnifiedAuthProvider
+from omnigent.server.bgr_input import check_bgr_session_input
 from omnigent.server.feature_flags import resolve_feature_flags
+from omnigent.server.mcp_policy_adapter import McpPolicyAdapter
+from omnigent.server.routes._sessions.orchestration import _handle_mcp_tools_call
 from omnigent.stores.agent_store.sqlalchemy_store import SqlAlchemyAgentStore
 from omnigent.stores.artifact_store.local import LocalArtifactStore
 from omnigent.stores.bgr_store import BgrStore
@@ -800,3 +806,89 @@ async def test_http_stale_mailbox_reconciliation_survives_restart(bgr_environmen
         assert response.json()["discard"] is None
         snapshot = (await client.get(f"{PREFIX}/teams/{team_id}", headers=headers(brain))).json()
         assert snapshot["pending_envelopes"] == 0
+
+
+@pytest.mark.parametrize("role", ["brain", "grunt"])
+@pytest.mark.parametrize("lost", ["expired", "recovery"])
+async def test_public_input_and_mcp_deny_durable_roles_after_authority_loss(
+    bgr_environment, db_uri, role, lost
+):
+    application, brain, worker, permissions, now = bgr_environment
+    app = application()
+    conversations = SqlAlchemyConversationStore(db_uri)
+    agents = SqlAlchemyAgentStore(db_uri)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        team, fence_data = await create_team(client, brain)
+        team_id = team["team_id"]
+        store = app.state.bgr_store
+        fence = Fence.model_validate(fence_data)
+        binding = NativeBrainBinding(
+            team_id=team_id, epoch=1, thread_id=str(uuid4()), runtime_id=uuid4().hex, host_id=HOST
+        )
+        store.native_brain_binding("alice", brain, team_id, fence, binding=binding)
+        session_id = brain
+        if role == "grunt":
+            session_id = worker()
+            response = await client.post(
+                f"{PREFIX}/teams/{team_id}/tasks",
+                headers=headers(brain),
+                json={
+                    **fence_data,
+                    "task_id": uuid4().hex,
+                    "session_id": session_id,
+                    "contract": {
+                        "objective": "Test input fencing",
+                        "instructions": "Do not execute after authority loss",
+                        "acceptance": ["No stale execution"],
+                    },
+                    "workspace": {
+                        "host_id": HOST,
+                        "repository": "repo",
+                        "worktree": f"/work/{session_id}",
+                        "base_sha": SHA,
+                    },
+                },
+            )
+            assert response.status_code == 201, response.text
+        if lost == "expired":
+            now[0] += 301
+        else:
+            store.begin_runtime_recovery(
+                "alice",
+                brain,
+                team_id,
+                fence,
+                recovery_id=uuid4().hex,
+                runtime_id=binding.runtime_id,
+                replacement_controller_id=uuid4().hex,
+            )
+        for event in ("message", "stop_session", "retry_session"):
+            response = await client.post(
+                f"/v1/sessions/{session_id}/events",
+                headers={"X-Forwarded-Email": "alice"},
+                json={"type": event, "data": {"role": "user", "content": "Do not execute"}},
+            )
+            assert response.status_code == 409, response.text
+        request = Request(
+            {"type": "http", "app": app, "headers": [(b"x-forwarded-email", b"alice")]}
+        )
+        with pytest.raises(OmnigentError):
+            await _handle_mcp_tools_call(
+                1,
+                session_id,
+                {"name": "sys_os_write", "arguments": {}},
+                conversations,
+                agents,
+                None,
+                request=request,
+            )
+        policy = McpPolicyAdapter(
+            conversations, agents, UnifiedAuthProvider(source="header"), permissions
+        )
+        with pytest.raises(OmnigentError):
+            await policy.authorize(request, session_id, "unavailable-service")
+        ordinary = worker()
+        conversations.set_labels(ordinary, {"omnigent.bgr.team_id": team_id})
+        await check_bgr_session_input(app.state, ordinary, restart=True)

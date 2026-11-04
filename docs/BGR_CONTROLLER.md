@@ -662,6 +662,14 @@ and actual host-path canonicalization also remain explicit follow-ups.
 
 ## Process-loss fencing primitives (replacement disabled)
 
+Public session events and MCP execution now resolve BGR membership from the durable
+agent/team records, never session labels. Brain, Grunt and reviewer writes require
+a live team lease and current native binding; old worker epochs and inactive attempts
+are rejected. Generic stop/retry/relaunch operations cannot restart BGR-managed roles.
+Interactive terminal attaches recheck authority on every browser write, including an
+already-open WebSocket; read-only viewing remains available. These server-side checks
+do **not** fence direct native TUI/app-server turns or establish process-domain quiescence.
+
 The current host launcher **cannot prove complete descendant quiescence**.
 `server.proc is None`, process-group termination, native cancellation, archive,
 checkpoint and an empty mailbox are not whole-domain stop evidence. Escaped

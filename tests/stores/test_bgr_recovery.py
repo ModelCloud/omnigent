@@ -121,6 +121,8 @@ def test_loss_recovery_revokes_before_stop_preserves_task_and_fences_old_callbac
     assert recovery.state == "stopping"
     assert store.begin_runtime_recovery(OWNER, brain, TEAM, fence, **args) == recovery
     assert store.get_launch(OWNER, TEAM).state == "blocked"
+    with pytest.raises(OmnigentError, match="launch retry"):
+        store.claim_launch(OWNER, TEAM, uuid4().hex)
     with pytest.raises(OmnigentError):
         store.check_runtime_input(OWNER, brain, TEAM)
     with pytest.raises(OmnigentError):
@@ -198,6 +200,9 @@ def test_loss_recovery_revokes_before_stop_preserves_task_and_fences_old_callbac
         )
     store.mark_launch_running(OWNER, brain, TEAM, replacement_fence)
     assert store.check_runtime_input(OWNER, brain, TEAM).epoch == 2
+    store.check_session_runtime_input(brain)
+    with pytest.raises(OmnigentError, match="inactive attempt"):
+        store.check_session_runtime_input(task.attempt.session_id)
     assert store.get_team(OWNER, brain, TEAM).runtime_recoveries[-1].state == "attached"
     with pytest.raises(OmnigentError):
         actions.claim(OWNER, brain, TEAM, fence, command)
@@ -255,3 +260,81 @@ def test_loss_seals_unfinished_reviews_without_rewriting_independent_findings(re
     result = store.get_review_round(OWNER, brain, TEAM, round.round_id)
     assert all(job.state == "sealed" and job.result.status == "incomplete" for job in result.jobs)
     assert all(job.publication.state == "pending" for job in result.jobs)
+
+
+@pytest.mark.parametrize("role", ["brain", "grunt", "reviewer"])
+def test_session_input_uses_durable_membership_and_denies_all_roles_during_loss(
+    recovery_store, role
+):
+    store, intent, binding, fence = recovery_store
+    brain = intent.brain_session_id
+    session_id = brain
+    if role == "grunt":
+        task = store.reserve(
+            OWNER,
+            brain,
+            TEAM,
+            TaskReserve(
+                **fence.model_dump(),
+                task_id=uuid4().hex,
+                session_id=uuid4().hex,
+                contract=CONTRACT,
+                workspace=Workspace(
+                    host_id=HOST, repository="repo", worktree="/work/guard", base_sha=SHA
+                ),
+            ),
+        )
+        session_id, attempt_id = task.attempt.session_id, task.attempt.attempt_id
+    elif role == "reviewer":
+        round = store.reserve_review_round(
+            OWNER,
+            brain,
+            TEAM,
+            ReviewRoundCreate(
+                **fence.model_dump(),
+                round_id=uuid4().hex,
+                repository="owner/repo",
+                pr_number=1,
+                base_sha=SHA,
+                head_sha="e" * 40,
+            ),
+        )
+        job = round.jobs[0]
+        session_id, attempt_id = job.session_id, job.attempt_id
+    if role != "brain":
+        native = NativeBinding(
+            team_id=TEAM, attempt_id=attempt_id, epoch=1, thread_id=str(uuid4())
+        )
+        if role == "reviewer":
+            store.activate_reviewer(
+                OWNER,
+                brain,
+                TEAM,
+                fence,
+                round_id=round.round_id,
+                review_id=job.review_id,
+                binding=native,
+                workspace=Workspace(
+                    host_id=HOST,
+                    repository="owner/repo",
+                    worktree="/snapshots/guard",
+                    base_sha=SHA,
+                ),
+            )
+        else:
+            store.bind_native(OWNER, brain, TEAM, fence, native)
+    store.check_session_runtime_input(session_id)
+    with pytest.raises(OmnigentError, match="explicit verified runtime recovery"):
+        store.check_session_runtime_input(session_id, restart=True)
+    store.begin_runtime_recovery(
+        OWNER,
+        brain,
+        TEAM,
+        fence,
+        recovery_id=uuid4().hex,
+        runtime_id=binding.runtime_id,
+        replacement_controller_id=uuid4().hex,
+    )
+    with pytest.raises(OmnigentError):
+        store.check_session_runtime_input(session_id)
+    store.check_session_runtime_input(uuid4().hex)
