@@ -68,6 +68,72 @@ def stopped(session_id, thread_id, role="brain", **changes):
     )
 
 
+@pytest.fixture
+def replacement_recovery(recovery_store):
+    store, intent, binding, fence = recovery_store
+    pending = store.begin_runtime_recovery(
+        OWNER,
+        intent.brain_session_id,
+        TEAM,
+        fence,
+        recovery_id=uuid4().hex,
+        runtime_id=binding.runtime_id,
+        replacement_controller_id=uuid4().hex,
+    )
+    team = store.complete_runtime_recovery(
+        OWNER,
+        intent.brain_session_id,
+        TEAM,
+        recovery_id=pending.recovery_id,
+        evidence=RuntimeStopEvidence(
+            runtime_id=binding.runtime_id,
+            host_id=HOST,
+            inventory_complete=True,
+            processes=[stopped(intent.brain_session_id, binding.thread_id)],
+        ),
+    )
+    replacement = binding.model_copy(
+        update={
+            "epoch": team.epoch,
+            "runtime_id": uuid4().hex,
+            "thread_id": str(uuid4()),
+        }
+    )
+    return store, intent, Fence(controller_id=team.controller_id, epoch=team.epoch), replacement
+
+
+def test_recovery_resume_requires_exact_durable_binding_not_ready_or_new_generation(
+    replacement_recovery, monkeypatch
+):
+    store, intent, fence, binding = replacement_recovery
+    brain = intent.brain_session_id
+    with pytest.raises(OmnigentError, match="exact live"):
+        store.resume_live_runtime_recovery(OWNER, brain, TEAM, fence, binding=binding)
+    store.native_brain_binding(OWNER, brain, TEAM, fence, binding=binding)
+    expired = store._now_us() + 301_000_000
+    monkeypatch.setattr(store, "_now_us", lambda: expired)
+    for owner, session, current_fence, target in (
+        ("outsider", brain, fence, binding),
+        (OWNER, uuid4().hex, fence, binding),
+        (OWNER, brain, fence.model_copy(update={"controller_id": uuid4().hex}), binding),
+        (OWNER, brain, fence.model_copy(update={"epoch": 1}), binding),
+        (OWNER, brain, fence, binding.model_copy(update={"runtime_id": uuid4().hex})),
+        (OWNER, brain, fence, binding.model_copy(update={"thread_id": str(uuid4())})),
+    ):
+        with pytest.raises(OmnigentError):
+            store.resume_live_runtime_recovery(owner, session, TEAM, current_fence, binding=target)
+    with pytest.raises(OmnigentError):
+        store.acquire(OWNER, brain, TEAM, LeaseRequest(controller_id=fence.controller_id))
+    resumed = store.resume_live_runtime_recovery(OWNER, brain, TEAM, fence, binding=binding)
+    assert resumed.epoch == fence.epoch and resumed.lease_expires_at == expired / 1_000_000 + 300
+    assert resumed.runtime_recoveries[-1].state == "binding"
+    with pytest.raises(OmnigentError, match="not attached"):
+        store.check_runtime_input(OWNER, brain, TEAM)
+    store.mark_launch_running(OWNER, brain, TEAM, fence)
+    with pytest.raises(OmnigentError, match="exact live"):
+        store.resume_live_runtime_recovery(OWNER, brain, TEAM, fence, binding=binding)
+
+
 def test_loss_recovery_revokes_before_stop_preserves_task_and_fences_old_callbacks(
     recovery_store, monkeypatch
 ):
@@ -340,9 +406,11 @@ def test_session_input_uses_durable_membership_and_denies_all_roles_during_loss(
     store.check_session_runtime_input(uuid4().hex)
 
 
-def test_owner_recovery_target_uses_durable_binding_after_lease_expiry(recovery_store):
+def test_owner_recovery_target_uses_durable_binding_after_lease_expiry(
+    recovery_store, monkeypatch
+):
     store, intent, binding, fence = recovery_store
-    store._clock = lambda: 10**15
+    monkeypatch.setattr(store, "_now_us", lambda: 10**18)
     brain, team, target = store.runtime_recovery_target(OWNER, TEAM)
     assert brain == intent.brain_session_id and target == binding
     assert team.epoch == fence.epoch and team.controller_id == fence.controller_id

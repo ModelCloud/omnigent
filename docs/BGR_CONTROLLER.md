@@ -725,6 +725,15 @@ The durable store APIs are:
 
 - `runtime_recovery_target(user, team)`: owner-only durable Brain/native identity;
   intentionally does not require a live lease or live controller object.
+- `resume_live_runtime_recovery(user, brain, team, fence, binding=...)`: trusted
+  attach-only renewal of an already persisted replacement `binding`, after exact
+  authenticated host metadata and native identity inspection. It does not bind a
+  new generation, advance the epoch or unblock public input. Cached and cold
+  controllers can retry that same live attach without rebinding native identity.
+  `ready` without a durable replacement binding, a lost native identity, a changed
+  host/runtime/thread, or missing stop proof remain blocked. Expired `ready`
+  recovery still requires trusted process-domain reconciliation; this API cannot
+  safely infer that an unrecorded replacement never started or has stopped.
 - `begin_runtime_recovery(user, brain_session, team, fence, *, recovery_id,
   runtime_id, replacement_controller_id)`: valid even after old lease expiry;
   atomically revokes the old lease, blocks launch and records the previous

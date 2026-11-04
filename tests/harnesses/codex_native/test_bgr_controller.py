@@ -13,6 +13,8 @@ from omnigent.server.bgr_controller import BgrControllers, BgrHostRuntime
 from tests.harnesses.codex_native.test_bgr_lifecycle import CAPTURED
 from tests.harnesses.codex_native.test_bgr_messages import NativeProcess
 from tests.harnesses.codex_native.test_bgr_messages import route as route
+from tests.stores.test_bgr_recovery import recovery_store as recovery_store
+from tests.stores.test_bgr_recovery import replacement_recovery as replacement_recovery
 from tests.stores.test_bgr_review_store import message as review_message
 from tests.stores.test_bgr_store import BRAIN, CONTRACT, HOST, OWNER, SHA, TEAM
 
@@ -138,6 +140,88 @@ async def test_same_live_attach_inspects_owner_and_rejects_changed_generation(co
             fence=current.fence,
             runtime=BgrHostRuntime(BRAIN, changed),
         )
+
+
+@pytest.mark.parametrize("cached", [True, False])
+@pytest.mark.parametrize("expired", [True, False])
+@pytest.mark.parametrize("loss", [None, "foreign_generation", "lost_identity"])
+async def test_replacement_attach_retries_only_exact_live_native_binding(
+    replacement_recovery, monkeypatch, cached, expired, loss
+):
+    store, intent, fence, binding = replacement_recovery
+    session = intent.brain_session_id
+    native = NativeProcess()
+    foreign = False
+
+    async def host_call(operation, parameters):
+        if operation == "brain":
+            return {
+                "thread_id": binding.thread_id,
+                "runtime_id": uuid4().hex if foreign else binding.runtime_id,
+                "host_id": HOST,
+            }
+        assert operation == "rpc" and parameters["session_id"] == session
+        method, params = parameters["method"], parameters["params"]
+        if method == "bgr/capabilities/read":
+            return {"result": CAPTURED}
+        if method == "bgr/thread/bind":
+            native.connection = NativeBgrConnection(
+                binding.thread_id,
+                NativeIdentity.model_validate(params["identity"]),
+                native.request,
+                NativeCapabilities.model_validate(CAPTURED),
+            )
+            native.calls.append((method, params))
+            return await native.request("bgr/thread/inspect", {"threadId": binding.thread_id})
+        return await native.request(method, params)
+
+    runtime = BgrHostRuntime(session, host_call)
+    registry = BgrControllers(store, AsyncMock())
+    try:
+        first = await registry.attach(
+            user_id=OWNER, brain_session_id=session, team_id=TEAM, fence=fence, runtime=runtime
+        )
+        if not cached:
+            await registry.close()
+            registry = BgrControllers(store, AsyncMock())
+        deadline = store.get_team(OWNER, session, TEAM).lease_expires_at
+        if expired:
+            clock = store._now_us() + 301_000_000
+            monkeypatch.setattr(store, "_now_us", lambda: clock)
+        if loss == "foreign_generation":
+            foreign = True
+        elif loss == "lost_identity":
+            connection = native.connection
+            native.connection = NativeBgrConnection(
+                binding.thread_id,
+                connection.identity.model_copy(update={"epoch": 1}),
+                native.request,
+                connection.capabilities,
+            )
+
+        async def retry():
+            return await registry.attach(
+                user_id=OWNER, brain_session_id=session, team_id=TEAM, fence=fence, runtime=runtime
+            )
+
+        if loss is not None:
+            with pytest.raises(OmnigentError):
+                await retry()
+            assert store.get_team(OWNER, session, TEAM).lease_expires_at == deadline
+        else:
+            resumed = await retry()
+            assert (resumed is first) == cached
+            assert store.get_team(OWNER, session, TEAM).runtime_recoveries[-1].state == "binding"
+            with pytest.raises(OmnigentError):
+                store.check_session_runtime_input(session)
+            store.mark_launch_running(OWNER, session, TEAM, fence)
+            store.check_session_runtime_input(session)
+        assert sum(method == "bgr/thread/bind" for method, _ in native.calls) == 1
+        assert (
+            store.get_launch(OWNER, TEAM).request.initial_prompt == intent.request.initial_prompt
+        )
+    finally:
+        await registry.close()
 
 
 async def test_brain_create_is_durable_retry_stable_and_capacity_bounded(controller):

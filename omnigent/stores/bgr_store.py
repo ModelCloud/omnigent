@@ -707,6 +707,47 @@ class BgrStore:
 
         return self._write("replace_fenced_runtime_after_all_processes_stopped", apply)
 
+    def resume_live_runtime_recovery(
+        self,
+        user_id: str,
+        session_id: str,
+        team_id: str,
+        fence: Fence,
+        *,
+        binding: NativeBrainBinding,
+    ) -> Team:
+        """Trusted attach only, after authenticating and inspecting the exact live binding."""
+
+        def apply(db: Session) -> Team:
+            row = self._owned(db, team_id, user_id)
+            self._brain(row, session_id)
+            team = _team(row)
+            history = team.runtime_recoveries
+            mapping = db.get(SqlBgrNativeBinding, (current_workspace_id(), team.brain_agent_id))
+            if (
+                row.epoch != fence.epoch
+                or row.controller_id != fence.controller_id
+                or not history
+                or history[-1].state != "binding"
+                or history[-1].replacement_controller_id != fence.controller_id
+                or history[-1].previous_epoch + 1 != fence.epoch
+                or history[-1].stop_manifest_sha256 is None
+                or mapping is None
+                or NativeBrainBinding.model_validate_json(mapping.document) != binding
+                or binding.team_id != team_id
+                or binding.epoch != fence.epoch
+                or binding.runtime_id is None
+                or binding.runtime_id == history[-1].runtime_id
+                or binding.host_id != history[-1].host_id
+            ):
+                raise _conflict("Only the exact live replacement binding may resume")
+            row.lease_expires_at_us = max(
+                row.lease_expires_at_us, self._now_us() + 300 * _MICROSECONDS
+            )
+            return _team(row)
+
+        return self._write("resume_verified_live_replacement_binding", apply)
+
     def reserve(self, user_id: str, session_id: str, team_id: str, body: TaskReserve) -> Task:
         def apply(db: Session) -> Task:
             team = self._owned(db, team_id, user_id)

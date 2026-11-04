@@ -435,13 +435,22 @@ class BgrControllers:
         async with self._attach_lock:
             old = self._controllers.get(brain_session_id)
             if old is not None:
-                old.authorize(user_id, brain_session_id)
                 if old.team_id != team_id or old.fence != fence:
                     raise OmnigentError("Controller fence conflict", code=ErrorCode.CONFLICT)
-                metadata = await runtime.call("brain", {})
-                binding = self.store.native_brain_binding(
-                    user_id, brain_session_id, team_id, fence
+                team = self.store.get_team(user_id, brain_session_id, team_id)
+                recovering = bool(
+                    team.runtime_recoveries and team.runtime_recoveries[-1].state == "binding"
                 )
+                if recovering:
+                    session, _, binding = self.store.runtime_recovery_target(user_id, team_id)
+                    if session != brain_session_id:
+                        raise OmnigentError("Foreign Brain recovery", code=ErrorCode.FORBIDDEN)
+                else:
+                    old.authorize(user_id, brain_session_id)
+                    binding = self.store.native_brain_binding(
+                        user_id, brain_session_id, team_id, fence
+                    )
+                metadata = await runtime.call("brain", {})
                 if (
                     binding.runtime_id is None
                     or binding.host_id is None
@@ -451,6 +460,14 @@ class BgrControllers:
                 ):
                     raise OmnigentError("Native owner generation changed", code=ErrorCode.CONFLICT)
                 await old.brain.inspect()
+                if recovering:
+                    self.store.resume_live_runtime_recovery(
+                        user_id, brain_session_id, team_id, fence, binding=binding
+                    )
+                    if old._heartbeat is None or old._heartbeat.done():
+                        old._heartbeat = asyncio.create_task(
+                            old.maintain_lease(), name=f"bgr-controller-lease-{team_id}"
+                        )
                 return old
             team = self.store.get_team(user_id, brain_session_id, team_id)
             metadata = await runtime.call("brain", {})
@@ -461,21 +478,26 @@ class BgrControllers:
             )
             if not (capabilities.general_messaging and capabilities.host_record):
                 raise OmnigentError("Native BGR capabilities unavailable", code=ErrorCode.CONFLICT)
-            self.store.native_brain_binding(
-                user_id,
-                brain_session_id,
-                team_id,
-                fence,
-                binding=NativeBrainBinding.model_validate(
-                    {
-                        "team_id": team_id,
-                        "epoch": fence.epoch,
-                        "thread_id": thread_id,
-                        "runtime_id": metadata.get("runtime_id"),
-                        "host_id": metadata.get("host_id"),
-                    }
-                ),
+            binding = NativeBrainBinding.model_validate(
+                {
+                    "team_id": team_id,
+                    "epoch": fence.epoch,
+                    "thread_id": thread_id,
+                    "runtime_id": metadata.get("runtime_id"),
+                    "host_id": metadata.get("host_id"),
+                }
             )
+            recovering = bool(
+                team.runtime_recoveries and team.runtime_recoveries[-1].state == "binding"
+            )
+            if recovering:
+                session, _, persisted = self.store.runtime_recovery_target(user_id, team_id)
+                if session != brain_session_id or persisted != binding:
+                    raise OmnigentError("Native owner generation changed", code=ErrorCode.CONFLICT)
+            else:
+                self.store.native_brain_binding(
+                    user_id, brain_session_id, team_id, fence, binding=binding
+                )
             identity = NativeIdentity.model_validate(
                 {
                     "teamId": team_id,
@@ -485,9 +507,16 @@ class BgrControllers:
                     "role": "brain",
                 }
             )
-            await request("bgr/thread/bind", {"threadId": thread_id, "identity": identity.wire()})
+            if not recovering:
+                await request(
+                    "bgr/thread/bind", {"threadId": thread_id, "identity": identity.wire()}
+                )
             brain = NativeBgrConnection(thread_id, identity, request, capabilities)
             await brain.inspect()
+            if recovering:
+                self.store.resume_live_runtime_recovery(
+                    user_id, brain_session_id, team_id, fence, binding=binding
+                )
             controller = BgrController(
                 store=self.store,
                 user_id=user_id,
