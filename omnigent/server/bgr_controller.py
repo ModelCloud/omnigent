@@ -63,6 +63,17 @@ class BgrHostRuntime:
         result = await self.call("stop", {"session_id": session_id})
         return result.get("stop_confirmed") is True
 
+    async def verify_generation(self, binding: NativeBrainBinding) -> None:
+        metadata = await self.call("brain", {})
+        if (
+            binding.runtime_id is None
+            or binding.host_id is None
+            or metadata.get("thread_id") != binding.thread_id
+            or metadata.get("runtime_id") != binding.runtime_id
+            or metadata.get("host_id") != binding.host_id
+        ):
+            raise OmnigentError("Native owner generation changed", code=ErrorCode.CONFLICT)
+
 
 class BgrController:
     def __init__(
@@ -105,22 +116,37 @@ class BgrController:
         try:
             while True:
                 await asyncio.sleep(60)
-                await self.brain.inspect()
-                self.authorize(self.user_id, self.brain_session_id)
-                team = self.store.acquire(
-                    self.user_id,
-                    self.brain_session_id,
-                    self.team_id,
-                    LeaseRequest(controller_id=self.fence.controller_id, ttl_seconds=300),
-                )
-                if team.epoch != self.fence.epoch:
-                    raise OmnigentError("Brain lease epoch changed", code=ErrorCode.CONFLICT)
+                await self.renew_lease()
         except (OmnigentError, OSError, ValueError, RuntimeError, TimeoutError):
             _logger.warning("BGR lease renewal stopped; native roles require reconciliation")
             await asyncio.gather(
                 *(self.runtime.stop(session) for session in self.connections),
                 return_exceptions=True,
             )
+
+    async def renew_lease(self) -> None:
+        team = self.store.get_team(self.user_id, self.brain_session_id, self.team_id)
+        recovering = bool(
+            team.runtime_recoveries and team.runtime_recoveries[-1].state == "binding"
+        )
+        if recovering:
+            _, _, binding = self.store.runtime_recovery_target(self.user_id, self.team_id)
+            await self.runtime.verify_generation(binding)
+            await self.brain.inspect()
+            self.store.resume_live_runtime_recovery(
+                self.user_id, self.brain_session_id, self.team_id, self.fence, binding=binding
+            )
+            return
+        await self.brain.inspect()
+        self.authorize(self.user_id, self.brain_session_id)
+        team = self.store.acquire(
+            self.user_id,
+            self.brain_session_id,
+            self.team_id,
+            LeaseRequest(controller_id=self.fence.controller_id, ttl_seconds=300),
+        )
+        if team.epoch != self.fence.epoch:
+            raise OmnigentError("Brain lease epoch changed", code=ErrorCode.CONFLICT)
 
     def _register(self, connection: NativeBgrConnection) -> None:
         previous = self.connections.get(connection.identity.session_id)
@@ -464,15 +490,7 @@ class BgrControllers:
                     binding = self.store.native_brain_binding(
                         user_id, brain_session_id, team_id, fence
                     )
-                metadata = await runtime.call("brain", {})
-                if (
-                    binding.runtime_id is None
-                    or binding.host_id is None
-                    or metadata.get("runtime_id") != binding.runtime_id
-                    or metadata.get("host_id") != binding.host_id
-                    or metadata.get("thread_id") != binding.thread_id
-                ):
-                    raise OmnigentError("Native owner generation changed", code=ErrorCode.CONFLICT)
+                await runtime.verify_generation(binding)
                 await old.brain.inspect()
                 if recovering:
                     self.store.resume_live_runtime_recovery(

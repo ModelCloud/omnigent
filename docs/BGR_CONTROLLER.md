@@ -5,6 +5,11 @@ The [full design](BRAIN_EXECUTOR_REVIEWER_DESIGN.md) remains the target. No Poll
 behavior, seeded agent, or runtime prompt changes are included. New Chat has a
 configuration-only BGR entry; it is not a runnable catalog agent.
 
+The lease heartbeat uses the same exact live host/native identity checks and
+binding-only renewal while final attachment is pending; it does not treat a
+healthy persisted replacement as normal attached input authority. A changed
+host/runtime/thread or lost native identity still requires reconciliation.
+
 ## Brain evaluation of independent reviews
 
 The sealed-sibling barrier is not a Brain decision. Round status exposes an exact

@@ -128,6 +128,7 @@ async def test_same_live_attach_inspects_owner_and_rejects_changed_generation(co
         is current
     )
     assert len(processes[BRAIN].calls) > before
+    await current.renew_lease()
 
     async def changed(operation, parameters):
         metadata = await current.runtime.call(operation, parameters)
@@ -145,7 +146,9 @@ async def test_same_live_attach_inspects_owner_and_rejects_changed_generation(co
 
 @pytest.mark.parametrize("cached", [True, False])
 @pytest.mark.parametrize("expired", [True, False])
-@pytest.mark.parametrize("loss", [None, "foreign_generation", "lost_identity"])
+@pytest.mark.parametrize(
+    "loss", [None, "foreign_generation", "foreign_host", "foreign_thread", "lost_identity"]
+)
 async def test_replacement_attach_retries_only_exact_live_native_binding(
     replacement_recovery, monkeypatch, cached, expired, loss
 ):
@@ -157,9 +160,13 @@ async def test_replacement_attach_retries_only_exact_live_native_binding(
     async def host_call(operation, parameters):
         if operation == "brain":
             return {
-                "thread_id": binding.thread_id,
-                "runtime_id": uuid4().hex if foreign else binding.runtime_id,
-                "host_id": HOST,
+                "thread_id": str(uuid4())
+                if foreign and loss == "foreign_thread"
+                else binding.thread_id,
+                "runtime_id": uuid4().hex
+                if foreign and loss == "foreign_generation"
+                else binding.runtime_id,
+                "host_id": uuid4().hex if foreign and loss == "foreign_host" else HOST,
             }
         assert operation == "rpc" and parameters["session_id"] == session
         method, params = parameters["method"], parameters["params"]
@@ -189,7 +196,7 @@ async def test_replacement_attach_retries_only_exact_live_native_binding(
         if expired:
             clock = store._now_us() + 301_000_000
             monkeypatch.setattr(store, "_now_us", lambda: clock)
-        if loss == "foreign_generation":
+        if loss is not None and loss.startswith("foreign_"):
             foreign = True
         elif loss == "lost_identity":
             connection = native.connection
@@ -208,10 +215,17 @@ async def test_replacement_attach_retries_only_exact_live_native_binding(
         if loss is not None:
             with pytest.raises(OmnigentError):
                 await retry()
+            with pytest.raises(OmnigentError):
+                await first.renew_lease()
             assert store.get_team(OWNER, session, TEAM).lease_expires_at == deadline
         else:
             resumed = await retry()
             assert (resumed is first) == cached
+            before_renewal = store.get_team(OWNER, session, TEAM).lease_expires_at
+            clock = store._now_us() + 301_000_000
+            monkeypatch.setattr(store, "_now_us", lambda: clock)
+            await resumed.renew_lease()
+            assert store.get_team(OWNER, session, TEAM).lease_expires_at > before_renewal
             assert store.get_team(OWNER, session, TEAM).runtime_recoveries[-1].state == "binding"
             with pytest.raises(OmnigentError):
                 store.check_session_runtime_input(session)
