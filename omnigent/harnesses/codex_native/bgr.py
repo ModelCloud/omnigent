@@ -29,6 +29,14 @@ from omnigent.harnesses.codex_native.app_server import (
 from omnigent.stores.bgr_store import BgrStore
 
 
+def bgr_thread_config() -> dict[str, JsonValue]:
+    return {
+        "features.multi_agent": False,
+        "features.multi_agent_v2": False,
+        "features.defer_mailbox_preemption": True,
+    }
+
+
 class _Wire(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, extra="forbid", strict=True, frozen=True)
 
@@ -282,11 +290,7 @@ class CodexNativeBgrAdapter:
     def startup_options(self) -> CodexMessage:
         """Required thread/start options for the caller; never start a thread here."""
         return {
-            "config": {
-                "features.multi_agent": False,
-                "features.multi_agent_v2": False,
-                "features.defer_mailbox_preemption": True,
-            },
+            "config": bgr_thread_config(),
             "dynamicTools": [
                 self.capabilities.model_dump(mode="json", by_alias=True)["reportTool"]
             ],

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import json
 import tempfile
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -21,13 +22,22 @@ from omnigent.harnesses.codex_native.app_server import (
     CodexAppServerClient,
     CodexMessage,
     CodexNativeAppServer,
+    NativeCodexLaunch,
     _model_provider_override,
     build_codex_native_server,
     client_for_transport,
     resolve_native_codex_launch,
 )
-from omnigent.harnesses.codex_native.bgr import NativeCapabilities
+from omnigent.harnesses.codex_native.bgr import NativeCapabilities, bgr_thread_config
+from omnigent.harnesses.multidex_native.config import (
+    load_multidex_config,
+    multidex_model_for_selection,
+    multidex_provider_config_overrides,
+    multidex_registration_bearer_token,
+    multidex_runtime_provider_id,
+)
 from omnigent.host.git_worktree import create_worktree
+from omnigent.host.provider_health import annotate_provider_speed
 from omnigent.runner import bgr_publisher
 from omnigent.spec.types import AgentSpec, ExecutorSpec, ProviderAuth
 
@@ -50,6 +60,86 @@ _RPC_METHODS = frozenset(
 
 def bgr_brain_registered(session_id: str) -> bool:
     return session_id in _RUNTIMES
+
+
+def bgr_native_config_overrides() -> tuple[str, ...]:
+    return tuple(f"{key}={json.dumps(value)}" for key, value in bgr_thread_config().items())
+
+
+def resolve_bgr_profile(profile: Profile, spec: AgentSpec | None) -> NativeCodexLaunch:
+    if profile.harness != "codex-native":
+        raise ValueError("BGR requires the native harness")
+    try:
+        config = load_multidex_config(require_token=False)
+    except FileNotFoundError:
+        config = None
+    registration = multidex_model_for_selection(config, profile.model) if config else None
+    variant = registration.variant if registration else "regular"
+    if profile.variant not in {None, variant}:
+        raise ValueError("BGR variant does not match the registered endpoint")
+    row: dict[str, object] = {"providerId": profile.provider, "variant": variant}
+    annotate_provider_speed([row])
+    if profile.speed is not None and float(profile.speed) != row["speed"]:
+        raise ValueError("BGR speed does not match the registered endpoint")
+    if registration is not None:
+        if registration.provider != profile.provider:
+            raise ValueError("BGR provider does not match the registered endpoint")
+        if not multidex_registration_bearer_token(registration):
+            raise ValueError("BGR provider needs a configured credential")
+        assert config is not None
+        provider = multidex_runtime_provider_id(registration.provider)
+        return NativeCodexLaunch(
+            model=registration.model,
+            profile=None,
+            summary="BGR registered MultiDex endpoint",
+            config_overrides=[
+                *multidex_provider_config_overrides(config),
+                f"model_provider={json.dumps(provider)}",
+                f"model={json.dumps(registration.model)}",
+            ],
+        )
+    role_spec = dataclasses.replace(
+        spec or AgentSpec(spec_version=1),
+        executor=ExecutorSpec(auth=ProviderAuth(name=profile.provider)),
+    )
+    return resolve_native_codex_launch(model=profile.model, spec=role_spec)
+
+
+async def bgr_thread_start_options(client: CodexAppServerClient) -> CodexMessage:
+    response = await client.request("bgr/capabilities/read", {})
+    capabilities = NativeCapabilities.model_validate(_JSON.validate_python(response["result"]))
+    tools = [capabilities.report_tool, capabilities.send_tool, capabilities.reply_tool]
+    if any(tool is None for tool in tools):
+        raise OmnigentError("Native message tools are unavailable", code=ErrorCode.CONFLICT)
+    return {"config": bgr_thread_config(), "dynamicTools": tools}
+
+
+async def unregister_bgr_brain(
+    session_id: str, *, app_server: CodexNativeAppServer | None = None
+) -> bool:
+    """Only a verified stopped Brain owner may release its registry and child processes."""
+    runtime = _RUNTIMES.get(session_id)
+    if runtime is None:
+        return True
+    if runtime.brain.server is not app_server:
+        return False
+    process = runtime.brain.server.proc
+    if process is not None and process.returncode is None:
+        return False
+    async with runtime._lock:
+        for role in tuple(runtime.roles.values()):
+            if role is not runtime.brain and not role.stopped:
+                result = await runtime.operation("stop", {"session_id": role.session_id})
+                if result.get("stop_confirmed") is not True:
+                    return False
+        for role in runtime.roles.values():
+            for remove in role.remove_observers:
+                remove()
+            await role.client.close()
+        runtime.roles.clear()
+        if _RUNTIMES.get(session_id) is runtime:
+            del _RUNTIMES[session_id]
+    return True
 
 
 @dataclass
@@ -233,15 +323,7 @@ class BgrRuntime:
             if assigned not in self._workspaces.values():
                 raise OmnigentError("Worker workspace is not assigned", code=ErrorCode.FORBIDDEN)
             workspace = Path(assigned.worktree)
-        if profile.harness != "codex-native" or profile.variant or profile.speed:
-            raise OmnigentError("Native profile cannot be honored", code=ErrorCode.INVALID_INPUT)
-        spec = dataclasses.replace(
-            self.spec or AgentSpec(spec_version=1),
-            executor=ExecutorSpec(auth=ProviderAuth(name=profile.provider)),
-        )
-        launch = await asyncio.to_thread(
-            resolve_native_codex_launch, model=profile.model, spec=spec
-        )
+        launch = await asyncio.to_thread(resolve_bgr_profile, profile, self.spec)
         if launch.login_required:
             raise OmnigentError("Role provider requires login", code=ErrorCode.FORBIDDEN)
         directory = self.brain.server.codex_home.parent / f"bgr-{session_id}"
@@ -256,7 +338,7 @@ class BgrRuntime:
             bridge_dir=directory / "bridge",
             session_id=session_id,
             codex_path=self.brain.server.codex_path,
-            extra_config_overrides=launch.config_overrides,
+            extra_config_overrides=[*launch.config_overrides, *bgr_native_config_overrides()],
             reasoning_effort=profile.reasoning,
             reconcile_process_registry=False,
         )
@@ -276,6 +358,7 @@ class BgrRuntime:
             if profile.reasoning is not None:
                 options["reasoningEffort"] = profile.reasoning
             if role == "grunt":
+                startup_options = await bgr_thread_start_options(client)
                 started = await client.request(
                     "thread/start",
                     {
@@ -283,6 +366,7 @@ class BgrRuntime:
                         "model": profile.model,
                         "approvalPolicy": "never",
                         "sandbox": "workspace-write",
+                        **startup_options,
                     },
                 )
                 thread = _JSON.validate_python(
