@@ -746,7 +746,7 @@ Private host RPC is `POST /v1/sessions/{brain_session_id}/bgr/runtime`:
 ```
 
 It returns `thread_id`, `runtime_id`, `host_id`, `process_loss_recovery:false`.
-After durable revocation, an authenticated owner recovery flow may request:
+The native runtime has a cleanup operation:
 
 ```json
 {"operation":"stop_generation","parameters":{"runtime_id":"<exact old generation>"}}
@@ -769,15 +769,28 @@ An owner can initiate revocation even without a live controller via
 `POST /v1/bgr/teams/{team_id}/recover` with JSON `{}` and ordinary authenticated
 owner credentials. The team, Brain, host and generation come from durable records;
 caller-supplied fences or stop attestations are rejected. Revocation commits before
-any runner RPC. It then retires only the cached controller with the exact revoked
+any host RPC. It then retires only the cached controller with the exact revoked
 fence and cancels its lease heartbeat, serialized against attachment; a newer
 controller is untouched. Retirement is not process-stop evidence and does not await
-host shutdown under controller locks. The server checks the bound host/generation
-before requesting `stop_generation`. Retries reuse the pending recovery. An unreachable runner,
-generation mismatch or the current unverified process-group stop returns HTTP 202
+host shutdown under controller locks. The server resolves exactly one retained,
+revoked supervisor admission and requests its stop through the original host's
+authenticated supervisor channel, not the native runtime. Retries reuse the recovery
+ID as the stop request ID and require identical receipt evidence. An unsupported,
+unavailable or replaced host, malformed admission, or unverified stop returns HTTP 202
 with `stop_status:"unknown"`, `replacement_enabled:false` and recovery `stopping`.
-Even a positive bare host boolean is not accepted as complete stop evidence. No epoch
-advance, replacement launch or initial-input replay occurs through this endpoint.
+A verified receipt covering the original Brain and every reserved/bound worker
+quarantines old inputs and transitions only to `stopped`, preserving the old epoch,
+controller and zero lease. No native/PID fallback, epoch advance, replacement launch
+or initial-input replay occurs through this endpoint. Replacement stays disabled
+even after `stop_status:"stopped"`.
+
+Verify cold-restart success, exact retry, conflicting receipt and unsupported-host
+denial through the real HTTP/store boundary:
+
+```bash
+.venv/bin/python -m pytest tests/server/integration/test_bgr.py \
+  -k owner_recovery_uses_exact_supervisor_receipt_across_app_restart --reruns 0 -q
+```
 
 The durable store APIs are:
 
@@ -801,8 +814,14 @@ The durable store APIs are:
   controller, epoch, runtime and thread. Exact argument retries are stable.
 - `check_runtime_input(user, brain_session, team)`: shared public-input guard;
   requires owner/Brain identity, a live lease and no unfinished recovery.
+- `complete_supervised_runtime_recovery(user, brain, team, *, request, result)`:
+  revalidates the typed stop receipt against the exact retained admission within
+  the write transaction. It requires complete old role/attempt/session coverage,
+  stores the exact request/receipt hashes and receipt ID, and quarantines old work
+  without replay. Identical retries are stable; conflicting evidence is rejected.
+  It leaves recovery `stopped`, launch blocked, and the old epoch/controller fenced.
 - `complete_runtime_recovery(user, brain_session, team, *, recovery_id, evidence)`:
-  trusted-supervisor-only transition. Evidence must contain matching `runtime_id`,
+  legacy internal transition, denied for supervised history. Evidence must contain matching `runtime_id`,
   `host_id`, explicit `inventory_complete:true` (including starting/unbound process
   claims), and a `processes` entry for the exact Brain and every previous-epoch
   native binding. Entries contain `session_id`, `thread_id`, `role`, `process_tag`,
@@ -813,7 +832,8 @@ The durable store APIs are:
   authenticated durable supervisor admission journal is still required before
   exposing this transition through a recovery endpoint.
 
-Only verified completion advances the epoch and makes the next controller ready.
+Only the legacy internal completion advances the epoch and makes the next controller ready.
+Supervised receipt reconciliation deliberately does neither.
 Old reserved attempts become failed with checkpoints preserved, unfinished reviews
 become explicitly incomplete, and unconsumed old envelopes get unknown/not-replayed
 discard evidence, never fabricated consumption. Publication claims remain intact
@@ -821,7 +841,9 @@ for reconciliation. The logical Brain/team and original launch request are uncha
 The replacement must use a fresh native home/thread/runtime and a **separate recovery
 context**, never the already-delivered initial task or temporary reviewer roots.
 
-Recovery progresses `stopping → ready → binding → attached`. Normal input,
+The legacy ledger progresses `stopping → ready → binding → attached`. Supervised
+recovery currently stops at `stopping → stopped`; a dedicated fresh-start transition
+has not been implemented. Normal input,
 `sys_bgr_control`, callbacks and publication must remain blocked until `attached`.
 Only trusted startup can install the one fresh native Brain binding in `ready`;
 `mark_launch_running` finishes its attachment. A second different binding is denied.
@@ -921,10 +943,10 @@ historical-domain reconciliation, including systemd invocation identity, is not
 implemented. Previously durable CLOSED receipts retain stable retry identity.
 
 No root broker/service or supervised start adapter is installed or enabled by
-these primitives. The public recovery endpoint still does not advance recovery
-from this transport. Dedicated admission, scoped runtime transport, trusted
-receipt reconciliation, fresh-input replacement and real privileged acceptance
-remain required before advertising process-loss recovery.
+these primitives. The public recovery endpoint can reconcile a trusted receipt
+to `stopped`, but cannot authorize replacement. Dedicated admission, scoped runtime
+transport, fresh-input replacement and production isolation acceptance remain
+required before advertising process-loss recovery.
 
 ```bash
 .venv/bin/python -m pytest tests/host/test_bgr_supervisor.py \

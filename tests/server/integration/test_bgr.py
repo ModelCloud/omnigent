@@ -1,5 +1,6 @@
 """BGR HTTP contract through create_app, bound runners and real SQL stores."""
 
+import asyncio
 import json
 from random import Random
 from types import SimpleNamespace
@@ -11,7 +12,19 @@ import pytest
 from starlette.requests import Request
 
 from omnigent.bgr import Fence, LaunchRequest, LeaseRequest, NativeBrainBinding, TeamCreate
+from omnigent.bgr_supervision import (
+    ClosedGenerationManifest,
+    GenerationStopReceipt,
+    SupervisorStopped,
+    supervision_digest,
+)
 from omnigent.errors import OmnigentError
+from omnigent.host.frames import (
+    CAP_BGR_SUPERVISOR_STOP,
+    HostHelloFrame,
+    HostStopBgrGenerationFrame,
+    decode_host_frame,
+)
 from omnigent.runner.bgr_runtime import load_bgr_team_config
 from omnigent.runner.identity import (
     ORCHESTRATION_SOURCE_HEADER,
@@ -35,6 +48,7 @@ from omnigent.stores.file_store.sqlalchemy_store import SqlAlchemyFileStore
 from omnigent.stores.permission_store.sqlalchemy_store import SqlAlchemyPermissionStore
 from tests.host.test_bgr_supervisor import request_stop as request_stop
 from tests.server.test_bgr_generation_auth import accounts_provider as accounts_provider
+from tests.server.test_host_registry import FakeWebSocket
 from tests.stores.test_bgr_store import CONFIG
 
 pytestmark = pytest.mark.asyncio
@@ -1050,10 +1064,9 @@ async def test_public_input_and_mcp_deny_durable_roles_after_authority_loss(
         await check_bgr_session_input(app.state, ordinary, restart=True)
 
 
-@pytest.mark.parametrize("host_result", ["unknown", "unavailable", "error", "foreign", "positive"])
 @pytest.mark.parametrize("cached", ["absent", "old", "newer"])
 async def test_owner_recovery_retires_only_old_controller_before_host_rpc(
-    bgr_environment, monkeypatch, host_result, cached
+    bgr_environment, monkeypatch, cached
 ):
     application, brain, _, permissions, now = bgr_environment
     app = application()
@@ -1082,51 +1095,11 @@ async def test_owner_recovery_retires_only_old_controller_before_host_rpc(
         if cached != "absent":
             registry._controllers[brain] = controller
         now[0] += 301
-        operations = []
-
-        async def handle(request):
-            assert request.url.path == f"/v1/sessions/{brain}/bgr/runtime"
-            current = store.get_team("alice", brain, team_id)
-            assert current.runtime_recoveries[-1].state == "stopping"
-            assert current.epoch == 1 and current.lease_expires_at == 0
-            assert not registry._attach_lock.locked()
-            if cached == "newer":
-                assert registry.get(brain) is controller
-            else:
-                with pytest.raises(OmnigentError, match="not attached"):
-                    registry.get(brain)
-            with pytest.raises(OmnigentError):
-                store.check_session_runtime_input(brain)
-            payload = json.loads(request.content)
-            operations.append(payload["operation"])
-            if host_result == "error":
-                raise httpx.ConnectError("private host detail", request=request)
-            if payload["operation"] == "brain":
-                return httpx.Response(
-                    200,
-                    json={
-                        "thread_id": binding.thread_id,
-                        "host_id": binding.host_id,
-                        "runtime_id": uuid4().hex
-                        if host_result == "foreign"
-                        else binding.runtime_id,
-                    },
-                )
-            assert payload == {
-                "operation": "stop_generation",
-                "parameters": {"runtime_id": binding.runtime_id},
-            }
-            return httpx.Response(200, json={"domain_stop_confirmed": host_result == "positive"})
-
+        get_runner = AsyncMock(side_effect=AssertionError("No native or PID fallback"))
+        monkeypatch.setattr("omnigent.server.routes.sessions._get_runner_client", get_runner)
         async with httpx.AsyncClient(
-            transport=httpx.MockTransport(handle), base_url="http://bound-runner"
-        ) as host:
-
-            async def get_runner(session_id, router):
-                assert session_id == brain
-                return None if host_result == "unavailable" else host
-
-            monkeypatch.setattr("omnigent.server.routes.sessions._get_runner_client", get_runner)
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
             url = f"{PREFIX}/teams/{team_id}/recover"
             owner = {"X-Forwarded-Email": "alice"}
             for forbidden in (
@@ -1145,7 +1118,6 @@ async def test_owner_recovery_retires_only_old_controller_before_host_rpc(
             result = response.json()
             assert result["stop_status"] == "unknown" and not result["replacement_enabled"]
             assert result["recovery"]["state"] == "stopping"
-            assert "private host detail" not in response.text
             again = await client.post(url, headers=owner, json={})
             assert again.status_code == 202 and again.json() == result
             assert heartbeat.cancel.call_count == (1 if cached == "old" else 0)
@@ -1157,10 +1129,187 @@ async def test_owner_recovery_retires_only_old_controller_before_host_rpc(
             permissions.revoke("alice", brain)
             denied = await client.post(url, headers=owner, json={})
             assert denied.status_code == 404
-        expected = [] if host_result == "unavailable" else ["brain"]
-        if host_result in {"unknown", "positive"}:
-            expected.append("stop_generation")
-        assert operations == expected * 2
+        get_runner.assert_not_called()
+        assert not registry._attach_lock.locked()
+        with pytest.raises(OmnigentError):
+            store.check_session_runtime_input(brain)
         after = store.get_team("alice", brain, team_id)
         assert after.epoch == 1 and after.lease_expires_at == 0
         assert len(after.runtime_recoveries) == 1
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    ["stopped", "unknown", "disconnected", "foreign", "partial", "replaced", "conflicting"],
+)
+async def test_owner_recovery_uses_exact_supervisor_receipt_across_app_restart(
+    bgr_environment, request_stop, db_uri, monkeypatch, outcome
+):
+    application, _, _, permissions, _ = bgr_environment
+    store = application().state.bgr_store
+    profile = CONFIG.brain.model_copy(update={"harness": "codex-native"})
+    config = CONFIG.model_copy(update={"brain": profile, "grunt": profile, "reviewers": [profile]})
+    intent = store.reserve_launch(
+        "alice",
+        HOST,
+        LaunchRequest(
+            team_id=uuid4().hex,
+            agent_id="bgr-test",
+            workspace="/work",
+            config=config,
+            initial_prompt="Must not replay after recovery",
+        ),
+    )
+    brain, team_id = intent.brain_session_id, intent.team_id
+    fence = Fence(controller_id=intent.controller_id, epoch=1)
+    binding = NativeBrainBinding(
+        team_id=team_id, epoch=1, thread_id=str(uuid4()), runtime_id=uuid4().hex, host_id=HOST
+    )
+    generation = request_stop.admission.generation.model_copy(
+        update={
+            "host_id": HOST,
+            "team_id": team_id,
+            "brain_session_id": brain,
+            "controller_id": intent.controller_id,
+            "epoch": 1,
+            "runtime_id": binding.runtime_id,
+            "runner_id": token_bound_runner_id("recovery-http"),
+        }
+    )
+    supervised_admission = request_stop.admission.model_copy(update={"generation": generation})
+    conversations = SqlAlchemyConversationStore(db_uri)
+    conversations.create_conversation(
+        conversation_id=brain, host_id=binding.host_id, workspace="/work"
+    )
+    conversations.set_runner_id(brain, supervised_admission.generation.runner_id)
+    permissions.grant("alice", brain, LEVEL_OWNER)
+    store.create("alice", brain, TeamCreate(team_id=team_id, config=config))
+    store.acquire("alice", brain, team_id, LeaseRequest(controller_id=intent.controller_id))
+    store.native_brain_binding("alice", brain, team_id, fence, binding=binding)
+    store.mark_launch_running("alice", brain, team_id, fence)
+    store.reserve_supervised_generation("alice", supervised_admission.generation)
+    store.activate_supervised_generation("alice", supervised_admission)
+    get_runner = AsyncMock(side_effect=AssertionError("No native or PID fallback"))
+    monkeypatch.setattr("omnigent.server.routes.sessions._get_runner_client", get_runner)
+    first_result = None
+    receipt = None
+    for retry in range(2):
+        app = application()
+        registry = app.state.host_registry
+        connection = None
+        if outcome != "disconnected":
+            connection = registry.register(
+                binding.host_id,
+                FakeWebSocket(),
+                HostHelloFrame(
+                    version="test",
+                    frame_protocol_version=1,
+                    name="supervised",
+                    capabilities=[CAP_BGR_SUPERVISOR_STOP],
+                ),
+                owner="alice",
+            )
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            pending = asyncio.create_task(
+                client.post(
+                    f"{PREFIX}/teams/{team_id}/recover",
+                    headers={"X-Forwarded-Email": "alice"},
+                    json={},
+                )
+            )
+            if connection is not None:
+                queued = await asyncio.wait_for(connection.outbound_queue.get(), timeout=5)
+                frame = decode_host_frame(queued.data)
+                assert isinstance(frame, HostStopBgrGenerationFrame)
+                request = frame.request
+                current = store.get_team("alice", brain, team_id)
+                recovery = current.runtime_recoveries[-1]
+                assert request.request_id == request.recovery_id == recovery.recovery_id
+                assert request.admission == supervised_admission
+                assert current.epoch == fence.epoch
+                assert current.controller_id == fence.controller_id
+                assert current.lease_expires_at == 0
+                assert store.get_launch("alice", team_id).state == "blocked"
+                stop_future = connection.pending_bgr_stops[request.request_id]
+                if outcome in {"stopped", "foreign", "partial", "replaced", "conflicting"}:
+                    if receipt is None:
+                        manifest = ClosedGenerationManifest(
+                            admission=supervised_admission,
+                            closed_admission_sequence=1,
+                            journal_sequence=2,
+                            claims=[
+                                {
+                                    "claim_id": supervised_admission.root_claim_id,
+                                    "admission_sequence": 1,
+                                    "domain_id": supervised_admission.domain.domain_id,
+                                    "role": "runner",
+                                    "session_id": brain,
+                                    "disposition": "domain_stopped",
+                                }
+                            ],
+                        )
+                        receipt = GenerationStopReceipt(
+                            recovery_id=request.recovery_id,
+                            receipt_id=uuid4().hex,
+                            manifest=manifest,
+                            manifest_sha256=supervision_digest(manifest),
+                            proof="cgroup.kill+recursive-populated-zero",
+                        )
+                    result = SupervisorStopped(
+                        request_id=request.request_id,
+                        request_sha256=supervision_digest(request),
+                        receipt=receipt,
+                    ).model_dump(mode="json")
+                    if outcome == "foreign":
+                        result["receipt"]["recovery_id"] = uuid4().hex
+                    elif outcome == "conflicting" and retry:
+                        result["receipt"]["receipt_id"] = uuid4().hex
+                    elif outcome == "partial":
+                        result["receipt"]["manifest"]["claims"] = []
+                    elif outcome == "replaced":
+                        registry.register(
+                            binding.host_id,
+                            FakeWebSocket(),
+                            connection.hello,
+                            owner="alice",
+                        )
+                else:
+                    result = {
+                        "status": "unknown",
+                        "request_id": request.request_id,
+                        "reason": "private supervisor failure",
+                    }
+                if not stop_future.done():
+                    stop_future.set_result(result)
+            response = await asyncio.wait_for(pending, timeout=5)
+        assert response.status_code == 202, response.text
+        body = response.json()
+        assert not body["replacement_enabled"]
+        expected = (
+            "stopped"
+            if outcome == "stopped" or (outcome == "conflicting" and not retry)
+            else "unknown"
+        )
+        assert body["stop_status"] == expected
+        assert body["recovery"]["state"] == (
+            "stopped" if outcome in {"stopped", "conflicting"} else "stopping"
+        )
+        assert "private supervisor failure" not in response.text
+        if first_result is None:
+            first_result = body
+        elif outcome == "conflicting":
+            assert body["recovery"] == first_result["recovery"]
+        else:
+            assert body == first_result
+        current = store.get_team("alice", brain, team_id)
+        assert current.epoch == fence.epoch and current.controller_id == fence.controller_id
+        assert current.lease_expires_at == 0
+        with pytest.raises(OmnigentError):
+            store.claim_launch("alice", team_id, uuid4().hex)
+        with pytest.raises(OmnigentError):
+            store.validate_supervised_generation(supervised_admission.generation)
+        with pytest.raises(OmnigentError):
+            store.check_session_runtime_input(brain)
+    get_runner.assert_not_called()

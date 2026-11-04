@@ -9,6 +9,11 @@ from pydantic import JsonValue, TypeAdapter
 
 from omnigent.bgr import Fence, Identifier, Record
 from omnigent.bgr_control import BgrControl
+from omnigent.bgr_supervision import (
+    SupervisorStopped,
+    SupervisorStopRequest,
+    supervision_digest,
+)
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.server.auth import LEVEL_OWNER, AuthProvider
 from omnigent.server.bgr_controller import BgrControllers, BgrHostRuntime
@@ -84,7 +89,7 @@ def create_bgr_control_router(
             )
         previous = team.runtime_recoveries[-1] if team.runtime_recoveries else None
         if previous is not None and previous.state != "attached":
-            if previous.state != "stopping":
+            if previous.state not in {"stopping", "stopped"}:
                 raise OmnigentError(
                     "Replacement attach requires reconciliation", code=ErrorCode.CONFLICT
                 )
@@ -107,28 +112,42 @@ def create_bgr_control_router(
                 epoch=recovery.previous_epoch,
             ),
         )
+        stop_status = "unknown"
         try:
-            from omnigent.server.routes.sessions import _get_runner_client
-
-            conversation = await asyncio.to_thread(conversations.get_conversation, session)
-            client = await _get_runner_client(session, request.app.state.runner_router)
-            if (
-                client is not None
-                and conversation is not None
-                and conversation.host_id == binding.host_id
-            ):
-                runtime = _host_runtime(client, session)
-                metadata = await runtime.call("brain", {})
-                if all(
-                    metadata.get(key) == getattr(binding, key)
-                    for key in ("runtime_id", "host_id", "thread_id")
-                ):
-                    await runtime.call("stop_generation", {"runtime_id": recovery.runtime_id})
+            admission = await asyncio.to_thread(
+                controllers.store.recovery_admission, user, team_id, recovery.recovery_id
+            )
+            stop_request = SupervisorStopRequest(
+                request_id=recovery.recovery_id,
+                recovery_id=recovery.recovery_id,
+                admission=admission,
+            )
+            host_registry = request.app.state.host_registry
+            connection = host_registry.get(admission.generation.host_id)
+            if connection is None:
+                raise ConnectionError("Original supervisor host is unavailable")
+            receipt = await host_registry.request_bgr_generation_stop(
+                connection, stop_request, owner_id=user
+            )
+            reconciled = await asyncio.to_thread(
+                controllers.store.complete_supervised_runtime_recovery,
+                user,
+                session,
+                team_id,
+                request=stop_request,
+                result=SupervisorStopped(
+                    request_id=stop_request.request_id,
+                    request_sha256=supervision_digest(stop_request),
+                    receipt=receipt,
+                ),
+            )
+            recovery = reconciled.runtime_recoveries[-1]
+            stop_status = "stopped"
         except (httpx.HTTPError, OmnigentError, OSError, ValueError, RuntimeError, TimeoutError):
             pass
         return {
             "recovery": recovery.model_dump(mode="json"),
-            "stop_status": "unknown",
+            "stop_status": stop_status,
             "replacement_enabled": False,
         }
 
