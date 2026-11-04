@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import type { AvailableAgent } from "@/hooks/useAvailableAgents";
 import { useHostModelOptions, type Host } from "@/hooks/useHosts";
 import {
@@ -7,7 +7,9 @@ import {
   bgrProfileFromCatalog,
   emptyBgrProfile,
   readBgrDraft,
+  validateBgrLaunchDraft,
   writeBgrDraft,
+  type BgrDraft,
   type BgrProfileDraft,
 } from "@/lib/bgrDraft";
 import { NativeModelSelectors } from "@/components/NativeModelSelectors";
@@ -15,6 +17,7 @@ import { BRAIN_HARNESS_LABELS } from "@/lib/agentLabels";
 import { nativeCodingAgentForHarness } from "@/lib/nativeCodingAgents";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
   DialogContent,
@@ -34,6 +37,7 @@ function RoleProfile({
   harnesses,
   harnessLabels,
   onChange,
+  disabled = false,
 }: {
   title: string;
   description: string;
@@ -42,6 +46,7 @@ function RoleProfile({
   harnesses: readonly string[];
   harnessLabels: Readonly<Record<string, string>>;
   onChange: (profile: BgrProfileDraft) => void;
+  disabled?: boolean;
 }) {
   const id = useId();
   const catalog = useHostModelOptions(
@@ -76,7 +81,7 @@ function RoleProfile({
     else onChange({ ...profile, model });
   };
   return (
-    <fieldset className="min-w-0 space-y-3 rounded-xl border p-4">
+    <fieldset disabled={disabled} className="min-w-0 space-y-3 rounded-xl border p-4">
       <legend className="px-1 font-medium">{title}</legend>
       <p className="text-xs text-muted-foreground">{description}</p>
       <div className="space-y-1.5">
@@ -210,12 +215,20 @@ export function BgrConfigurationDialog({
   agents,
   harnessLabels = BRAIN_HARNESS_LABELS,
   onClose,
+  onLaunch,
+  launchUnavailableReason,
+  initialPrompt = "",
+  supportedHarnesses,
 }: {
   scope: string | null;
   host: Host | undefined;
   agents: readonly AvailableAgent[];
   harnessLabels?: Readonly<Record<string, string>>;
   onClose: () => void;
+  onLaunch?: (draft: BgrDraft, initialPrompt: string) => Promise<void>;
+  launchUnavailableReason?: string | null;
+  initialPrompt?: string;
+  supportedHarnesses?: readonly string[];
 }) {
   const key = bgrDraftStorageKey(scope, host?.host_id ?? null);
   const [restored] = useState(() => readBgrDraft(key));
@@ -223,8 +236,43 @@ export function BgrConfigurationDialog({
   const [error, setError] = useState(restored.error);
   const [saved, setSaved] = useState(false);
   const [savedDraft, setSavedDraft] = useState(JSON.stringify(restored.draft));
+  const [launching, setLaunching] = useState(false);
+  const [task, setTask] = useState(initialPrompt);
+  const launchPending = useRef(false);
   const dirty = savedDraft !== JSON.stringify(draft);
   const incomplete = bgrIncompleteProfiles(draft);
+  const launchBlocked =
+    launchUnavailableReason ??
+    (!onLaunch
+      ? "Launch unavailable: worker lifecycle, role enforcement and reviewer isolation are not implemented. Saving never starts a session or grants runtime authority."
+      : host?.status !== "online"
+        ? "Connect the selected host before launching."
+        : key === null
+          ? "Select a host and wait for your server identity before launching."
+          : (validateBgrLaunchDraft(draft) ??
+            (supportedHarnesses &&
+            [draft.brain, draft.grunt, ...draft.reviewers].some(
+              (profile) => !supportedHarnesses.includes(profile.harness.trim()),
+            )
+              ? "This host cannot run one or more selected harnesses. Choose supported harnesses for every role."
+              : !task.trim()
+                ? "Describe the initial task before launching."
+                : null)));
+  const launch = async () => {
+    if (!onLaunch || launchBlocked || launchPending.current) return;
+    launchPending.current = true;
+    setLaunching(true);
+    setError(null);
+    try {
+      await onLaunch(draft, task);
+      onClose();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "BGR launch failed. Try again.");
+    } finally {
+      launchPending.current = false;
+      setLaunching(false);
+    }
+  };
   const harnesses = [
     ...new Set(agents.flatMap((agent) => (agent.harness ? [agent.harness] : []))),
   ].sort();
@@ -240,13 +288,16 @@ export function BgrConfigurationDialog({
     <Dialog
       open
       onOpenChange={(open) => {
-        if (!open) onClose();
+        if (!open && !launchPending.current) onClose();
       }}
     >
       <DialogContent
         className="max-h-[85dvh] overflow-y-auto sm:max-w-2xl"
         onInteractOutside={(event) => {
-          if (dirty) event.preventDefault();
+          if (dirty || launchPending.current) event.preventDefault();
+        }}
+        onEscapeKeyDown={(event) => {
+          if (launchPending.current) event.preventDefault();
         }}
       >
         <DialogHeader>
@@ -261,13 +312,15 @@ export function BgrConfigurationDialog({
             Host: <strong>{host?.name ?? "No host selected"}</strong>
           </p>
           <p className="text-muted-foreground">
-            Configuration-only preview. Drafts are stored in this browser for the current server,
-            signed-in user, project and host. They are not server teams and do not sync to other
-            browsers. Do not enter credentials.
+            {!onLaunch && "Configuration-only preview. "}
+            Drafts are stored in this browser for the current server, signed-in user, project and
+            host. Saving a draft does not create a server team. Do not enter credentials.
           </p>
-          <p id="bgr-launch-unavailable" className="rounded-lg border p-3">
-            Launch unavailable: worker lifecycle, role enforcement and reviewer isolation are not
-            implemented. Saving never starts a session or grants runtime authority.
+          <p id="bgr-launch-state" className="rounded-lg border p-3">
+            {launching
+              ? "Launching BGR… Wait for confirmation before leaving this dialog."
+              : (launchBlocked ??
+                "Launch starts one brain with the selected role profiles. The server validates runtime capabilities before starting the team.")}
           </p>
         </div>
         <form
@@ -276,12 +329,31 @@ export function BgrConfigurationDialog({
           onSubmit={(event) => {
             event.preventDefault();
             event.stopPropagation();
+            if (launchPending.current) return;
             const failure = writeBgrDraft(key, draft);
             setError(failure);
             setSaved(failure === null);
             if (failure === null) setSavedDraft(JSON.stringify(draft));
           }}
         >
+          {onLaunch && (
+            <div className="space-y-1.5">
+              <label htmlFor="bgr-initial-task" className="text-sm font-medium">
+                Initial task
+              </label>
+              <Textarea
+                id="bgr-initial-task"
+                value={task}
+                disabled={launching}
+                onChange={(event) => setTask(event.target.value)}
+                placeholder="Describe what the brain should plan and assign."
+              />
+              <p className="text-xs text-muted-foreground">
+                Sent to the brain only when you launch. Saving role profiles does not save this
+                task.
+              </p>
+            </div>
+          )}
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <label htmlFor="bgr-grunt-cap" className="text-sm font-medium">
@@ -293,6 +365,7 @@ export function BgrConfigurationDialog({
                 min={1}
                 max={64}
                 step={1}
+                disabled={launching}
                 value={draft.max_active_grunts}
                 onChange={(event) =>
                   update({ ...draft, max_active_grunts: Number(event.target.value) })
@@ -307,6 +380,7 @@ export function BgrConfigurationDialog({
                 id="bgr-reviewer-count"
                 className={selectClass}
                 value={draft.reviewers.length}
+                disabled={launching}
                 onChange={(event) =>
                   update({
                     ...draft,
@@ -330,6 +404,7 @@ export function BgrConfigurationDialog({
             host={host}
             harnesses={harnesses}
             harnessLabels={harnessLabels}
+            disabled={launching}
           />
           <RoleProfile
             title="Grunt default"
@@ -339,12 +414,17 @@ export function BgrConfigurationDialog({
             host={host}
             harnesses={harnesses}
             harnessLabels={harnessLabels}
+            disabled={launching}
           />
           {reviewerSlots.map(({ profile, title }, index) => (
             <RoleProfile
               key={title}
               title={title}
-              description="Fresh reviewer-<unique> session per publication. Runtime-enforced independent contexts are not available yet."
+              description={
+                onLaunch
+                  ? "Fresh reviewer-<unique> session per publication, independently inspecting the same frozen source revision."
+                  : "Fresh reviewer-<unique> session per publication. Runtime-enforced independent contexts are not available yet."
+              }
               profile={profile}
               onChange={(next) =>
                 update({
@@ -357,6 +437,7 @@ export function BgrConfigurationDialog({
               host={host}
               harnesses={harnesses}
               harnessLabels={harnessLabels}
+              disabled={launching}
             />
           ))}
           {incomplete.length > 0 && (
@@ -382,17 +463,24 @@ export function BgrConfigurationDialog({
               ? "Draft saved in this browser. No session was launched."
               : dirty
                 ? "Unsaved changes — save before closing."
-                : "Browser-local draft. Launch remains unavailable."}
+                : onLaunch
+                  ? "Browser-local draft. Launch requires server confirmation."
+                  : "Browser-local draft. Launch remains unavailable."}
           </p>
           <div className="flex flex-wrap items-center justify-end gap-2">
-            <Button type="button" variant="ghost" onClick={onClose}>
+            <Button type="button" variant="ghost" onClick={onClose} disabled={launching}>
               Back to New Chat
             </Button>
-            <Button type="submit" disabled={key === null}>
+            <Button type="submit" disabled={key === null || launching}>
               Save draft
             </Button>
-            <Button type="button" disabled aria-describedby="bgr-launch-unavailable">
-              Launch BGR (unavailable)
+            <Button
+              type="button"
+              disabled={!onLaunch || !!launchBlocked || launching}
+              aria-describedby="bgr-launch-state"
+              onClick={() => void launch()}
+            >
+              {launching ? "Launching BGR…" : onLaunch ? "Launch BGR" : "Launch BGR (unavailable)"}
             </Button>
           </div>
         </form>

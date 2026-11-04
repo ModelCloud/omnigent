@@ -39,6 +39,15 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import type { ReactNode } from "react";
 
 import { authenticatedFetch } from "@/lib/identity";
+
+vi.mock("@/lib/bgrApi", () => ({
+  getBgrLaunchCapabilities: vi.fn().mockResolvedValue({
+    launch_supported: false,
+    supported_harnesses: [],
+    reviewer_isolation: false,
+  }),
+  launchBgr: vi.fn(),
+}));
 import { authorizeRegistryService, registryRequest } from "@/lib/mcpRegistry";
 import { readLastMcpServices, writeLastMcpServices } from "@/lib/mcpPreferences";
 
@@ -454,7 +463,7 @@ describe("NewChatLandingScreen create flow", () => {
     expect(screen.getByTestId("new-chat-landing-agent-ag_hello")).toHaveTextContent("Polly");
     fireEvent.click(screen.getByTestId("new-chat-landing-bgr"));
     expect(screen.getByRole("dialog", { name: "BGR configuration" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Launch BGR (unavailable)" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Launch BGR" })).toBeDisabled();
     expect(screen.getByTestId("new-chat-landing-submit")).toBeDisabled();
     fireEvent.submit(mainForm);
     fireEvent.keyDown(input, { key: "Enter" });
