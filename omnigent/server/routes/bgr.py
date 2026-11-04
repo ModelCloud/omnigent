@@ -45,7 +45,9 @@ def create_bgr_router(
 
     def source(request: Request) -> tuple[str, str]:
         user = require_user(request, auth_provider)
-        session = require_orchestration_source(request, user, conversations, permissions)
+        session = require_orchestration_source(
+            request, user, conversations, permissions, allow_read_only_sharing=False
+        )
         assert user is not None
         return user, session.id
 
@@ -95,7 +97,12 @@ def create_bgr_router(
         store.get_team(user, session, team_id)
         assert permissions is not None
         child = require_owned_session(
-            body.session_id, user, conversations, permissions, private=True
+            body.session_id,
+            user,
+            conversations,
+            permissions,
+            private=True,
+            allow_read_only_sharing=False,
         )
         if (
             child.parent_conversation_id != session
