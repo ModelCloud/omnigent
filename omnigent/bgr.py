@@ -297,8 +297,44 @@ class RuntimeRecovery(Record):
     previous_epoch: Annotated[int, Field(ge=1)]
     previous_controller_id: Identifier
     replacement_controller_id: Identifier
-    state: Literal["stopping", "ready", "binding", "attached"] = "stopping"
+    supervised: bool = False
+    state: Literal["stopping", "stopped", "ready", "binding", "attached"] = "stopping"
     stop_manifest_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = None
+    stop_receipt_id: Identifier | None = None
+    stop_receipt_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = None
+    stop_request_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = None
+    stop_generation: SupervisedGeneration | None = None
+
+    @model_validator(mode="after")
+    def supervised_stop_identity(self) -> Self:
+        fields = (
+            self.stop_receipt_id,
+            self.stop_receipt_sha256,
+            self.stop_request_sha256,
+            self.stop_generation,
+        )
+        if self.state == "stopped" and all(value is None for value in fields):
+            raise ValueError("Stopped recovery requires a supervised receipt")
+        if any(value is not None for value in fields):
+            if (
+                not self.supervised
+                or any(value is None for value in fields)
+                or self.stop_manifest_sha256 is None
+                or self.state == "stopping"
+            ):
+                raise ValueError(
+                    "Supervised completion requires complete terminal receipt identity"
+                )
+            generation = self.stop_generation
+            assert generation is not None
+            if (
+                generation.runtime_id != self.runtime_id
+                or generation.host_id != self.host_id
+                or generation.controller_id != self.previous_controller_id
+                or generation.epoch != self.previous_epoch
+            ):
+                raise ValueError("Receipt generation differs from the original recovery")
+        return self
 
 
 class Team(Record):

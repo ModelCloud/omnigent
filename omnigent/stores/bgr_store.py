@@ -13,7 +13,7 @@ import time
 from collections.abc import Callable
 from decimal import Decimal
 from typing import TypeVar
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from pydantic import TypeAdapter, ValidationError
 from sqlalchemy import select, update
@@ -52,7 +52,14 @@ from omnigent.bgr import (
     Team,
     TeamCreate,
 )
-from omnigent.bgr_supervision import GenerationAdmission, SupervisedGeneration
+from omnigent.bgr_supervision import (
+    GenerationAdmission,
+    GenerationStopReceipt,
+    SupervisedGeneration,
+    SupervisorStopped,
+    SupervisorStopRequest,
+    supervision_digest,
+)
 from omnigent.db.account_authority import require_active_account
 from omnigent.db.bgr_models import (
     SqlBgrAgent,
@@ -201,8 +208,12 @@ class BgrStore:
             row = db.get(SqlBgrLaunch, (current_workspace_id(), team_id))
             if row is None or row.owner_id != user_id:
                 raise _forbidden()
+            if LaunchIntent.model_validate_json(row.document).supervised_generations:
+                raise _conflict("Supervised generations require a dedicated recovery launch path")
             team = db.get(SqlBgrTeam, (current_workspace_id(), team_id))
             history = _team(team).runtime_recoveries if team is not None else []
+            if any(item.supervised for item in history):
+                raise _conflict("Supervised generations require a dedicated recovery launch path")
             if history and history[-1].state != "attached":
                 raise _conflict("BGR runtime recovery must attach before any launch retry")
             now = self._now_us()
@@ -239,60 +250,67 @@ class BgrStore:
     ) -> GenerationAdmission:
         """Resolve original revoked admission for trusted stop, never activate a generation."""
         with self._sessions("resolve_original_supervised_recovery_admission") as db:
-            row = self._owned(db, team_id, user_id, lock=False)
-            team = _team(row)
-            if (
-                team.team_id != team_id
-                or team.owner_id != user_id
-                or team.brain_session_id != row.brain_session_id
-            ):
-                raise _conflict("Recovery team identity changed")
-            matches = [item for item in team.runtime_recoveries if item.recovery_id == recovery_id]
-            if len(matches) != 1 or matches[0] != team.runtime_recoveries[-1]:
-                raise _conflict("Exact current runtime recovery is required")
-            recovery = matches[0]
-            stopping = recovery.state == "stopping"
-            expected_epoch = recovery.previous_epoch if stopping else recovery.previous_epoch + 1
-            expected_controller = (
-                recovery.previous_controller_id if stopping else recovery.replacement_controller_id
-            )
-            if (
-                row.epoch != expected_epoch
-                or row.controller_id != expected_controller
-                or (not stopping and recovery.stop_manifest_sha256 is None)
-            ):
-                raise _conflict("Runtime recovery controller fence changed")
-            launch = db.get(SqlBgrLaunch, (current_workspace_id(), team_id))
-            if launch is None or launch.owner_id != user_id:
-                raise _forbidden()
-            intent = self._supervised_intent(launch.document)
-            if (
-                intent.team_id != team_id
-                or intent.brain_session_id != team.brain_session_id
-                or intent.host_id != recovery.host_id
-            ):
-                raise _conflict("Recovery launch identity changed")
-            candidates = [
-                item
-                for item in intent.supervised_generations
-                if item.generation.team_id == team_id
-                and item.generation.brain_session_id == team.brain_session_id
-                and item.generation.controller_id == recovery.previous_controller_id
-                and item.generation.epoch == recovery.previous_epoch
-                and item.generation.runtime_id == recovery.runtime_id
-                and item.generation.host_id == recovery.host_id
-            ]
-            if len(candidates) != 1:
-                raise _conflict("Recovery requires one exact original supervised admission")
-            item = candidates[0]
-            if (
-                item.state != "revoked"
-                or item.admission is None
-                or item.admission.generation != item.generation
-            ):
-                raise _conflict("Original supervised admission must be retained and revoked")
-            require_active_account(db, user_id, generation=item.account_generation)
-            return item.admission
+            return self._recovery_admission(db, user_id, team_id, recovery_id)
+
+    def _recovery_admission(
+        self, db: Session, user_id: str, team_id: str, recovery_id: str
+    ) -> GenerationAdmission:
+        row = self._owned(db, team_id, user_id, lock=False)
+        team = _team(row)
+        if (
+            team.team_id != team_id
+            or team.owner_id != user_id
+            or team.brain_session_id != row.brain_session_id
+        ):
+            raise _conflict("Recovery team identity changed")
+        matches = [item for item in team.runtime_recoveries if item.recovery_id == recovery_id]
+        if len(matches) != 1 or matches[0] != team.runtime_recoveries[-1]:
+            raise _conflict("Exact current runtime recovery is required")
+        recovery = matches[0]
+        previous_fence = recovery.state in ("stopping", "stopped")
+        expected_epoch = recovery.previous_epoch if previous_fence else recovery.previous_epoch + 1
+        expected_controller = (
+            recovery.previous_controller_id
+            if previous_fence
+            else recovery.replacement_controller_id
+        )
+        if (
+            row.epoch != expected_epoch
+            or row.controller_id != expected_controller
+            or (recovery.state != "stopping" and recovery.stop_manifest_sha256 is None)
+        ):
+            raise _conflict("Runtime recovery controller fence changed")
+        launch = db.get(SqlBgrLaunch, (current_workspace_id(), team_id))
+        if launch is None or launch.owner_id != user_id:
+            raise _forbidden()
+        intent = self._supervised_intent(launch.document)
+        if (
+            intent.team_id != team_id
+            or intent.brain_session_id != team.brain_session_id
+            or intent.host_id != recovery.host_id
+        ):
+            raise _conflict("Recovery launch identity changed")
+        candidates = [
+            item
+            for item in intent.supervised_generations
+            if item.generation.team_id == team_id
+            and item.generation.brain_session_id == team.brain_session_id
+            and item.generation.controller_id == recovery.previous_controller_id
+            and item.generation.epoch == recovery.previous_epoch
+            and item.generation.runtime_id == recovery.runtime_id
+            and item.generation.host_id == recovery.host_id
+        ]
+        if len(candidates) != 1:
+            raise _conflict("Recovery requires one exact original supervised admission")
+        item = candidates[0]
+        if (
+            item.state != "revoked"
+            or item.admission is None
+            or item.admission.generation != item.generation
+        ):
+            raise _conflict("Original supervised admission must be retained and revoked")
+        require_active_account(db, user_id, generation=item.account_generation)
+        return item.admission
 
     @staticmethod
     def _generation_for_runner(db: Session, runner_id: str) -> SupervisedGeneration | None:
@@ -696,10 +714,16 @@ class BgrStore:
             if binding.runtime_id is None or binding.host_id is None:
                 raise _conflict("Recovery requires the recorded native runtime generation")
             recovery = team.runtime_recoveries[-1] if team.runtime_recoveries else None
-            if recovery is not None and recovery.state == "ready":
+            if recovery is not None and recovery.state in ("ready", "stopped"):
+                stopped = recovery.state == "stopped"
                 if (
-                    row.epoch != recovery.previous_epoch + 1
-                    or row.controller_id != recovery.replacement_controller_id
+                    row.epoch != recovery.previous_epoch + (0 if stopped else 1)
+                    or row.controller_id
+                    != (
+                        recovery.previous_controller_id
+                        if stopped
+                        else recovery.replacement_controller_id
+                    )
                     or recovery.stop_manifest_sha256 is None
                     or binding
                     != NativeBrainBinding(
@@ -757,6 +781,10 @@ class BgrStore:
                 or binding.host_id is None
             ):
                 raise _conflict("Recovery requires the recorded native runtime generation")
+            launch = db.get(SqlBgrLaunch, (current_workspace_id(), team_id))
+            intent = (
+                LaunchIntent.model_validate_json(launch.document) if launch is not None else None
+            )
             recovery = RuntimeRecovery(
                 recovery_id=recovery_id,
                 runtime_id=runtime_id,
@@ -765,29 +793,23 @@ class BgrStore:
                 previous_epoch=fence.epoch,
                 previous_controller_id=fence.controller_id,
                 replacement_controller_id=replacement_controller_id,
+                supervised=intent is not None and bool(intent.supervised_generations),
             )
             row.document = team.model_copy(
                 update={"runtime_recoveries": [*team.runtime_recoveries[-31:], recovery]}
             ).model_dump_json()
             row.lease_expires_at_us = 0
-            launch = db.get(SqlBgrLaunch, (current_workspace_id(), team_id))
-            if launch is not None:
-                launch.document = (
-                    LaunchIntent.model_validate_json(launch.document)
-                    .model_copy(
-                        update={
-                            "state": "blocked",
-                            "reason": "Native runtime stop is not yet confirmed",
-                            "supervised_generations": [
-                                item.model_copy(update={"state": "revoked"})
-                                for item in LaunchIntent.model_validate_json(
-                                    launch.document
-                                ).supervised_generations
-                            ],
-                        }
-                    )
-                    .model_dump_json()
-                )
+            if launch is not None and intent is not None:
+                launch.document = intent.model_copy(
+                    update={
+                        "state": "blocked",
+                        "reason": "Native runtime stop is not yet confirmed",
+                        "supervised_generations": [
+                            item.model_copy(update={"state": "revoked"})
+                            for item in intent.supervised_generations
+                        ],
+                    }
+                ).model_dump_json()
             return recovery
 
         return self._write("fence_lost_runtime_before_host_stop", apply)
@@ -804,12 +826,17 @@ class BgrStore:
         """Accept only complete exact-generation host stop evidence, never native ACKs."""
 
         def apply(db: Session) -> Team:
-            from omnigent.bgr_review import ReviewResult, ReviewRound
-            from omnigent.db.bgr_models import SqlBgrReviewRound
-
             row = self._owned(db, team_id, user_id)
             self._brain(row, session_id)
             team = _team(row)
+            if any(item.supervised for item in team.runtime_recoveries):
+                raise _conflict("Supervised generations require trusted supervisor stop receipts")
+            launch = db.get(SqlBgrLaunch, (current_workspace_id(), team_id))
+            if (
+                launch is not None
+                and LaunchIntent.model_validate_json(launch.document).supervised_generations
+            ):
+                raise _conflict("Supervised generations require trusted supervisor stop receipts")
             if not team.runtime_recoveries:
                 raise _conflict("No runtime recovery is pending")
             recovery = team.runtime_recoveries[-1]
@@ -863,96 +890,316 @@ class BgrStore:
                     or process.role != agents[attempt.agent_id].role
                 ):
                     raise _conflict("An owned native process stop is unconfirmed")
-            for attempt_row in db.scalars(
-                select(SqlBgrAttempt).where(
-                    SqlBgrAttempt.workspace_id == current_workspace_id(),
-                    SqlBgrAttempt.team_id == team_id,
-                )
-            ):
-                attempt = Attempt.model_validate_json(attempt_row.document)
-                if attempt.epoch == recovery.previous_epoch and attempt.state == "reserved":
-                    attempt_row.document = attempt.model_copy(
-                        update={"state": "failed"}
-                    ).model_dump_json()
-                    attempt_row.active_writer_key = None
-            for review_row in db.scalars(
-                select(SqlBgrReviewRound).where(
-                    SqlBgrReviewRound.workspace_id == current_workspace_id(),
-                    SqlBgrReviewRound.team_id == team_id,
-                )
-            ):
-                round = ReviewRound.model_validate_json(review_row.document)
-                if round.epoch == recovery.previous_epoch:
-                    jobs = [
-                        job
-                        if job.state == "sealed"
-                        else job.model_copy(
-                            update={
-                                "state": "sealed",
-                                "result": ReviewResult(
-                                    status="incomplete",
-                                    summary=(
-                                        "Native reviewer process was lost and its host "
-                                        "confirmed shutdown. No completed review is available."
-                                    ),
-                                ),
-                            }
-                        )
-                        for job in round.jobs
-                    ]
-                    review_row.document = round.model_copy(update={"jobs": jobs}).model_dump_json()
-            now = self._now_us()
-            for envelope_row in db.scalars(
-                select(SqlBgrEnvelope).where(
-                    SqlBgrEnvelope.workspace_id == current_workspace_id(),
-                    SqlBgrEnvelope.team_id == team_id,
-                    SqlBgrEnvelope.consumed_at_us.is_(None),
-                    SqlBgrEnvelope.discarded_at_us.is_(None),
-                )
-            ):
-                envelope = _envelope(envelope_row)
-                if envelope.epoch <= recovery.previous_epoch:
-                    envelope_row.document = envelope.model_copy(
-                        update={
-                            "discard": DiscardEvidence(
-                                epoch=recovery.previous_epoch + 1,
-                                session_id=session_id,
-                                reason=(
-                                    "Previous native generation stopped; "
-                                    "delivery/consumption is unknown, not replayed"
-                                ),
-                                discarded_at=now / _MICROSECONDS,
-                            )
-                        }
-                    ).model_dump_json()
-                    envelope_row.discarded_at_us = now
-            recovery = recovery.model_copy(
-                update={"state": "ready", "stop_manifest_sha256": digest}
+            return self._finish_runtime_recovery(
+                db, row, team, recovery, digest=digest, supervised=False
             )
-            row.document = team.model_copy(
-                update={"runtime_recoveries": [*team.runtime_recoveries[:-1], recovery]}
-            ).model_dump_json()
+
+        return self._write("replace_fenced_runtime_after_all_processes_stopped", apply)
+
+    def _finish_runtime_recovery(
+        self,
+        db: Session,
+        row: SqlBgrTeam,
+        team: Team,
+        recovery: RuntimeRecovery,
+        *,
+        digest: str,
+        supervised: bool,
+    ) -> Team:
+        from omnigent.bgr_review import ReviewResult, ReviewRound
+        from omnigent.db.bgr_models import SqlBgrReviewRound
+
+        team_id, session_id = team.team_id, team.brain_session_id
+        for attempt_row in db.scalars(
+            select(SqlBgrAttempt).where(
+                SqlBgrAttempt.workspace_id == current_workspace_id(),
+                SqlBgrAttempt.team_id == team_id,
+            )
+        ):
+            attempt = Attempt.model_validate_json(attempt_row.document)
+            if attempt.epoch == recovery.previous_epoch and attempt.state == "reserved":
+                attempt_row.document = attempt.model_copy(
+                    update={"state": "failed"}
+                ).model_dump_json()
+                attempt_row.active_writer_key = None
+        for review_row in db.scalars(
+            select(SqlBgrReviewRound).where(
+                SqlBgrReviewRound.workspace_id == current_workspace_id(),
+                SqlBgrReviewRound.team_id == team_id,
+            )
+        ):
+            round = ReviewRound.model_validate_json(review_row.document)
+            if round.epoch == recovery.previous_epoch:
+                jobs = [
+                    job
+                    if job.state == "sealed"
+                    else job.model_copy(
+                        update={
+                            "state": "sealed",
+                            "result": ReviewResult(
+                                status="incomplete",
+                                summary=(
+                                    "Native reviewer process was lost and its host "
+                                    "confirmed shutdown. No completed review is available."
+                                ),
+                            ),
+                        }
+                    )
+                    for job in round.jobs
+                ]
+                review_row.document = round.model_copy(update={"jobs": jobs}).model_dump_json()
+        now = self._now_us()
+        for envelope_row in db.scalars(
+            select(SqlBgrEnvelope).where(
+                SqlBgrEnvelope.workspace_id == current_workspace_id(),
+                SqlBgrEnvelope.team_id == team_id,
+                SqlBgrEnvelope.consumed_at_us.is_(None),
+                SqlBgrEnvelope.discarded_at_us.is_(None),
+            )
+        ):
+            envelope = _envelope(envelope_row)
+            if envelope.epoch <= recovery.previous_epoch:
+                envelope_row.document = envelope.model_copy(
+                    update={
+                        "discard": DiscardEvidence(
+                            epoch=recovery.previous_epoch + (0 if supervised else 1),
+                            session_id=session_id,
+                            reason=(
+                                "Previous native generation stopped; "
+                                "delivery/consumption is unknown, not replayed"
+                            ),
+                            discarded_at=now / _MICROSECONDS,
+                        )
+                    }
+                ).model_dump_json()
+                envelope_row.discarded_at_us = now
+        recovery = recovery.model_copy(
+            update={
+                "state": "stopped" if supervised else "ready",
+                "stop_manifest_sha256": digest,
+            }
+        )
+        row.document = team.model_copy(
+            update={"runtime_recoveries": [*team.runtime_recoveries[:-1], recovery]}
+        ).model_dump_json()
+        if supervised:
+            row.lease_expires_at_us = 0
+        else:
             row.epoch = recovery.previous_epoch + 1
             row.controller_id = recovery.replacement_controller_id
             row.lease_expires_at_us = now + 300 * _MICROSECONDS
-            launch = db.get(SqlBgrLaunch, (current_workspace_id(), team_id))
-            if launch is not None:
-                launch.document = (
-                    LaunchIntent.model_validate_json(launch.document)
-                    .model_copy(
-                        update={
-                            "controller_id": row.controller_id,
-                            "state": "pending",
-                            "reason": None,
-                        }
-                    )
-                    .model_dump_json()
+        launch = db.get(SqlBgrLaunch, (current_workspace_id(), team_id))
+        if launch is not None:
+            launch.document = (
+                LaunchIntent.model_validate_json(launch.document)
+                .model_copy(
+                    update={
+                        "controller_id": row.controller_id,
+                        "state": "blocked" if supervised else "pending",
+                        "reason": (
+                            "Stopped supervised generation; replacement launch is disabled"
+                            if supervised
+                            else None
+                        ),
+                    }
                 )
-                launch.claim_id = None
-                launch.claim_expires_at_us = 0
-            return _team(row)
+                .model_dump_json()
+            )
+            launch.claim_id = None
+            launch.claim_expires_at_us = 0
+        return _team(row)
 
-        return self._write("replace_fenced_runtime_after_all_processes_stopped", apply)
+    def complete_supervised_runtime_recovery(
+        self,
+        user_id: str,
+        session_id: str,
+        team_id: str,
+        *,
+        request: SupervisorStopRequest,
+        result: SupervisorStopped,
+    ) -> Team:
+        """Complete trusted host-registry output; never accept a public caller's receipt."""
+
+        def apply(db: Session) -> Team:
+            row = self._owned(db, team_id, user_id)
+            self._brain(row, session_id)
+            try:
+                original = SupervisorStopRequest.model_validate_json(request.model_dump_json())
+                stopped = SupervisorStopped.model_validate_json(result.model_dump_json())
+                receipt = stopped.verify(original)
+            except ValueError as exc:
+                raise _conflict("Invalid supervised stop result") from exc
+            admission = self._recovery_admission(db, user_id, team_id, original.recovery_id)
+            if original.admission != admission:
+                raise _conflict("Stop result differs from the retained original admission")
+            team = _team(row)
+            recovery = team.runtime_recoveries[-1]
+            receipt_digest = supervision_digest(receipt)
+            request_digest = supervision_digest(original)
+            if recovery.state != "stopping":
+                if (
+                    recovery.state != "stopped"
+                    or recovery.stop_receipt_id != receipt.receipt_id
+                    or recovery.stop_manifest_sha256 != receipt.manifest_sha256
+                    or recovery.stop_receipt_sha256 != receipt_digest
+                    or recovery.stop_request_sha256 != request_digest
+                    or recovery.stop_generation != admission.generation
+                ):
+                    raise _conflict("Recovery already has different supervised stop evidence")
+                self._verify_supervised_claims(db, team, recovery, receipt)
+                return team
+            self._verify_supervised_claims(db, team, recovery, receipt)
+            recovery = recovery.model_copy(
+                update={
+                    "state": "stopped",
+                    "supervised": True,
+                    "stop_receipt_id": receipt.receipt_id,
+                    "stop_manifest_sha256": receipt.manifest_sha256,
+                    "stop_receipt_sha256": receipt_digest,
+                    "stop_request_sha256": request_digest,
+                    "stop_generation": admission.generation,
+                }
+            )
+            return self._finish_runtime_recovery(
+                db, row, team, recovery, digest=receipt.manifest_sha256, supervised=True
+            )
+
+        return self._write("complete_trusted_supervised_generation_stop", apply)
+
+    def _verify_supervised_claims(
+        self, db: Session, team: Team, recovery: RuntimeRecovery, receipt: GenerationStopReceipt
+    ) -> None:
+        from omnigent.bgr_review import ReviewRound
+        from omnigent.db.bgr_models import SqlBgrReviewRound
+
+        admission = receipt.manifest.admission
+        root = next(
+            claim for claim in receipt.manifest.claims if claim.claim_id == admission.root_claim_id
+        )
+        if (
+            root.role != "runner"
+            or root.attempt_id is not None
+            or root.session_id != team.brain_session_id
+            or root.disposition != "domain_stopped"
+        ):
+            raise _conflict("Exact root runner domain stop is unconfirmed")
+        brain_row = db.get(SqlBgrNativeBinding, (current_workspace_id(), team.brain_agent_id))
+        if brain_row is None or brain_row.team_id != team.team_id:
+            raise _conflict("Original Brain binding is missing")
+        brain = NativeBrainBinding.model_validate_json(brain_row.document)
+        if (
+            brain.team_id != team.team_id
+            or brain.epoch != recovery.previous_epoch
+            or brain.runtime_id != recovery.runtime_id
+            or brain.host_id != recovery.host_id
+            or brain.thread_id != recovery.previous_thread_id
+            or brain_row.thread_id != UUID(brain.thread_id).hex
+        ):
+            raise _conflict("Original Brain binding changed")
+        agents = {
+            agent.id: Agent.model_validate_json(agent.document)
+            for agent in db.scalars(
+                select(SqlBgrAgent).where(
+                    SqlBgrAgent.workspace_id == current_workspace_id(),
+                    SqlBgrAgent.team_id == team.team_id,
+                )
+            )
+        }
+        identities: dict[str, tuple[str, str]] = {}
+        required: set[str] = set()
+        for attempt_row in db.scalars(
+            select(SqlBgrAttempt).where(
+                SqlBgrAttempt.workspace_id == current_workspace_id(),
+                SqlBgrAttempt.team_id == team.team_id,
+            )
+        ):
+            attempt = Attempt.model_validate_json(attempt_row.document)
+            if attempt.epoch != recovery.previous_epoch:
+                continue
+            agent = agents.get(attempt.agent_id)
+            if (
+                attempt.attempt_id != attempt_row.id
+                or attempt.team_id != team.team_id
+                or attempt.task_id != attempt_row.task_id
+                or agent is None
+                or agent.team_id != team.team_id
+                or agent.agent_id != attempt.agent_id
+                or agent.session_id != attempt.session_id
+                or agent.role not in ("grunt", "reviewer")
+                or attempt.workspace.host_id != recovery.host_id
+            ):
+                raise _conflict("Old attempt identity is inconsistent")
+            identities[attempt.attempt_id] = (agent.role, attempt.session_id)
+            if attempt.state == "reserved":
+                required.add(attempt.attempt_id)
+        bound: set[str] = set()
+        for mapping in db.scalars(
+            select(SqlBgrNativeBinding).where(
+                SqlBgrNativeBinding.workspace_id == current_workspace_id(),
+                SqlBgrNativeBinding.team_id == team.team_id,
+            )
+        ):
+            if mapping.id == team.brain_agent_id:
+                continue
+            binding = NativeBinding.model_validate_json(mapping.document)
+            if binding.epoch != recovery.previous_epoch:
+                if mapping.id in identities or binding.epoch > recovery.previous_epoch:
+                    raise _conflict("Native binding epoch differs from its old attempt")
+                continue
+            if (
+                binding.team_id != team.team_id
+                or binding.attempt_id != mapping.id
+                or binding.attempt_id not in identities
+                or UUID(binding.thread_id).hex != mapping.thread_id
+            ):
+                raise _conflict("Old native binding identity is inconsistent")
+            bound.add(binding.attempt_id)
+        required.update(bound)
+        for review_row in db.scalars(
+            select(SqlBgrReviewRound).where(
+                SqlBgrReviewRound.workspace_id == current_workspace_id(),
+                SqlBgrReviewRound.team_id == team.team_id,
+            )
+        ):
+            review = ReviewRound.model_validate_json(review_row.document)
+            if review.epoch != recovery.previous_epoch:
+                continue
+            if review.team_id != team.team_id or review.round_id != review_row.id:
+                raise _conflict("Old review allocation identity is inconsistent")
+            for job in review.jobs:
+                identity = ("reviewer", job.session_id)
+                if job.attempt_id in identities and identities[job.attempt_id] != identity:
+                    raise _conflict("Reviewer allocation has conflicting attempt identity")
+                identities[job.attempt_id] = identity
+        seen: set[str] = set()
+        for claim in receipt.manifest.claims:
+            if claim == root:
+                continue
+            identity = identities.get(claim.attempt_id) if claim.attempt_id is not None else None
+            if claim.role == "helper":
+                if (claim.attempt_id is not None and identity is None) or claim.session_id not in (
+                    None,
+                    identity[1] if identity else team.brain_session_id,
+                ):
+                    raise _conflict("Helper claim has foreign worker identity")
+                continue
+            if (
+                identity is None
+                or claim.role != identity[0]
+                or claim.attempt_id in seen
+                or claim.session_id not in (None, identity[1])
+            ):
+                raise _conflict("Worker claim is foreign, conflicting or ambiguous")
+            if claim.attempt_id in bound and (
+                claim.session_id != identity[1] or claim.disposition != "domain_stopped"
+            ):
+                raise _conflict("Bound worker domain stop is unconfirmed")
+            assert claim.attempt_id is not None
+            seen.add(claim.attempt_id)
+        if required - seen:
+            raise _conflict(
+                "An old native binding or reserved attempt lacks an explicit stop claim"
+            )
 
     def resume_live_runtime_recovery(
         self,
