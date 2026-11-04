@@ -114,6 +114,40 @@ async def create_team(client, brain):
     return team, {"controller_id": controller_id, "epoch": response.json()["epoch"]}
 
 
+async def test_http_control_and_callback_fail_closed_before_brain_attach(bgr_environment):
+    application, brain, worker, _, _ = bgr_environment
+    app = application()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        team, _ = await create_team(client, brain)
+        for session in (brain, worker()):
+            response = await client.post(
+                f"{PREFIX}/control",
+                headers=headers(session),
+                json={"action": "status", "action_id": uuid4().hex},
+            )
+            assert response.status_code >= 400
+        response = await client.post(
+            f"{PREFIX}/teams/{team['team_id']}/native-callback",
+            headers=headers(brain),
+            json={
+                "session_id": worker(),
+                "thread_id": str(uuid4()),
+                "method": "runtime/thread-ready",
+                "params": {},
+            },
+        )
+        assert response.status_code == 403
+        response = await client.post(
+            f"{PREFIX}/control",
+            headers=headers(brain, user="bob"),
+            json={"action": "status", "action_id": uuid4().hex},
+        )
+        assert response.status_code == 403
+    await app.state.bgr_controllers.close()
+
+
 def task_request(worker, fence):
     return {
         **fence,
