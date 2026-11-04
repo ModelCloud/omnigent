@@ -1,10 +1,14 @@
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { AvailableAgent } from "@/hooks/useAvailableAgents";
 import type { Host } from "@/hooks/useHosts";
 import { getBgrLaunchCapabilities, launchBgr, type BgrLaunchResult } from "@/lib/bgrApi";
-import type { BgrDraft } from "@/lib/bgrDraft";
-import { randomUUID } from "@/lib/randomUUID";
+import { bgrDraftStorageKey, type BgrDraft } from "@/lib/bgrDraft";
+import {
+  confirmBgrLaunchAttempt,
+  reserveBgrLaunchAttempt,
+  type BgrLaunchAttempt,
+} from "@/lib/bgrLaunchAttempt";
 import { BgrConfigurationDialog } from "./BgrConfigurationDialog";
 
 export function BgrLaunchDialog({
@@ -28,6 +32,13 @@ export function BgrLaunchDialog({
   onClose: () => void;
   onLaunched: (result: BgrLaunchResult) => void;
 }) {
+  const active = useRef(true);
+  useEffect(() => {
+    active.current = true;
+    return () => {
+      active.current = false;
+    };
+  }, []);
   const capabilities = useQuery({
     queryKey: ["bgr-capabilities", scope, host?.host_id],
     queryFn: ({ signal }) => getBgrLaunchCapabilities(host!.host_id, signal),
@@ -35,7 +46,7 @@ export function BgrLaunchDialog({
     retry: false,
     staleTime: 0,
   });
-  const attempt = useRef<{ fingerprint: string; teamId: string } | null>(null);
+  const attempt = useRef<BgrLaunchAttempt | null>(null);
   const launchUnavailableReason =
     host?.status !== "online"
       ? "Connect the selected host before launching."
@@ -66,14 +77,17 @@ export function BgrLaunchDialog({
       projectId,
     };
     const fingerprint = JSON.stringify([scope, host.host_id, request]);
+    const attemptKey = `${bgrDraftStorageKey(scope, host.host_id)}:launch-attempt`;
     if (attempt.current?.fingerprint !== fingerprint) {
-      attempt.current = { fingerprint, teamId: randomUUID().replaceAll("-", "") };
+      attempt.current = reserveBgrLaunchAttempt(attemptKey, fingerprint);
     }
+    const pending = attempt.current;
     const result = await launchBgr(host.host_id, {
       ...request,
-      teamId: attempt.current.teamId,
+      teamId: pending.teamId,
     });
-    onLaunched(result);
+    confirmBgrLaunchAttempt(attemptKey, pending);
+    if (active.current) onLaunched(result);
   };
 
   return (

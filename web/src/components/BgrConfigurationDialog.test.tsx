@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BgrConfigurationDialog } from "./BgrConfigurationDialog";
 import { BgrLaunchDialog } from "./BgrLaunchDialog";
@@ -464,7 +464,7 @@ function renderLauncher(overrides: Partial<Parameters<typeof BgrLaunchDialog>[0]
   );
 }
 
-it("negotiates capabilities, launches the exact profiles and reuses the retry key after failure", async () => {
+it("negotiates capabilities and reuses the exact retry key after failure and reopening", async () => {
   const draft = readyDraft();
   const onLaunched = vi.fn();
   vi.mocked(getBgrLaunchCapabilities).mockResolvedValue({
@@ -475,12 +475,15 @@ it("negotiates capabilities, launches the exact profiles and reuses the retry ke
   vi.mocked(launchBgr)
     .mockRejectedValueOnce(new Error("Connection lost"))
     .mockResolvedValueOnce({ brainSessionId: "brain-session", state: "running" });
-  renderLauncher({ onLaunched });
+  const { unmount } = renderLauncher({ onLaunched });
   await waitFor(() => expect(screen.getByRole("button", { name: "Launch BGR" })).toBeEnabled());
   expect(getBgrLaunchCapabilities).toHaveBeenCalledWith("host-a", expect.any(AbortSignal));
   fireEvent.click(screen.getByRole("button", { name: "Launch BGR" }));
   await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Connection lost"));
   expect(onLaunched).not.toHaveBeenCalled();
+  unmount();
+  renderLauncher({ onLaunched });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Launch BGR" })).toBeEnabled());
   fireEvent.click(screen.getByRole("button", { name: "Launch BGR" }));
   await waitFor(() =>
     expect(onLaunched).toHaveBeenCalledExactlyOnceWith({
@@ -502,6 +505,46 @@ it("negotiates capabilities, launches the exact profiles and reuses the retry ke
     },
   ]);
   expect(vi.mocked(launchBgr).mock.calls[1]).toEqual(first);
+});
+
+it("does not navigate back after an unmounted launcher receives its confirmation", async () => {
+  readyDraft();
+  const onLaunched = vi.fn();
+  vi.mocked(getBgrLaunchCapabilities).mockResolvedValue({
+    launch_supported: true,
+    supported_harnesses: ["codex-native"],
+    reviewer_isolation: true,
+  });
+  let confirmLaunch!: (result: Awaited<ReturnType<typeof launchBgr>>) => void;
+  vi.mocked(launchBgr).mockReturnValue(
+    new Promise((resolve) => {
+      confirmLaunch = resolve;
+    }),
+  );
+  const { unmount } = renderLauncher({ onLaunched });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Launch BGR" })).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name: "Launch BGR" }));
+  expect(launchBgr).toHaveBeenCalledOnce();
+  unmount();
+  await act(async () => confirmLaunch({ brainSessionId: "brain-session", state: "running" }));
+  expect(onLaunched).not.toHaveBeenCalled();
+});
+
+it("requests no team if its retry identity cannot be persisted", async () => {
+  readyDraft();
+  vi.mocked(getBgrLaunchCapabilities).mockResolvedValue({
+    launch_supported: true,
+    supported_harnesses: ["codex-native"],
+    reviewer_isolation: true,
+  });
+  renderLauncher();
+  await waitFor(() => expect(screen.getByRole("button", { name: "Launch BGR" })).toBeEnabled());
+  vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+    throw new Error("quota");
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Launch BGR" }));
+  await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("no new team"));
+  expect(launchBgr).not.toHaveBeenCalled();
 });
 
 it.each(["unsupported", "unverified"])(
