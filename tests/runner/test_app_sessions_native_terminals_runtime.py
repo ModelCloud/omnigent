@@ -634,6 +634,11 @@ async def test_auto_create_codex_terminal_uses_persisted_resume_launch_config(
                 ``{"timeout": 10.0}`` or ``{"params": {"limit": 1000}}``.
             :returns: HTTP 200 response carrying launch config.
             """
+            if url == f"/v1/sessions/{session_id}/labels":
+                assert not use_envelope, "Codex init must use the supplied launch metadata"
+                return httpx.Response(
+                    200, json={"labels": session_labels}, request=httpx.Request("GET", url)
+                )
             if url == f"/v1/sessions/{session_id}/items":
                 return httpx.Response(
                     200,
@@ -1131,7 +1136,7 @@ async def test_auto_create_codex_terminal_fork_clones_rollout_and_resumes(
             url: str,
             *,
             timeout: float,
-            params: dict[str, str],
+            params: dict[str, str] | None = None,
         ) -> httpx.Response:
             """
             Return the clone's snapshot carrying fork labels but no thread id.
@@ -1142,6 +1147,17 @@ async def test_auto_create_codex_terminal_fork_clones_rollout_and_resumes(
             :returns: HTTP 200 response with fork labels.
             """
             del timeout
+            if url == f"/v1/sessions/{session_id}/labels":
+                return httpx.Response(
+                    200,
+                    json={
+                        "labels": {
+                            FORK_SOURCE_LABEL_KEY: source_id,
+                            FORK_SOURCE_EXTERNAL_SESSION_LABEL_KEY: source_thread,
+                        }
+                    },
+                    request=httpx.Request("GET", url),
+                )
             assert url == f"/v1/sessions/{session_id}"
             assert params == {
                 "include_items": "false",
@@ -1430,6 +1446,8 @@ async def test_auto_create_codex_terminal_fork_builds_rollout_from_items_and_res
             :returns: HTTP 200 response.
             """
             del timeout
+            if url == f"/v1/sessions/{session_id}/labels":
+                return httpx.Response(200, json={"labels": {}}, request=httpx.Request("GET", url))
             if url == f"/v1/sessions/{session_id}":
                 assert params == {
                     "include_items": "false",
@@ -1453,7 +1471,7 @@ async def test_auto_create_codex_terminal_fork_builds_rollout_from_items_and_res
                     request=httpx.Request("GET", url),
                 )
             assert url == f"/v1/sessions/{session_id}/items"
-            assert params is not None and params.get("order") == "asc"
+            assert params is not None and params.get("order") == "desc"
             return httpx.Response(
                 200,
                 json={
@@ -1727,6 +1745,12 @@ async def test_auto_create_codex_terminal_uses_worktree_workspace_not_bundle_dir
             :returns: HTTP 200 response carrying the worktree workspace.
             """
             del timeout, params
+            if url == f"/v1/sessions/{session_id}/labels":
+                return httpx.Response(
+                    200,
+                    json={"labels": {CODEX_NATIVE_COLLABORATION_MODE_LABEL_KEY: "plan"}},
+                    request=httpx.Request("GET", url),
+                )
             assert url == f"/v1/sessions/{session_id}"
             return httpx.Response(
                 200,
@@ -1997,6 +2021,8 @@ async def test_auto_create_codex_terminal_fresh_launch_loads_relaunch_graph(
             :returns: HTTP 200 response carrying a fresh launch config.
             """
             del kwargs
+            if url == f"/v1/sessions/{session_id}/labels":
+                return httpx.Response(200, json={"labels": {}}, request=httpx.Request("GET", url))
             assert url == f"/v1/sessions/{session_id}"
             return httpx.Response(
                 200,

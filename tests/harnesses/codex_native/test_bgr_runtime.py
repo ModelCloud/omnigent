@@ -12,6 +12,8 @@ from omnigent.errors import OmnigentError
 from omnigent.harnesses.codex_native.app_server import CodexAppServerClient
 from omnigent.harnesses.multidex_native.config import MultiDexConfig, MultiDexModelRegistration
 from omnigent.runner import bgr_runtime as runtime
+from omnigent.runner.native import orchestration
+from omnigent.spec.types import AgentSpec
 from tests.harnesses.codex_native.test_bgr_messages import CAPTURED
 from tests.stores.test_bgr_store import BRAIN, CONFIG, HOST
 
@@ -157,3 +159,78 @@ async def test_unregister_requires_stopped_exact_owner_and_joins_children(tmp_pa
         runtime._RUNTIMES.pop(BRAIN, None)
         await client.close()
         await worker_client.close()
+
+
+@pytest.mark.parametrize("fresh", [False, True])
+@pytest.mark.parametrize("failure", [None, "bind", "materialize"])
+async def test_brain_preparation_retains_tool_enabled_thread_without_a_turn(
+    monkeypatch, tmp_path, fresh, failure
+):
+    client = CodexAppServerClient(ws_url="ws://127.0.0.1:9")
+    native = SimpleNamespace(proc=SimpleNamespace(returncode=None))
+    thread_id = str(uuid4())
+    calls = []
+
+    async def request(method, params):
+        calls.append(method)
+        if method == "bgr/capabilities/read":
+            return {"result": CAPTURED}
+        if method == "thread/start":
+            assert params["cwd"] == str(tmp_path)
+            assert params["dynamicTools"] == [
+                CAPTURED[key] for key in ("reportTool", "sendTool", "replyTool")
+            ]
+            assert params["config"]["features.multi_agent"] is False
+            return {"result": {"thread": {"id": thread_id}}}
+        assert method == "thread/name/set"
+        assert params == {"threadId": thread_id, "name": "Brain"}
+        assert runtime._RUNTIMES[BRAIN].ready.is_set()
+        if failure == "materialize":
+            raise RuntimeError("materialize")
+        return {"result": {}}
+
+    async def callback(payload):
+        calls.append("bind")
+        assert payload["thread_id"] == thread_id
+        assert runtime._RUNTIMES[BRAIN].brain.client is client
+        if failure == "bind":
+            raise RuntimeError("bind")
+
+    async def close():
+        calls.append("close")
+        native.proc = None
+
+    native.close = close
+    monkeypatch.setattr(client, "request", request)
+    try:
+        pending = orchestration._prepare_bgr_brain_thread(
+            session_id=BRAIN,
+            client=client,
+            app_server=native,
+            workspace=tmp_path,
+            profiles=CONFIG,
+            callback=callback,
+            host_id=HOST,
+            team_id=uuid4().hex,
+            server_client=SimpleNamespace(),
+            spec=AgentSpec(spec_version=1),
+            thread_id=None if fresh else thread_id,
+            model="registered",
+        )
+        if failure == "bind" or (fresh and failure == "materialize"):
+            with pytest.raises(RuntimeError, match=failure):
+                await pending
+        else:
+            assert await pending == thread_id
+        expected = ["bgr/capabilities/read", "thread/start"] if fresh else []
+        expected += ["bind"]
+        if fresh and failure != "bind":
+            expected += ["thread/name/set"]
+        assert calls == expected
+        assert runtime.bgr_brain_registered(BRAIN)
+        await orchestration._close_codex_native_app_server(BRAIN, native)
+        assert calls[-1] == "close"
+        assert not runtime.bgr_brain_registered(BRAIN)
+    finally:
+        runtime._RUNTIMES.pop(BRAIN, None)
+        await client.close()
