@@ -92,7 +92,8 @@ def test_driver_uses_thread_identity_and_actual_question_anchor(drive):
 
 
 @pytest.mark.parametrize("publish", [False, True])
-def test_driver_waits_for_siblings_and_approves_each_exact_preview(drive, publish):
+@pytest.mark.parametrize("outcome", ["accept", "revise", "rereview"])
+def test_driver_waits_for_siblings_and_approves_each_exact_preview(drive, publish, outcome):
     create = drive()
     next(iter(driver._STATES.values()))["plan"]["publish"] = publish
     attempt = {"agent_id": uuid4().hex, "attempt_id": uuid4().hex}
@@ -110,7 +111,47 @@ def test_driver_waits_for_siblings_and_approves_each_exact_preview(drive, publis
     )
     status = drive(envelope("result", jobs[1]["agent_id"], "review-b"))
     assert command(status)[1]["action"] == "status"
-    preview = drive(output(status, {**round, "results_ready": True}))
+    results = {
+        **round,
+        "results_ready": True,
+        "results_sha256": "a" * 64,
+        "jobs": [
+            {
+                **job,
+                "result": {
+                    "status": "incomplete" if outcome == "rereview" else "complete",
+                    "summary": "Inspected the frozen snapshot"
+                    if outcome != "rereview"
+                    else "Could not inspect the parser",
+                    "findings": [
+                        {
+                            "severity": "high",
+                            "path": "parser.py",
+                            "description": "Parser drops malformed input",
+                        }
+                    ]
+                    if outcome == "revise"
+                    else [],
+                },
+            }
+            for job in jobs
+        ],
+    }
+    evaluation = drive(output(status, results))
+    _, decision = command(evaluation)
+    assert decision["action"] == "evaluate_reviews"
+    assert decision["evaluation"]["next_action"] == outcome
+    assert decision["evaluation"]["results_sha256"] == results["results_sha256"]
+    if outcome == "revise":
+        assert "Parser drops malformed input" in decision["evaluation"]["rationale"]
+    if outcome == "rereview":
+        assert "Could not inspect the parser" in decision["evaluation"]["rationale"]
+    preview = drive(
+        output(
+            evaluation,
+            {"decision": {**decision["evaluation"], "action_id": decision["action_id"]}},
+        )
+    )
     for job in jobs:
         assert command(preview)[1]["review_id"] == job["review_id"]
         body = "sanitized review " + job["review_id"]
@@ -122,9 +163,24 @@ def test_driver_waits_for_siblings_and_approves_each_exact_preview(drive, publis
             preview = drive(output(result, {"publication": {"state": "published"}}))
         else:
             preview = result
-            if "items" in preview:
+            if "items" in preview and job != jobs[-1]:
                 assert command(preview)[1]["action"] == "publication_preview"
-    assert "finished" in preview["text"]
+    if outcome == "accept":
+        assert "finished" in preview["text"]
+    elif outcome == "revise":
+        assert command(preview)[1]["action"] == "create_grunt"
+        assert "Parser drops malformed input" in command(preview)[1]["contract"]["instructions"]
+        state = next(iter(driver._STATES.values()))
+        assert state["revision_started"] is True
+        # An exhausted bounded fixture must not silently accept unresolved findings.
+        state["pending"] = None
+        assert "new immutable head" in drive()["text"]
+    else:
+        assert command(preview)[1]["action"] == "start_review"
+        state = next(iter(driver._STATES.values()))
+        state["pending"] = None
+        state["review_rounds"] = 2
+        assert "bounded re-review exhausted" in drive()["text"]
 
 
 def test_driver_refuses_uncertain_control_without_new_action(drive):

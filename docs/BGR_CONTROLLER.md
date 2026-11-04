@@ -5,6 +5,56 @@ The [full design](BRAIN_EXECUTOR_REVIEWER_DESIGN.md) remains the target. No Poll
 behavior, seeded agent, or runtime prompt changes are included. New Chat has a
 configuration-only BGR entry; it is not a runnable catalog agent.
 
+## Brain evaluation of independent reviews
+
+The sealed-sibling barrier is not a Brain decision. Round status exposes an exact
+`results_sha256` only when every independent reviewer is sealed. The digest binds
+the round, repository/PR, frozen base/head, role identities and actual results;
+publication metadata and Brain decisions cannot change it.
+
+After reading all findings and coverage limits, the current Brain calls the
+existing `sys_bgr_control` tool:
+
+```json
+{
+  "action": "evaluate_reviews",
+  "action_id": "<fresh 32-hex identifier>",
+  "round_id": "<round identifier>",
+  "evaluation": {
+    "results_sha256": "<exact status digest>",
+    "next_action": "accept",
+    "rationale": "Evidence-based evaluation of every independent result"
+  }
+}
+```
+
+`next_action` is `accept`, `revise` or `rereview`; incomplete coverage must not be
+silently treated as no findings. The server checks owner/Brain/fence, the sibling
+barrier and exact evidence, then atomically records the decision and idempotent
+control response in existing SQL records. Exact retries return that response;
+changed arguments/IDs cannot replace the decision for that epoch. History is
+bounded, and a new runtime epoch must evaluate the evidence again. Existing
+round documents default to no decision; no schema migration is needed.
+
+Previews remain readable after the sealed barrier. Both controller publication
+and direct trusted-ledger claims require a current evidence-bound decision, but
+**any decision outcome permits publication**: findings, no-findings and incomplete
+reviews all still require their own new PR discussion comments. This does not
+relax the exact sanitized-body approval, credential isolation or uncertain-write
+reconciliation rules.
+
+The fixture driver consumes actual sealed results before choosing a decision:
+complete/no-findings accepts; findings create one revision Grunt, then block for
+a new immutable head; incomplete coverage starts one fresh independent round,
+then explicitly blocks if still incomplete. It never manufactures revision or
+coverage success. `publish:false` previews every result without any forge write.
+
+To verify without publishing, run the controller-driver, review-store and remote
+publication tests. In an authorized no-publish runtime, inspect tool history for
+`status` with real results → `evaluate_reviews` → each `publication_preview`.
+Findings/incomplete must choose the corresponding follow-up action, not a blind
+success message. A stale hash or decision-free publish must fail before a POST.
+
 ## New Chat configuration preview
 
 On an ordinary host, open New Chat's harness/agent picker and choose **BGR →

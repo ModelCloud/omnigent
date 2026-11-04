@@ -16,7 +16,7 @@ from omnigent.runner import bgr_publisher
 from omnigent.runner.bgr_publications import RemotePublicationLedger, run_publication
 from omnigent.server.routes.bgr_publications import create_bgr_publication_router
 from omnigent.server.session_orchestration import ORCHESTRATION_SOURCE_HEADER
-from tests.stores.test_bgr_review_store import FENCE, activate, message, request
+from tests.stores.test_bgr_review_store import FENCE, activate, evaluate, message, request
 from tests.stores.test_bgr_review_store import forge as forge
 from tests.stores.test_bgr_review_store import reviews as reviews
 from tests.stores.test_bgr_store import BRAIN, OWNER, TEAM
@@ -99,6 +99,9 @@ async def test_trusted_host_publication_crosses_real_http_claim_and_reconciles(
                     ),
                 )
             round = reviews.get_review_round(OWNER, BRAIN, TEAM, round.round_id)
+            evaluate(
+                reviews, round, next_action="rereview" if status == "incomplete" else "accept"
+            )
             for job in round.jobs:
                 parameters = {
                     "team_id": TEAM,

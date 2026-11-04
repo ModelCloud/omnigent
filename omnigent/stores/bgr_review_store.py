@@ -6,24 +6,29 @@ import hashlib
 from typing import Literal
 from uuid import uuid4
 
-from pydantic import JsonValue, ValidationError
+from pydantic import JsonValue, TypeAdapter, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from omnigent.bgr import Agent, Attempt, Fence, NativeBinding, Record, Send, Workspace
+from omnigent.bgr_control import BgrControl, control_request_sha256
 from omnigent.bgr_review import (
     Publication,
+    ReviewDecision,
     ReviewJob,
     ReviewResult,
     ReviewRound,
     ReviewRoundCreate,
     independent_review_contract,
     publication_body,
+    review_results_sha256,
     sanitize_review,
     sanitize_review_payload,
+    sanitize_review_text,
     validate_publication_redactions,
 )
 from omnigent.db import current_workspace_id
+from omnigent.db.bgr_control_models import SqlBgrControlAction
 from omnigent.db.bgr_models import (
     SqlBgrAttempt,
     SqlBgrNativeBinding,
@@ -392,6 +397,8 @@ class BgrReviewStore(BgrStore):
             "base_sha": round.base_sha,
             "head_sha": round.head_sha,
             "results_ready": ready,
+            "results_sha256": review_results_sha256(round) if ready else None,
+            "decision": round.decisions[-1].model_dump(mode="json") if round.decisions else None,
             "jobs": [
                 {
                     "review_id": job.review_id,
@@ -402,6 +409,69 @@ class BgrReviewStore(BgrStore):
                 for job in round.jobs
             ],
         }
+
+    def evaluate_reviews(
+        self, user_id: str, session_id: str, team_id: str, fence: Fence, command: BgrControl
+    ) -> dict[str, JsonValue]:
+        """Atomically record a Brain decision and its idempotent control response."""
+        if (
+            command.action != "evaluate_reviews"
+            or command.round_id is None
+            or command.evaluation is None
+        ):
+            raise _conflict("A review evaluation command is required")
+        round_id, evaluation = command.round_id, command.evaluation
+        digest = control_request_sha256(command)
+
+        def apply(db: Session) -> dict[str, JsonValue]:
+            team = self._owned(db, team_id, user_id)
+            self._fence(team, session_id, fence)
+            row, round = self._round(db, team_id, round_id)
+            if not all(job.state == "sealed" for job in round.jobs):
+                raise _conflict("Independent sibling results are withheld")
+            if evaluation.results_sha256 != review_results_sha256(round):
+                raise _conflict("Evaluation does not match exact sealed review evidence")
+            existing = db.get(SqlBgrControlAction, (current_workspace_id(), command.action_id))
+            if existing is not None:
+                if (
+                    existing.team_id != team_id
+                    or existing.epoch != fence.epoch
+                    or existing.request_hash != digest
+                    or existing.state != "completed"
+                    or existing.response is None
+                ):
+                    raise _conflict("Control action ID conflict")
+                return TypeAdapter(dict[str, JsonValue]).validate_json(existing.response)
+            if (
+                any(decision.epoch == fence.epoch for decision in round.decisions)
+                or len(round.decisions) >= 32
+            ):
+                raise _conflict("Brain already evaluated this immutable round epoch")
+            decision = ReviewDecision(
+                **evaluation.model_dump(exclude={"rationale"}),
+                rationale=sanitize_review_text(evaluation.rationale),
+                action_id=command.action_id,
+                epoch=fence.epoch,
+                brain_agent_id=_team(team).brain_agent_id,
+            )
+            row.document = round.model_copy(
+                update={"decisions": [*round.decisions, decision]}
+            ).model_dump_json()
+            response: dict[str, JsonValue] = {"decision": decision.model_dump(mode="json")}
+            db.add(
+                SqlBgrControlAction(
+                    workspace_id=current_workspace_id(),
+                    id=command.action_id,
+                    team_id=team_id,
+                    epoch=fence.epoch,
+                    request_hash=digest,
+                    state="completed",
+                    response=TypeAdapter(dict[str, JsonValue]).dump_json(response).decode(),
+                )
+            )
+            return response
+
+        return self._write("evaluate_exact_sealed_independent_reviews", apply)
 
     def settle_incomplete_review(
         self,
@@ -506,6 +576,13 @@ class BgrReviewStore(BgrStore):
             row, round = self._round(db, team_id, round_id)
             job = self._job(round, review_id)
             body = publication_body(round, review_id, private_values=private_values)
+            decision = round.decisions[-1] if round.decisions else None
+            if (
+                decision is None
+                or decision.epoch != fence.epoch
+                or decision.results_sha256 != review_results_sha256(round)
+            ):
+                raise _conflict("Brain must evaluate exact sealed evidence before publication")
             if approved_body is not None:
                 body = validate_publication_redactions(body, approved_body)
             if hashlib.sha256(body.encode()).hexdigest() != approved_body_sha256:

@@ -71,6 +71,9 @@ def _respond(request: dict) -> dict:
             "published": set(),
             "pending": None,
             "round": None,
+            "decision": None,
+            "review_rounds": 0,
+            "revision_started": False,
         }
     state = _STATES[thread]
     tools = {tool["name"] for tool in request.get("tools", []) if "name" in tool}
@@ -103,6 +106,21 @@ def _respond(request: dict) -> dict:
             elif action in {"start_review", "status"}:
                 response = next(item for item in responses if "round_id" in item)
                 state["round"] = response
+                if action == "start_review":
+                    state["review_rounds"] += 1
+                    state["decision"] = None
+            elif action == "evaluate_reviews":
+                decision = next(item["decision"] for item in responses if "decision" in item)
+                evaluation = pending["arguments"]["evaluation"]
+                if (
+                    any(
+                        decision.get(key) != evaluation[key]
+                        for key in ("results_sha256", "next_action")
+                    )
+                    or decision.get("action_id") != pending["arguments"]["action_id"]
+                ):
+                    raise ValueError("Controller did not record this exact review evaluation")
+                state["decision"] = decision
             elif action == "publication_preview":
                 response = next(item for item in responses if "approved_body_sha256" in item)
                 if (
@@ -183,6 +201,38 @@ def _respond(request: dict) -> dict:
         if all(job["agent_id"] in state["results"] for job in round["jobs"]):
             return control("status", round_id=round["round_id"])
         return {"text": "Waiting for all independent reviewers; sealed results remain withheld."}
+    if state["decision"] is None:
+        if not all(
+            isinstance(job.get("result"), dict)
+            and job["result"].get("status") in {"complete", "incomplete"}
+            and isinstance(job["result"].get("findings"), list)
+            for job in round["jobs"]
+        ):
+            raise ValueError("Evaluation requires actual sealed reviewer results")
+        incomplete = [job for job in round["jobs"] if job["result"]["status"] == "incomplete"]
+        findings = [finding for job in round["jobs"] for finding in job["result"]["findings"]]
+        if incomplete:
+            next_action = "rereview"
+            rationale = "Incomplete coverage: " + "; ".join(
+                f"{job['review_id']}: {job['result']['summary']}" for job in incomplete
+            )
+        elif findings:
+            next_action = "revise"
+            rationale = "Reported findings: " + "; ".join(
+                f"{finding['path']}: {finding['description']}" for finding in findings
+            )
+        else:
+            next_action = "accept"
+            rationale = "All independent reviews are complete and report no findings."
+        return control(
+            "evaluate_reviews",
+            round_id=round["round_id"],
+            evaluation={
+                "results_sha256": round["results_sha256"],
+                "next_action": next_action,
+                "rationale": rationale[:2000],
+            },
+        )
     for job in round["jobs"]:
         if plan.get("publish", False):
             if job["review_id"] in state["published"]:
@@ -202,6 +252,36 @@ def _respond(request: dict) -> dict:
             return control(
                 "publication_preview", round_id=round["round_id"], review_id=job["review_id"]
             )
+    decision = state["decision"]
+    if decision["next_action"] == "rereview":
+        if state["review_rounds"] < 2:
+            return control(
+                "start_review",
+                **{key: plan[key] for key in ("repository", "pr_number", "base_sha", "head_sha")},
+            )
+        return {
+            "text": "BGR fixture blocked: bounded re-review exhausted; "
+            "coverage remains incomplete."
+        }
+    if decision["next_action"] == "revise":
+        if not state["revision_started"]:
+            state["revision_started"] = True
+            return control(
+                "create_grunt",
+                base_sha=plan["head_sha"],
+                contract={
+                    "objective": "Address the sealed independent review findings",
+                    "instructions": decision["rationale"],
+                    "acceptance": [
+                        "Return revision evidence and a new immutable head "
+                        "for independent re-review"
+                    ],
+                },
+            )
+        return {
+            "text": "BGR fixture blocked: revision evidence requires a new immutable head "
+            "and independent review; original findings remain unaccepted."
+        }
     return {
         "text": "BGR fixture finished: Grunts adjudicated, independent reviews sealed, "
         "and sanitized publication previews checked."

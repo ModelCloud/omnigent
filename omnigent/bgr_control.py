@@ -1,18 +1,25 @@
 """Framework-owned Brain control schema; callers never choose their source identity."""
 
+import hashlib
 from typing import Annotated, Literal, Self
 
 from pydantic import Field, model_validator
 
 from omnigent.bgr import Commit, Contract, Identifier, Record
-from omnigent.bgr_review import Repository
+from omnigent.bgr_review import Repository, ReviewEvaluation
 
 BGR_CONTROL_TOOL = "sys_bgr_control"
 
 
 class BgrControl(Record):
     action: Literal[
-        "create_grunt", "start_review", "status", "adjudicate", "publication_preview", "publish"
+        "create_grunt",
+        "start_review",
+        "status",
+        "adjudicate",
+        "evaluate_reviews",
+        "publication_preview",
+        "publish",
     ]
     action_id: Identifier
     contract: Contract | None = None
@@ -24,6 +31,7 @@ class BgrControl(Record):
     base_sha: Commit | None = None
     head_sha: Commit | None = None
     outcome: Literal["completed", "failed", "cancelled"] | None = None
+    evaluation: ReviewEvaluation | None = None
     approved_body_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = None
 
     @model_validator(mode="after")
@@ -33,6 +41,7 @@ class BgrControl(Record):
             "start_review": {"repository", "pr_number", "base_sha", "head_sha"},
             "status": set(),
             "adjudicate": {"attempt_id", "outcome"},
+            "evaluate_reviews": {"round_id", "evaluation"},
             "publication_preview": {"round_id", "review_id"},
             "publish": {"round_id", "review_id", "approved_body_sha256"},
         }[self.action]
@@ -47,6 +56,15 @@ class BgrControl(Record):
         return self
 
 
+def control_request_sha256(command: BgrControl) -> str:
+    # Optional review metadata must not change legacy action identities.
+    return hashlib.sha256(
+        command.model_dump_json(
+            exclude={"evaluation"} if command.evaluation is None else set()
+        ).encode()
+    ).hexdigest()
+
+
 def brain_control_instructions() -> str:
     return (
         "You are the persistent BGR Brain named brain. Use sys_bgr_control for dynamic grunt "
@@ -58,7 +76,14 @@ def brain_control_instructions() -> str:
         "rather than raw controller reads. Review results are sealed from independent native "
         "callbacks; you must not fabricate or rewrite them. Each independent review and "
         "re-review, including no-findings and incomplete results, needs a new PR discussion "
-        "comment. Request publication_preview, inspect its sanitized body, then publish using "
+        "comment. Once all siblings are sealed, evaluate their actual findings and coverage. "
+        "Use evaluate_reviews with the status results_sha256 and an evidence-based rationale, "
+        "choosing accept, revise or rereview. Never equate incomplete with no findings. "
+        "A decision is immutable for that epoch; revisions require a new review round. "
+        "Follow through with create_grunt for revisions or start_review for another independent "
+        "round; do not silently accept unreviewed work. Publish each review regardless of "
+        "decision outcome. Request publication_preview, inspect its sanitized body, then publish "
+        "using "
         "the exact approved_body_sha256 returned. Never include keys/tokens/private values. "
         "A native acceptance receipt is NOT model consumption. An uncertain operation must "
         "be reconciled, never repeated under a fresh ID to hide uncertainty."

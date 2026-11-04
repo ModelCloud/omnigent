@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 
 from omnigent.bgr_control import BgrControl
+from omnigent.bgr_review import ReviewEvaluation
 from omnigent.errors import OmnigentError
 from omnigent.harnesses.codex_native.bgr import NativeCapabilities
 from omnigent.harnesses.codex_native.bgr_messages import NativeBgrConnection, NativeIdentity
@@ -319,6 +320,20 @@ async def test_publish_uncertain_retries_are_read_only_reconciliation_with_same_
         review_id=round.jobs[0].review_id,
         approved_body_sha256="d" * 64,
     )
+    evaluation = BgrControl(
+        action="evaluate_reviews",
+        action_id=uuid4().hex,
+        round_id=round.round_id,
+        evaluation=ReviewEvaluation(
+            results_sha256=current.store.review_status(OWNER, BRAIN, TEAM, round.round_id)[
+                "results_sha256"
+            ],
+            next_action="accept",
+            rationale="No independent findings in either sealed review.",
+        ),
+    )
+    decision = await current.execute(OWNER, BRAIN, evaluation)
+    assert await current.execute(OWNER, BRAIN, evaluation) == decision
     current.runtime.call = AsyncMock(
         side_effect=[
             {"publication": {"state": "uncertain"}},

@@ -8,13 +8,16 @@ import pytest
 from pydantic import ValidationError
 
 from omnigent.bgr import Ack, ConfigUpdate, Fence, NativeBinding, Send, Workspace
+from omnigent.bgr_control import BgrControl, control_request_sha256
 from omnigent.bgr_review import (
     Publication,
+    ReviewEvaluation,
     ReviewFinding,
     ReviewResult,
     ReviewRound,
     ReviewRoundCreate,
     publication_body,
+    review_results_sha256,
     sanitize_review,
 )
 from omnigent.errors import OmnigentError
@@ -128,17 +131,144 @@ def message(round, job, brain_agent_id, **overrides):
     )
 
 
-def sealed_round(reviews):
+def evaluate(reviews, round, *, next_action="accept"):
+    status = reviews.review_status(OWNER, BRAIN, TEAM, round.round_id)
+    command = BgrControl(
+        action="evaluate_reviews",
+        action_id=uuid4().hex,
+        round_id=round.round_id,
+        evaluation=ReviewEvaluation(
+            results_sha256=status["results_sha256"],
+            next_action=next_action,
+            rationale="Brain evaluated all sealed fixture evidence.",
+        ),
+    )
+    reviews.evaluate_reviews(OWNER, BRAIN, TEAM, FENCE, command)
+    return reviews.get_review_round(OWNER, BRAIN, TEAM, round.round_id)
+
+
+def sealed_round(reviews, *, evaluated=True):
     round = reviews.reserve_review_round(OWNER, BRAIN, TEAM, request())
     brain = reviews.get_team(OWNER, BRAIN, TEAM).brain_agent_id
     for job in round.jobs:
         activate(reviews, round, job)
         reviews.send(OWNER, job.session_id, TEAM, message(round, job, brain))
-    return reviews.get_review_round(OWNER, BRAIN, TEAM, round.round_id)
+    round = reviews.get_review_round(OWNER, BRAIN, TEAM, round.round_id)
+    return evaluate(reviews, round) if evaluated else round
 
 
 def approve(round, job):
     return hashlib.sha256(publication_body(round, job.review_id).encode()).hexdigest()
+
+
+def test_optional_evaluation_preserves_existing_control_claim_identity():
+    command = BgrControl(
+        action="adjudicate", action_id=uuid4().hex, attempt_id=uuid4().hex, outcome="completed"
+    )
+    assert (
+        control_request_sha256(command)
+        == hashlib.sha256(command.model_dump_json(exclude={"evaluation"}).encode()).hexdigest()
+    )
+
+
+@pytest.mark.parametrize("next_action", ["accept", "revise", "rereview"])
+def test_brain_evaluation_is_exact_immutable_durable_and_required_to_publish(
+    reviews, db_uri, next_action
+):
+    round = sealed_round(reviews, evaluated=False)
+    digest = review_results_sha256(round)
+    assert digest != review_results_sha256(round.model_copy(update={"head_sha": "f" * 40}))
+    job = round.jobs[0]
+    arguments = {
+        "round_id": round.round_id,
+        "review_id": job.review_id,
+        "approved_body_sha256": approve(round, job),
+        "claim_id": uuid4().hex,
+        "author_login": "trusted-publisher",
+    }
+    with pytest.raises(OmnigentError, match="evaluate"):
+        reviews.claim_publication(OWNER, BRAIN, TEAM, FENCE, **arguments)
+    command = BgrControl(
+        action="evaluate_reviews",
+        action_id=uuid4().hex,
+        round_id=round.round_id,
+        evaluation=ReviewEvaluation(
+            results_sha256=digest,
+            next_action=next_action,
+            rationale="Explicit Brain evaluation of each sealed review.",
+        ),
+    )
+    for owner, source, fence, body in (
+        ("outsider", BRAIN, FENCE, command),
+        (OWNER, job.session_id, FENCE, command),
+        (OWNER, BRAIN, FENCE.model_copy(update={"epoch": 2}), command),
+        (
+            OWNER,
+            BRAIN,
+            FENCE,
+            command.model_copy(
+                update={
+                    "evaluation": command.evaluation.model_copy(
+                        update={"results_sha256": "0" * 64}
+                    )
+                }
+            ),
+        ),
+    ):
+        with pytest.raises(OmnigentError):
+            reviews.evaluate_reviews(owner, source, TEAM, fence, body)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(
+            pool.map(
+                lambda _: reviews.evaluate_reviews(OWNER, BRAIN, TEAM, FENCE, command), range(2)
+            )
+        )
+    restarted = BgrReviewStore(db_uri)
+    assert (
+        results[0] == results[1] == restarted.evaluate_reviews(OWNER, BRAIN, TEAM, FENCE, command)
+    )
+    assert (
+        restarted.review_status(OWNER, BRAIN, TEAM, round.round_id)["decision"]
+        == results[0]["decision"]
+    )
+    for changed in (
+        command.model_copy(update={"action_id": uuid4().hex}),
+        command.model_copy(
+            update={
+                "evaluation": command.evaluation.model_copy(
+                    update={"rationale": "Changed evaluation"}
+                )
+            }
+        ),
+    ):
+        with pytest.raises(OmnigentError):
+            reviews.evaluate_reviews(OWNER, BRAIN, TEAM, FENCE, changed)
+    reviews.claim_publication(OWNER, BRAIN, TEAM, FENCE, **arguments)
+    updated = restarted.get_review_round(OWNER, BRAIN, TEAM, round.round_id)
+    assert len(updated.decisions) == 1
+    assert (
+        updated.decisions[0].brain_agent_id == reviews.get_team(OWNER, BRAIN, TEAM).brain_agent_id
+    )
+    assert review_results_sha256(updated) == digest
+
+
+def test_evaluation_cannot_cross_sealed_sibling_barrier(reviews):
+    round = reviews.reserve_review_round(OWNER, BRAIN, TEAM, request())
+    command = BgrControl(
+        action="evaluate_reviews",
+        action_id=uuid4().hex,
+        round_id=round.round_id,
+        evaluation=ReviewEvaluation(
+            results_sha256="0" * 64,
+            next_action="accept",
+            rationale="Cannot infer missing sibling results.",
+        ),
+    )
+    with pytest.raises(OmnigentError, match="withheld"):
+        reviews.evaluate_reviews(OWNER, BRAIN, TEAM, FENCE, command)
+    assert reviews.review_status(OWNER, BRAIN, TEAM, round.round_id)["decision"] is None
+    with pytest.raises(ValueError, match="sealed"):
+        review_results_sha256(round)
 
 
 @pytest.mark.parametrize(
@@ -618,6 +748,7 @@ def test_publisher_redacts_host_only_values_before_approval_claim_and_post(
     round = reviews.get_review_round(OWNER, BRAIN, TEAM, round.round_id)
     job = round.jobs[0]
     publisher = BgrGitHubPublisher(reviews, "/trusted/workspace")
+    evaluate(reviews, round)
     monkeypatch.setattr(bgr_publisher, "_private_values", lambda *args: private)
     body = publisher.preview(OWNER, BRAIN, TEAM, round_id=round.round_id, review_id=job.review_id)
     assert all(value not in body for value in private)
@@ -755,6 +886,7 @@ def test_failed_reviewer_settles_incomplete_without_starving_sibling_publication
     assert restarted.drain(OWNER, BRAIN, TEAM)[0].sender_agent_id == completed.agent_id
     round = restarted.get_review_round(OWNER, BRAIN, TEAM, round.round_id)
     publisher = BgrGitHubPublisher(restarted, "/trusted/workspace")
+    evaluate(restarted, round, next_action="rereview")
     for job in round.jobs:
         assert publish(publisher, round, job).publication.state == "published"
     assert len(calls) == 2

@@ -140,6 +140,10 @@ class BgrController:
     ) -> dict[str, JsonValue]:
         self.authorize(user_id, source_session_id)
         async with self._actions_lock:
+            if command.action == "evaluate_reviews":
+                return self.store.evaluate_reviews(
+                    user_id, source_session_id, self.team_id, self.fence, command
+                )
             if command.action in {"status", "publication_preview"}:
                 return await self._execute(command)
             previous = self.actions.claim(
@@ -213,6 +217,16 @@ class BgrController:
             raise OmnigentError(
                 "Independent sibling results are withheld", code=ErrorCode.CONFLICT
             )
+        if command.action == "publish":
+            decision = status.get("decision")
+            if (
+                not isinstance(decision, dict)
+                or decision.get("epoch") != self.fence.epoch
+                or decision.get("results_sha256") != status.get("results_sha256")
+            ):
+                raise OmnigentError(
+                    "Brain must evaluate exact sealed review evidence", code=ErrorCode.CONFLICT
+                )
         return await self.runtime.call(
             "publication_reconcile" if reconcile_publication else command.action,
             {

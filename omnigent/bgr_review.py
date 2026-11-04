@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import json
 import re
 from typing import Annotated, Literal, Self
 
@@ -139,6 +140,18 @@ class ReviewJob(Record):
         return self
 
 
+class ReviewEvaluation(Record):
+    results_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    next_action: Literal["accept", "revise", "rereview"]
+    rationale: Annotated[str, Field(min_length=1, max_length=2000)]
+
+
+class ReviewDecision(ReviewEvaluation):
+    action_id: Identifier
+    epoch: Annotated[int, Field(ge=1)]
+    brain_agent_id: Identifier
+
+
 class ReviewRound(Record):
     round_id: Identifier
     team_id: Identifier
@@ -149,6 +162,7 @@ class ReviewRound(Record):
     head_sha: Commit
     publication_version: Literal[1] = 1
     jobs: Annotated[list[ReviewJob], Field(min_length=1, max_length=2)]
+    decisions: Annotated[list[ReviewDecision], Field(max_length=32)] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def independent_identities(self) -> Self:
@@ -156,6 +170,34 @@ class ReviewRound(Record):
             if len({getattr(job, field) for job in self.jobs}) != len(self.jobs):
                 raise ValueError("reviewers require distinct identities and fresh contexts")
         return self
+
+
+def review_results_sha256(round: ReviewRound) -> str:
+    """Bind evaluation to sealed evidence, excluding mutable publication metadata."""
+    if any(job.state != "sealed" for job in round.jobs):
+        raise ValueError("all independent reviews must be sealed before evaluation")
+    evidence = {
+        "team_id": round.team_id,
+        "round_id": round.round_id,
+        "repository": round.repository,
+        "pr_number": round.pr_number,
+        "base_sha": round.base_sha,
+        "head_sha": round.head_sha,
+        "jobs": [
+            {
+                "review_id": job.review_id,
+                "agent_id": job.agent_id,
+                "task_id": job.task_id,
+                "attempt_id": job.attempt_id,
+                "session_id": job.session_id,
+                "result": job.result.model_dump(mode="json") if job.result else None,
+            }
+            for job in round.jobs
+        ],
+    }
+    return hashlib.sha256(
+        json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 def independent_review_contract(round: ReviewRound, job: ReviewJob) -> Contract:

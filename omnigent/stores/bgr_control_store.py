@@ -1,13 +1,12 @@
 """Server-side action claims; runner processes never open this SQL store."""
 
-import hashlib
 import json
 
 from pydantic import JsonValue, TypeAdapter
 from sqlalchemy.orm import Session
 
 from omnigent.bgr import Fence
-from omnigent.bgr_control import BgrControl
+from omnigent.bgr_control import BgrControl, control_request_sha256
 from omnigent.db.bgr_control_models import SqlBgrControlAction
 from omnigent.db.db_models import current_workspace_id
 from omnigent.errors import ErrorCode, OmnigentError
@@ -23,7 +22,7 @@ class BgrControlActions:
     def claim(
         self, user: str, brain: str, team: str, fence: Fence, command: BgrControl
     ) -> dict[str, JsonValue] | None:
-        digest = hashlib.sha256(command.model_dump_json().encode()).hexdigest()
+        digest = control_request_sha256(command)
 
         def apply(db: Session) -> dict[str, JsonValue] | None:
             owner = self.store._owned(db, team, user)
