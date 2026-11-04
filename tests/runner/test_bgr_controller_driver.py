@@ -91,8 +91,10 @@ def test_driver_uses_thread_identity_and_actual_question_anchor(drive):
     assert command(drive(thread_id=str(uuid4())))[1]["action"] == "create_grunt"
 
 
-def test_driver_waits_for_siblings_and_approves_each_exact_preview(drive):
+@pytest.mark.parametrize("publish", [False, True])
+def test_driver_waits_for_siblings_and_approves_each_exact_preview(drive, publish):
     create = drive()
+    next(iter(driver._STATES.values()))["plan"]["publish"] = publish
     attempt = {"agent_id": uuid4().hex, "attempt_id": uuid4().hex}
     adjudicate = drive(
         output(create, {"task": {"attempt": attempt}}),
@@ -113,9 +115,15 @@ def test_driver_waits_for_siblings_and_approves_each_exact_preview(drive):
         assert command(preview)[1]["review_id"] == job["review_id"]
         body = "sanitized review " + job["review_id"]
         digest = hashlib.sha256(body.encode()).hexdigest()
-        publish = drive(output(preview, {"body": body, "approved_body_sha256": digest}))
-        assert command(publish)[1]["approved_body_sha256"] == digest
-        preview = drive(output(publish, {"publication": {"state": "published"}}))
+        result = drive(output(preview, {"body": body, "approved_body_sha256": digest}))
+        if publish:
+            assert command(result)[1]["action"] == "publish"
+            assert command(result)[1]["approved_body_sha256"] == digest
+            preview = drive(output(result, {"publication": {"state": "published"}}))
+        else:
+            preview = result
+            if "items" in preview:
+                assert command(preview)[1]["action"] == "publication_preview"
     assert "finished" in preview["text"]
 
 

@@ -67,6 +67,7 @@ def _respond(request: dict) -> dict:
             "closed": set(),
             "answered": set(),
             "results": set(),
+            "previewed": set(),
             "published": set(),
             "pending": None,
             "round": None,
@@ -110,6 +111,7 @@ def _respond(request: dict) -> dict:
                 ):
                     raise ValueError("Sanitized publication preview does not match its hash")
                 state["preview"] = (pending["arguments"]["review_id"], response)
+                state["previewed"].add(pending["arguments"]["review_id"])
             elif action == "publish":
                 response = next(item for item in responses if "publication" in item)
                 if response["publication"]["state"] != "published":
@@ -181,8 +183,8 @@ def _respond(request: dict) -> dict:
         if all(job["agent_id"] in state["results"] for job in round["jobs"]):
             return control("status", round_id=round["round_id"])
         return {"text": "Waiting for all independent reviewers; sealed results remain withheld."}
-    if plan.get("publish", False):
-        for job in round["jobs"]:
+    for job in round["jobs"]:
+        if plan.get("publish", False):
             if job["review_id"] in state["published"]:
                 continue
             if "preview" not in state:
@@ -196,6 +198,11 @@ def _respond(request: dict) -> dict:
                 review_id=review_id,
                 approved_body_sha256=preview["approved_body_sha256"],
             )
+        if job["review_id"] not in state["previewed"]:
+            return control(
+                "publication_preview", round_id=round["round_id"], review_id=job["review_id"]
+            )
     return {
-        "text": "BGR fixture finished: Grunts adjudicated and all reviews independently sealed."
+        "text": "BGR fixture finished: Grunts adjudicated, independent reviews sealed, "
+        "and sanitized publication previews checked."
     }
