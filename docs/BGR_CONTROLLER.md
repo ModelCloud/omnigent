@@ -934,8 +934,29 @@ remain required before advertising process-loss recovery.
 
 Kernel tests inject low-level observations; journal tests use real file locks and
 fsync with root ownership injected only in test setup. Host-channel coverage
-extends the existing ASGI tunnel scenario. None is an escaped-descendant,
-service-launch, network-isolation or real-root containment acceptance result.
+extends the existing ASGI tunnel scenario.
+
+An additional opt-in Linux/systemd test creates a throwaway `DynamicUser`
+service in a separately retained, non-delegated generation slice. It verifies
+nonzero-UID double-forked/`setsid` descendants adopted by PID 1, concurrent forks,
+recursive `cgroup.kill` and recursive `populated=0`, both running and frozen.
+The parent slice is pinned independently because systemd may immediately remove
+the killed service's cgroup, even with `RemainAfterExit=yes`. A disappearing
+service domain still yields UNKNOWN; path/inode validation must not be weakened.
+The test cleans up both transient units and bounds workload lifetime and tasks.
+
+Run only on a disposable root-capable Linux/systemd development host:
+
+```bash
+sudo -n env OMNIGENT_TEST_BGR_CGROUP=1 .venv/bin/python -m pytest \
+  tests/host/test_bgr_cgroup.py::test_real_systemd_domain_kills_double_fork_setsid_and_concurrent_forks \
+  --reruns 0 -q
+```
+
+This is real kernel stop-mechanics acceptance, not production containment
+acceptance. It does not prove worker migration/host-spawn IPC denial, supervisor
+restart continuity, pre-exec admission, scoped runtime transport or fresh Brain
+replacement. No production supervisor or start service is installed by this test.
 
 ```bash
 .venv/bin/python -m pytest tests/server/test_bgr_generation_auth.py \
