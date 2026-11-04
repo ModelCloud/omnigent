@@ -16,11 +16,14 @@ only by bridge module, control-function name, and error label; they collapse to
 two parametrized methods driven by :data:`_UNIFORM_INTERRUPT` /
 :data:`_UNIFORM_STOP`. claude interrupt (bridge-id resolution), codex interrupt
 (MCP-startup + app-server ``turn/interrupt``), and opencode interrupt (native
-``POST /session/{id}/abort``) keep dedicated methods; claude stop is likewise
-special-cased, as is codex stop; pi aliases stop to its interrupt handler.
+``POST /api/session/{id}/interrupt``) keep dedicated methods; claude and
+codex stop are special-cased, and pi/opencode alias stop to their interrupt
+handler.
 
-Coverage note: opencode-native stop and both antigravity-native paths return
-``None`` and fall through to the in-process cancel.
+Coverage note: antigravity-native has no handler here and :meth:`interrupt` /
+:meth:`stop` return ``None`` for it, so the caller falls through to the
+in-process turn cancel. opencode-native interrupts through its server's
+``POST /api/session/{id}/interrupt`` and aliases stop to interrupt.
 """
 
 from __future__ import annotations
@@ -309,8 +312,8 @@ def native_cancel_capability(wrapper_label: str | None) -> str:
     wrapper label:
 
     * ``"stop"`` — Claude/Codex's dedicated stop, or a key in :data:`_UNIFORM_STOP`
-    * ``"best_effort"`` — remaining native agents (Pi aliases stop to
-      interrupt; Antigravity/OpenCode have no stop handler)
+    * ``"best_effort"`` — remaining native agents (Pi/OpenCode alias stop to
+      interrupt; Antigravity has no stop handler)
     * ``"inprocess"`` — no native agent for this label
 
     :param wrapper_label: The work entry's ``omnigent.wrapper`` value.
@@ -391,8 +394,8 @@ class NativeInterruptRunner:
     async def stop(self, harness_name: str | None, conv_id: str) -> Response | None:
         """Dispatch a stop_session to the harness's bridge.
 
-        pi has no distinct stop — it routes to its interrupt handler, exactly
-        as the original dispatch chain did.
+        pi/opencode have no distinct stop — they route to their interrupt
+        handler; Codex keeps its dedicated stop path.
 
         :returns: A response when this harness has a stop handler, else ``None``
             so the caller falls through to the in-process turn cancel.
@@ -405,7 +408,7 @@ class NativeInterruptRunner:
             return await self._claude_stop(conv_id)
         if key == "codex":
             return await self._codex_stop(conv_id)
-        if key == "pi":
+        if key in ("pi", "opencode"):
             return await self.interrupt(harness_name, conv_id)
         spec = _UNIFORM_STOP.get(key)
         if spec is None:
@@ -948,13 +951,13 @@ class NativeInterruptRunner:
             directory=state.workspace,
         )
         try:
-            # OpenCode answers true even when idle, so the answer is not checked. Record
-            # before closing the client: the abort's idle edge usually follows within ms.
-            await client.abort(state.opencode_session_id)
+            # Record before closing the client: the forwarder publishes the idle edge
+            # from session.execution.interrupted, usually within milliseconds.
+            await client.interrupt(state.opencode_session_id)
             self._defer_parent_wake_after_native_interrupt(conv_id)
         except (OpenCodeClientError, httpx.HTTPError) as exc:
             self._logger.warning(
-                "OpenCode-native abort failed for session=%s opencode_session=%s",
+                "OpenCode-native interrupt failed for session=%s opencode_session=%s",
                 conv_id,
                 state.opencode_session_id,
                 exc_info=True,

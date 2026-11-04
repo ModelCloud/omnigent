@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { resolveModelSelection } from "./modelSelection";
+import {
+  compatibleModelEffort,
+  hasGroupedModelOptions,
+  resolveModelSelection,
+} from "./modelSelection";
 import type { NativeModelOption } from "./types";
 
 const rows: NativeModelOption[] = [
@@ -27,6 +31,32 @@ const rows: NativeModelOption[] = [
 ];
 
 describe("model/provider/variant selection", () => {
+  it("recognizes grouped metadata without grouping legacy catalogs", () => {
+    expect(hasGroupedModelOptions(rows)).toBe(true);
+    expect(hasGroupedModelOptions([{ id: "legacy" }])).toBe(false);
+    expect(hasGroupedModelOptions([])).toBe(false);
+  });
+  it.each([
+    ["alias", "none", "none"],
+    ["wire-model", "max", "max"],
+    [null, "none", "none"],
+    ["alias", "high", null],
+    ["missing", "max", null],
+    ["no-efforts", "max", null],
+    ["alias", null, null],
+  ])("validates effort %s / %s against the selected row or default", (model, effort, expected) => {
+    const catalog: NativeModelOption[] = [
+      {
+        id: "alias",
+        model: "wire-model",
+        isDefault: true,
+        supportedReasoningEfforts: [{ reasoningEffort: "none" }, { reasoningEffort: "max" }],
+      },
+      { id: "no-efforts" },
+    ];
+    expect(compatibleModelEffort(catalog, model, effort)).toBe(expected);
+    expect(compatibleModelEffort([], model, effort)).toBeNull();
+  });
   it("uses regular on a provider switch regardless of catalog order", () => {
     expect(resolveModelSelection(rows, "ds", "lithos")?.id).toBe("deepseek-ai/DeepSeek-V4.1-Flash");
   });

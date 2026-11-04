@@ -40,7 +40,7 @@ import {
 import { NativeModelSelectors } from "@/components/NativeModelSelectors";
 import { CLAUDE_NATIVE_MODELS } from "@/lib/claudeNativeModels";
 import { CLAUDE_NATIVE_PERMISSION_MODES } from "@/lib/claudePermissionMode";
-import { findNativeModelOption } from "@/lib/codexNativeModels";
+import { compatibleModelEffort, hasGroupedModelOptions } from "@/lib/modelSelection";
 import { useHostModelOptions } from "@/hooks/useHosts";
 
 /** Sentinel Select value for "no permission override" (use the agent default).
@@ -55,6 +55,7 @@ export function ModelEffortFields({
   harness,
   supportsPermissionMode,
   hostId,
+  disabled = false,
   onModelChange,
   onEffortChange,
   onPermissionModeChange,
@@ -72,6 +73,7 @@ export function ModelEffortFields({
   supportsPermissionMode: boolean;
   /** Pinned host id, or "" when unset (task resolves a host at fire time). */
   hostId: string;
+  disabled?: boolean;
   onModelChange: (model: string) => void;
   onEffortChange: (effort: string) => void;
   onPermissionModeChange: (mode: string) => void;
@@ -104,23 +106,14 @@ export function ModelEffortFields({
   // picker can't express: dependent Model → Provider → Speed → Reasoning
   // selectors (the same component the interactive picker uses) drive one
   // model-override id, with liveness dots and speed bolts on the options.
-  const codexGrouped =
-    harness === "codex-native" && (hostModelOptions?.some((row) => row.modelFamily) ?? false);
+  const codexGrouped = harness === "codex-native" && hasGroupedModelOptions(hostModelOptions ?? []);
   const handleCodexModelChange = (id: string) => {
     onModelChange(id);
     // An effort that the newly resolved row doesn't advertise can't be sent
     // with it — drop it back to the agent default rather than save a pair the
     // harness would reject.
-    const row =
-      findNativeModelOption(hostModelOptions ?? [], id) ??
-      // "" picks "Default": the launch resolves to the catalog's own default.
-      (id === "" ? (hostModelOptions ?? []).find((option) => option.isDefault) : null);
-    if (
-      effort !== "" &&
-      !(row?.supportedReasoningEfforts ?? []).some((e) => e.reasoningEffort === effort)
-    ) {
-      onEffortChange("");
-    }
+    const nextEffort = compatibleModelEffort(hostModelOptions ?? [], id, effort || null) ?? "";
+    if (nextEffort !== effort) onEffortChange(nextEffort);
   };
   if (codexGrouped) {
     return (
@@ -129,6 +122,7 @@ export function ModelEffortFields({
           options={hostModelOptions ?? []}
           selectedModel={model === "" ? null : model}
           effort={effort === "" ? null : effort}
+          disabled={disabled}
           modelDefaultLabel="Default"
           onModelChange={handleCodexModelChange}
           onEffortChange={(e) => onEffortChange(e ?? "")}
@@ -145,6 +139,7 @@ export function ModelEffortFields({
           <Label htmlFor="task-model">Model</Label>
           {modelOptions.length > 0 ? (
             <Select
+              disabled={disabled}
               value={model === "" ? MODEL_SELECT_DEFAULT : model}
               componentId="tasks.scheduled.model"
               valueHasNoPii
@@ -174,6 +169,7 @@ export function ModelEffortFields({
             <Input
               id="task-model"
               data-testid="task-model-trigger"
+              disabled={disabled}
               value={model}
               placeholder="Default"
               componentId="tasks.scheduled.model"
@@ -185,6 +181,7 @@ export function ModelEffortFields({
         <div className="flex w-full min-w-0 flex-col gap-1.5" data-testid="task-effort-control">
           <Label htmlFor="task-effort">Effort</Label>
           <Select
+            disabled={disabled}
             value={effort === "" ? EFFORT_SELECT_NONE : effort}
             componentId="tasks.scheduled.effort"
             valueHasNoPii
@@ -214,6 +211,7 @@ export function ModelEffortFields({
         <div className="flex w-full min-w-0 flex-col gap-1.5" data-testid="task-permission-control">
           <Label htmlFor="task-permission">Permission mode</Label>
           <Select
+            disabled={disabled}
             value={permissionMode === "" ? PERMISSION_SELECT_DEFAULT : permissionMode}
             componentId="tasks.scheduled.permission_mode"
             valueHasNoPii

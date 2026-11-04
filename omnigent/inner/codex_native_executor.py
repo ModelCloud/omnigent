@@ -24,6 +24,7 @@ from omnigent.harnesses.codex_native.app_server import (
     CodexAppServerResponseError,
     CodexMessage,
     CodexParams,
+    _is_openai_vendor_model,
     client_for_transport,
     is_compaction_steer_refusal,
     is_server_draining_error,
@@ -797,6 +798,11 @@ async def _multidex_runtime_settings_overrides(
     overrides = dict(settings_overrides)
     selected_model = overrides.get("model")
     has_model_selection = isinstance(selected_model, str) and bool(selected_model.strip())
+    if has_model_selection and _is_openai_vendor_model(selected_model):
+        # A session launched on a local model may retain an
+        # ``omnigent_provider`` table for its original gateway. Never reuse
+        # that table for an OpenAI model selected later in the same thread.
+        overrides["modelProvider"] = "openai"
     bridge_dir = Path(state.codex_home).parent
     pending = await asyncio.to_thread(read_unmirrored_codex_settings, bridge_dir)
     current_model = pending.get("model") or read_codex_home_config_model(Path(state.codex_home))

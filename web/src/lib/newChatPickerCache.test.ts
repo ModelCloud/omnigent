@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { NativeModelOption } from "./types";
 import { writeLastAgentId } from "./agentPreferences";
 import { writeLastHarness } from "./harnessPreferences";
 import { getOmnigentServerIdentity } from "./host";
@@ -58,6 +59,12 @@ const options: NewChatPickerOptions = {
         id: "coding-model",
         displayName: "Team coding model",
         supportedReasoningEfforts: [{ reasoningEffort: "high" }],
+        modelFamily: "coding",
+        modelLabel: "Coding Model",
+        providerId: "multidex",
+        variant: "fast",
+        providerHealth: "online",
+        speed: 1.2,
       },
     ],
     pi: [],
@@ -87,8 +94,16 @@ afterEach(() => {
 
 describe("newChatPickerCache", () => {
   it("caches host-bound menu choices and catalog metadata verbatim", () => {
-    writeNewChatPickerOptionsCache(key, options);
-    expect(readNewChatPickerOptionsCache(key)).toEqual(options);
+    const codex: NativeModelOption[] = (options.models.codex ?? []).map((row) => ({
+      ...row,
+      runnerExtension: { channel: "preview" },
+    }));
+    const cachedOptions: NewChatPickerOptions = {
+      ...options,
+      models: { ...options.models, codex },
+    };
+    writeNewChatPickerOptionsCache(key, cachedOptions);
+    expect(readNewChatPickerOptionsCache(key)).toEqual(cachedOptions);
   });
 
   it("preserves missing catalogs separately from successfully fetched empty catalogs", () => {

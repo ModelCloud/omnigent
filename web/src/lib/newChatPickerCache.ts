@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { NativeModelOption } from "./types";
 import { readRecentWorkspaces } from "@/hooks/useRecentWorkspaces";
 import { readLastAgentId } from "./agentPreferences";
 import { readDefaultBaseBranch } from "./baseBranchPreferences";
@@ -39,15 +40,26 @@ const pickerAgentSchema = agentSchema.extend({
   acpHarness: z.boolean().optional(),
   mine: z.literal(true).optional(),
 });
-const modelOptionSchema = z.object({
+// Cached rows must stay verbatim: the grouped codex picker reads extension
+// fields (modelFamily/providerId/variant/speed/…) that a closed object schema
+// would silently strip, flattening the drill-down back to a plain list. Stay
+// loose so runner-added fields round-trip untouched.
+const modelOptionSchema: z.ZodType<NativeModelOption> = z.looseObject({
   id: z.string(),
   model: z.string().optional(),
   displayName: z.string().optional(),
+  modelFamily: z.string().optional(),
+  modelLabel: z.string().optional(),
+  providerId: z.string().optional(),
+  providerHealth: z.enum(["online", "offline"]).optional(),
+  variant: z.string().optional(),
+  speed: z.number().optional(),
   isDefault: z.boolean().optional(),
   defaultReasoningEffort: z.string().optional(),
   supportedReasoningEfforts: z
     .array(z.object({ reasoningEffort: z.string(), description: z.string().optional() }))
     .optional(),
+  fusion: z.any().optional(),
   source: z
     .object({
       kind: z.string(),
