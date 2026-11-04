@@ -6,6 +6,7 @@ import {
   ComposerWorkspaceTrigger,
   ComposerHarnessTrigger,
   ComposerPermissionPicker,
+  HostStatusDot,
 } from "./ComposerControls";
 import {
   COMPOSER_COLLAPSED_LABEL_CLASS,
@@ -44,6 +45,24 @@ describe("shared composer controls", () => {
     expect(trigger).toHaveClass("w-auto");
     expect(screen.getByTestId("composer-host-name")).toHaveTextContent("Build Mac");
     expect(screen.getByTestId("composer-host-name")).toHaveClass("truncate");
+  });
+
+  it.each([
+    ["online", ["bg-success"], ["border-[1.5px]", "animate-spin"]],
+    ["offline", ["border-[1.5px]"], ["bg-success", "animate-spin", "bg-destructive"]],
+    ["unknown", ["border-[1.5px]"], ["bg-success", "animate-spin"]],
+    [
+      "starting",
+      ["border-[1.5px]", "border-t-transparent", "animate-spin", "motion-reduce:animate-none"],
+      ["bg-success"],
+    ],
+  ] as const)("draws a %s host status dot", (status, present, absent) => {
+    render(<HostStatusDot status={status} testId="dot" />);
+    const dot = screen.getByTestId("dot");
+    expect(dot).toHaveAttribute("data-status", status);
+    expect(dot).toHaveAttribute("aria-hidden");
+    expect(dot).toHaveClass("size-2", "rounded-full", ...present);
+    for (const className of absent) expect(dot).not.toHaveClass(className);
   });
 
   it("lets workspace labels use half the bar instead of a fixed pixel cap", () => {
