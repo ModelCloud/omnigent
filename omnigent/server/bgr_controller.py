@@ -283,6 +283,13 @@ class BgrController:
             {
                 "threadId": thread_id,
                 "identity": identity.wire(),
+            },
+        )
+        await request(
+            "bgr/thread/peers",
+            {
+                "threadId": thread_id,
+                "identity": identity.wire(),
                 "peers": [self.brain.identity.wire()],
             },
         )

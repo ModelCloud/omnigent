@@ -62,6 +62,8 @@ async def controller(route):
         process = processes[session]
         if method == "bgr/capabilities/read":
             return {"result": CAPTURED}
+        if method == "bgr/thread/bind":
+            assert params.keys() == {"threadId", "identity"}
         if method in {"bgr/thread/bind", "bgr/reviewer/start"}:
             thread_id = params.get("threadId") or str(uuid4())
             process.connection = NativeBgrConnection(
@@ -153,6 +155,13 @@ async def test_brain_create_is_durable_retry_stable_and_capacity_bounded(control
     assert sum(operation == "spawn" for operation, _ in calls) == 1
     role_sessions.assert_awaited_once()
     worker = processes[result["task"]["attempt"]["session_id"]]
+    assert next(params for method, params in worker.calls if method == "bgr/thread/peers") == {
+        "threadId": worker.connection.thread_id,
+        "identity": worker.connection.identity.wire(),
+        "peers": [current.brain.identity.wire()],
+    }
+    methods = [method for method, _ in worker.calls]
+    assert methods.index("bgr/thread/peers") < methods.index("bgr/message/deliver")
     assert len(worker.pending) == 1
     # The original fixture already occupies one of the two slots.
     with pytest.raises(OmnigentError, match="cap"):
