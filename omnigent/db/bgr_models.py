@@ -12,6 +12,16 @@ class _ScopedRow:
     id: Mapped[str] = mapped_column(Uuid16(), primary_key=True)
 
 
+class SqlBgrLaunch(_ScopedRow, OmnigentBase):
+    __tablename__ = "bgr_launches"
+
+    owner_id: Mapped[str] = mapped_column(String(320))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    document: Mapped[str] = mapped_column(CompressedText(max_stored_bytes=65_535))
+    claim_id: Mapped[str | None] = mapped_column(Uuid16())
+    claim_expires_at_us: Mapped[int] = mapped_column(BigInteger, default=0)
+
+
 class SqlBgrTeam(_ScopedRow, OmnigentBase):
     __tablename__ = "bgr_teams"
 

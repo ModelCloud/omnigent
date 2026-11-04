@@ -15,7 +15,7 @@ from decimal import Decimal
 from typing import TypeVar
 from uuid import uuid4
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError, StatementError
 from sqlalchemy.orm import Session
@@ -31,6 +31,8 @@ from omnigent.bgr import (
     Envelope,
     Fence,
     Identifier,
+    LaunchIntent,
+    LaunchRequest,
     LeaseRequest,
     MailboxDiscard,
     NativeAssignment,
@@ -51,6 +53,7 @@ from omnigent.db.bgr_models import (
     SqlBgrAgent,
     SqlBgrAttempt,
     SqlBgrEnvelope,
+    SqlBgrLaunch,
     SqlBgrNativeBinding,
     SqlBgrTask,
     SqlBgrTeam,
@@ -128,6 +131,113 @@ class BgrStore:
         if self._clock is time.time:
             return now_epoch_us()
         return int(Decimal(str(self._clock())) * _MICROSECONDS)
+
+    def reserve_launch(self, user_id: str, host_id: str, body: LaunchRequest) -> LaunchIntent:
+        """Reserve one Brain identity before any session or process side effects."""
+        if not user_id or len(user_id) > 320:
+            raise OmnigentError("Invalid BGR owner", code=ErrorCode.INVALID_INPUT)
+        request_hash = _digest({"host_id": host_id, "request": body.model_dump(mode="json")})
+
+        def apply(db: Session) -> LaunchIntent:
+            row = db.get(SqlBgrLaunch, (current_workspace_id(), body.team_id))
+            if row is not None:
+                if row.owner_id != user_id:
+                    raise _forbidden()
+                if row.request_hash != request_hash:
+                    raise _conflict("BGR launch retry must keep the same configuration and task")
+                return LaunchIntent.model_validate_json(row.document)
+            intent = LaunchIntent(
+                team_id=body.team_id,
+                brain_session_id=uuid4().hex,
+                controller_id=uuid4().hex,
+                host_id=host_id,
+                request=body,
+            )
+            db.add(
+                SqlBgrLaunch(
+                    workspace_id=current_workspace_id(),
+                    id=body.team_id,
+                    owner_id=user_id,
+                    request_hash=request_hash,
+                    document=intent.model_dump_json(),
+                )
+            )
+            return intent
+
+        return self._write("reserve_launch_intent", apply)
+
+    def get_launch(self, user_id: str, team_id: str) -> LaunchIntent:
+        def read(db: Session) -> LaunchIntent:
+            row = db.get(SqlBgrLaunch, (current_workspace_id(), team_id))
+            if row is None or row.owner_id != user_id:
+                raise _forbidden()
+            return LaunchIntent.model_validate_json(row.document)
+
+        return self._write("read_launch_intent", read)
+
+    def claim_launch(
+        self, user_id: str, team_id: str, claim_id: str, *, ttl_seconds: int = 120
+    ) -> LaunchIntent | None:
+        """Fence concurrent/restarted launch handlers without changing Brain identity."""
+        if not 5 <= ttl_seconds <= 300:
+            raise OmnigentError("Invalid launch lease duration", code=ErrorCode.INVALID_INPUT)
+        claim_id = TypeAdapter(Identifier).validate_python(claim_id, strict=True)
+
+        def apply(db: Session) -> LaunchIntent | None:
+            db.execute(
+                update(SqlBgrLaunch)
+                .where(
+                    SqlBgrLaunch.workspace_id == current_workspace_id(),
+                    SqlBgrLaunch.id == team_id,
+                    SqlBgrLaunch.owner_id == user_id,
+                )
+                .values(claim_expires_at_us=SqlBgrLaunch.claim_expires_at_us)
+            )
+            row = db.get(SqlBgrLaunch, (current_workspace_id(), team_id))
+            if row is None or row.owner_id != user_id:
+                raise _forbidden()
+            now = self._now_us()
+            if row.claim_id != claim_id and row.claim_expires_at_us > now:
+                return None
+            row.claim_id = claim_id
+            row.claim_expires_at_us = now + ttl_seconds * _MICROSECONDS
+            return LaunchIntent.model_validate_json(row.document)
+
+        return self._write("claim_launch_intent", apply)
+
+    def finish_launch(
+        self,
+        user_id: str,
+        team_id: str,
+        claim_id: str,
+        *,
+        state: str,
+        reason: str | None = None,
+    ) -> LaunchIntent:
+        def apply(db: Session) -> LaunchIntent:
+            db.execute(
+                update(SqlBgrLaunch)
+                .where(
+                    SqlBgrLaunch.workspace_id == current_workspace_id(),
+                    SqlBgrLaunch.id == team_id,
+                    SqlBgrLaunch.owner_id == user_id,
+                )
+                .values(claim_expires_at_us=SqlBgrLaunch.claim_expires_at_us)
+            )
+            row = db.get(SqlBgrLaunch, (current_workspace_id(), team_id))
+            if row is None or row.owner_id != user_id:
+                raise _forbidden()
+            if row.claim_id != claim_id or row.claim_expires_at_us <= self._now_us():
+                raise _conflict("BGR launch lease expired; reconcile the existing Brain")
+            payload = json.loads(row.document)
+            payload.update(state=state, reason=reason)
+            intent = LaunchIntent.model_validate(payload)
+            row.document = intent.model_dump_json()
+            row.claim_id = None
+            row.claim_expires_at_us = 0
+            return intent
+
+        return self._write("finish_launch_intent", apply)
 
     def create(self, user_id: str, session_id: str, body: TeamCreate) -> Team:
         if len(user_id) > 320:

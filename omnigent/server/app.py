@@ -2261,13 +2261,15 @@ def create_app(
     app.state.runner_session_initializer = runner_session_initializer
     app.state.background_title_coordinator = background_title_coordinator
     app.state.host_registry = host_registry
+    app.state.bgr_store = bgr_store
     from omnigent.server.startup_inputs import ManagedStartupInputs
 
     # Only managed creates accept a durable first input, and only managed hosts
     # need their startup recovered on the replica holding the tunnel.
     startup_inputs = (
         ManagedStartupInputs(conversation_store, host_registry)
-        if sandbox_config is not None and sandbox_config.managed_launch_supported
+        if bgr_store is not None
+        or (sandbox_config is not None and sandbox_config.managed_launch_supported)
         else None
     )
     app.state.startup_inputs = startup_inputs

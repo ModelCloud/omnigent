@@ -51,6 +51,39 @@ class TeamCreate(Record):
     config: TeamConfig
 
 
+class LaunchRequest(Record):
+    team_id: Identifier
+    agent_id: Label
+    workspace: Annotated[str, Field(min_length=1, max_length=1024)]
+    config: TeamConfig
+    initial_prompt: Annotated[str, Field(min_length=1, max_length=8000)]
+    project_id: Identifier | None = None
+
+    @field_validator("workspace")
+    @classmethod
+    def canonical_workspace(cls, value: str) -> str:
+        if not value.startswith("/") or "\x00" in value or posixpath.normpath(value) != value:
+            raise ValueError("workspace must be a normalized absolute host path")
+        return value
+
+    @field_validator("initial_prompt")
+    @classmethod
+    def nonblank_prompt(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("initial_prompt must not be blank")
+        return value
+
+
+class LaunchIntent(Record):
+    team_id: Identifier
+    brain_session_id: Identifier
+    controller_id: Identifier
+    host_id: Annotated[str, Field(min_length=1, max_length=128)]
+    request: LaunchRequest
+    state: Literal["pending", "starting", "running", "blocked"] = "pending"
+    reason: Annotated[str, Field(max_length=2000)] | None = None
+
+
 class LeaseRequest(Record):
     controller_id: Identifier
     ttl_seconds: Annotated[int, Field(ge=5, le=300)] = 60

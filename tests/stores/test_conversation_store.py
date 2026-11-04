@@ -95,6 +95,24 @@ def test_fork_drops_import_provenance_labels(
     assert IMPORT_EXTERNAL_SESSION_ID_LABEL_KEY not in fork.labels
 
 
+def test_fork_does_not_inherit_brain_controller_authority(
+    conversation_store: SqlAlchemyConversationStore,
+) -> None:
+    source = conversation_store.create_conversation(
+        labels={
+            "omnigent.bgr.team_id": uuid.uuid4().hex,
+            "omnigent.bgr.host_id": uuid.uuid4().hex,
+            "omnigent.bgr.config": "{}",
+            "omnigent.bgr.future": "server-only",
+            "kept": "yes",
+        }
+    )
+    fork = conversation_store.fork_conversation(source.id)
+    assert fork.labels["kept"] == "yes"
+    assert not any(key.startswith("omnigent.bgr.") for key in fork.labels)
+    assert "omnigent.bgr.team_id" in conversation_store.get_conversation(source.id).labels
+
+
 def test_fork_drops_sandbox_repo_label(
     conversation_store: SqlAlchemyConversationStore,
 ) -> None:

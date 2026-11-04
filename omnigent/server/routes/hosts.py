@@ -1074,6 +1074,25 @@ def create_hosts_router(
             error=error if isinstance(error, str) and error else None,
         )
 
+    @router.get("/hosts/{host_id}/bgr/capabilities")
+    async def bgr_capabilities(request: Request, host_id: str) -> dict[str, Any]:
+        from omnigent.server.bgr_launch import probe_host
+
+        user_id = require_user(request, auth_provider)
+        if user_id is None:
+            raise HTTPException(status_code=403, detail="BGR requires an authenticated owner")
+        result = await probe_host(
+            user_id=user_id, host_id=host_id, hosts=host_store, registry=host_registry
+        )
+        if getattr(
+            request.app.state, "bgr_controllers", None
+        ) is None or not request.app.state.feature_flags.enabled(Feature.SESSION_ORCHESTRATION):
+            result.update(
+                launch_supported=False,
+                reason="The server BGR controller is not configured",
+            )
+        return result
+
     @router.post("/hosts/{host_id}/runners")
     async def launch_runner(
         request: Request,

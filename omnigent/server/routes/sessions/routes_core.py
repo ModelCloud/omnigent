@@ -27,6 +27,7 @@ from fastapi.responses import Response
 from pydantic import ValidationError
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
+from omnigent.bgr import LaunchRequest
 from omnigent.codex_approval_modes import (
     CODEX_NATIVE_PERMISSION_VALUES,
 )
@@ -891,6 +892,174 @@ def register_core_routes(
                 ),
             )
         return runner_id, launch_failed
+
+    @router.post(
+        "/hosts/{host_id}/bgr/launch",
+        dependencies=[Depends(require_json_content_type), Depends(require_trusted_origin)],
+    )
+    async def launch_bgr(request: Request, host_id: str, body: LaunchRequest) -> dict[str, Any]:
+        from uuid import uuid4
+
+        from omnigent.bgr import LeaseRequest, TeamCreate
+        from omnigent.server.bgr_launch import probe_host, validate_profiles
+        from omnigent.server.feature_flags import Feature
+        from omnigent.server.session_orchestration import require_owned_session
+
+        user_id = _require_user(request, auth_provider)
+        store = getattr(request.app.state, "bgr_store", None)
+        controllers = getattr(request.app.state, "bgr_controllers", None)
+        hosts = getattr(request.app.state, "host_store", None)
+        if (
+            user_id is None
+            or permission_store is None
+            or store is None
+            or controllers is None
+            or hosts is None
+            or host_registry is None
+            or not request.app.state.feature_flags.enabled(Feature.SESSION_ORCHESTRATION)
+        ):
+            raise OmnigentError(
+                "BGR requires an owned private session and a configured controller",
+                code=ErrorCode.RUNNER_CAPABILITY_MISMATCH,
+            )
+        capabilities = await probe_host(
+            user_id=user_id, host_id=host_id, hosts=hosts, registry=host_registry
+        )
+        if capabilities.get("launch_supported") is not True:
+            return {
+                "brain_session_id": None,
+                "state": "blocked",
+                "reason": capabilities.get("reason") or "BGR runtime is unavailable",
+            }
+        await validate_profiles(host_id=host_id, config=body.config, registry=host_registry)
+        intent = await asyncio.to_thread(store.reserve_launch, user_id, host_id, body)
+        claim_id = uuid4().hex
+        claimed = await asyncio.to_thread(store.claim_launch, user_id, body.team_id, claim_id)
+        if claimed is None:
+            existing = await asyncio.to_thread(
+                conversation_store.get_conversation, intent.brain_session_id
+            )
+            return {
+                "brain_session_id": existing.id if existing is not None else None,
+                "state": "starting",
+                "reason": "The same BGR launch is already in progress",
+            }
+        try:
+            conv = await asyncio.to_thread(
+                conversation_store.get_conversation, intent.brain_session_id
+            )
+            created = conv is None
+            if conv is None:
+                create_type = (
+                    ProjectSessionCreateRequest if body.project_id else SessionCreateRequest
+                )
+                create_body = create_type(
+                    agent_id=body.agent_id,
+                    project_id=body.project_id,
+                    host_id=host_id,
+                    workspace=body.workspace,
+                    model_override=body.config.brain.model,
+                    reasoning_effort=body.config.brain.reasoning,
+                    title="BGR Brain",
+                )
+                _, conv = await _create_session_from_existing_agent(
+                    conversation_store,
+                    agent_store,
+                    runner_router,
+                    create_body,
+                    request,
+                    agent_cache=agent_cache,
+                    user_id=user_id,
+                    permission_store=permission_store,
+                    file_store=file_store,
+                    artifact_store=artifact_store,
+                    project_store=project_store,
+                    conversation_id=intent.brain_session_id,
+                    framework_labels={
+                        "omnigent.bgr.team_id": body.team_id,
+                        "omnigent.bgr.host_id": host_id,
+                        "omnigent.bgr.config": body.config.model_dump_json(),
+                    },
+                )
+            if conv.labels.get("omnigent.bgr.team_id") != body.team_id or conv.host_id != host_id:
+                raise OmnigentError("BGR Brain binding mismatch", code=ErrorCode.FORBIDDEN)
+            if created:
+                await asyncio.to_thread(permission_store.ensure_user, user_id)
+                await asyncio.to_thread(
+                    permission_store.grant, user_id, intent.brain_session_id, LEVEL_OWNER
+                )
+            await asyncio.to_thread(
+                require_owned_session,
+                intent.brain_session_id,
+                user_id,
+                conversation_store,
+                permission_store,
+                private=True,
+                allow_read_only_sharing=False,
+            )
+            await asyncio.to_thread(
+                store.create,
+                user_id,
+                intent.brain_session_id,
+                TeamCreate(team_id=body.team_id, config=body.config),
+            )
+            await asyncio.to_thread(
+                store.acquire,
+                user_id,
+                intent.brain_session_id,
+                body.team_id,
+                LeaseRequest(controller_id=intent.controller_id, ttl_seconds=300),
+            )
+            startup = getattr(request.app.state, "startup_inputs", None)
+            if startup is None:
+                raise OmnigentError(
+                    "BGR startup input storage is unavailable",
+                    code=ErrorCode.RUNNER_CAPABILITY_MISMATCH,
+                )
+            if "omnigent.startup" not in conv.labels:
+                await startup.enqueue(
+                    intent.brain_session_id,
+                    SessionEventInput(
+                        type="message",
+                        data={
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": body.initial_prompt}],
+                        },
+                    ),
+                    user_id=user_id,
+                    headers=request.headers,
+                )
+            if conv.runner_id is None:
+                launched = await _bind_and_launch_on_caller_host(
+                    request,
+                    user_id=user_id,
+                    session_id=intent.brain_session_id,
+                    host_id=host_id,
+                    workspace=conv.workspace,
+                    harness="codex-native",
+                    conversation=conv,
+                )
+                if launched is None or launched[1]:
+                    raise OmnigentError(
+                        "BGR host launch was not accepted",
+                        code=ErrorCode.RUNNER_CAPABILITY_MISMATCH,
+                    )
+            await asyncio.to_thread(
+                store.finish_launch, user_id, body.team_id, claim_id, state="starting"
+            )
+            _announce_session_added(user_id, intent.brain_session_id)
+            return {"brain_session_id": intent.brain_session_id, "state": "starting"}
+        except Exception:
+            with contextlib.suppress(OmnigentError):
+                await asyncio.to_thread(
+                    store.finish_launch,
+                    user_id,
+                    body.team_id,
+                    claim_id,
+                    state="blocked",
+                    reason="BGR launch did not complete; retry to reconcile the same Brain",
+                )
+            raise
 
     @router.post(
         "/sessions/orchestrated",

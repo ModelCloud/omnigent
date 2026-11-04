@@ -5951,6 +5951,24 @@ async def _auto_create_codex_terminal(
     policy_headers = databricks_request_headers(
         launch_config.policy_server_url, bearer_token=_policy_auth_token
     )
+    bgr_labels = (
+        session_init.snapshot.labels
+        if session_init is not None
+        else (
+            await _session_labels_for_runner_spawn(
+                server_client=server_client, session_id=session_id
+            )
+            if server_client is not None
+            else {}
+        )
+    )
+    bgr_profiles = None
+    if bgr_labels.get("omnigent.bgr.team_id"):
+        from omnigent.bgr import TeamConfig
+
+        if server_client is None or not bgr_labels.get("omnigent.bgr.host_id"):
+            raise RuntimeError("BGR Brain requires an authenticated host/server binding")
+        bgr_profiles = TeamConfig.model_validate_json(bgr_labels["omnigent.bgr.config"])
 
     # Symmetric with the claude-native arm: an auto-harness session landing on
     # codex can have its spawns re-routed onto the Claude family, so it needs
@@ -5975,6 +5993,13 @@ async def _auto_create_codex_terminal(
         )
         or None
     )
+    if bgr_profiles is not None:
+        from omnigent.bgr_control import BRAIN_CONTROL_INSTRUCTIONS
+        from omnigent.runtime.prompt import append_framework_instructions
+
+        _codex_developer_instructions = append_framework_instructions(
+            _codex_developer_instructions, [BRAIN_CONTROL_INSTRUCTIONS]
+        )
     # SDK initialization can block on DNS/auth before model discovery times out.
     # Keep it off the runner loop so heartbeats and other sessions can progress.
     app_server = await asyncio.to_thread(
@@ -6119,8 +6144,11 @@ async def _auto_create_codex_terminal(
                             if native_codex_launch_pins_model_provider(_codex_launch)
                             else None
                         ),
-                        retain_client=codex_remote_resume_omits_permission_args(
-                            app_server.codex_cli_version
+                        retain_client=(
+                            bgr_profiles is not None
+                            or codex_remote_resume_omits_permission_args(
+                                app_server.codex_cli_version
+                            )
                         ),
                         rollout_path=resume_rollout,
                     )
@@ -6175,6 +6203,47 @@ async def _auto_create_codex_terminal(
             with contextlib.suppress(Exception):
                 await event_client.close()
             await app_server.close()
+            _AUTO_CODEX_APP_SERVERS.pop(session_id, None)
+            raise
+
+    if bgr_profiles is not None:
+        from omnigent.runner.bgr_runtime import register_bgr_brain, wait_bgr_brain_ready
+        from omnigent.runner.identity import ORCHESTRATION_SOURCE_HEADER
+
+        assert server_client is not None
+        bgr_server_client = server_client
+        bgr_team_id = bgr_labels["omnigent.bgr.team_id"]
+
+        async def bgr_callback(event: dict[str, Any]) -> None:
+            response = await bgr_server_client.post(
+                f"/v1/bgr/teams/{bgr_team_id}/native-callback",
+                json=event,
+                headers={ORCHESTRATION_SOURCE_HEADER: session_id},
+                timeout=30,
+            )
+            response.raise_for_status()
+
+        try:
+            await register_bgr_brain(
+                session_id,
+                event_client,
+                app_server,
+                Path(workspace),
+                bgr_profiles,
+                bgr_callback,
+                host_id=bgr_labels["omnigent.bgr.host_id"],
+                thread_id=launch_config.external_session_id,
+                spec=_launch_spec,
+                server_client=server_client,
+                team_id=bgr_team_id,
+            )
+            if launch_config.external_session_id is not None:
+                await wait_bgr_brain_ready(session_id, launch_config.external_session_id)
+        except BaseException:
+            with contextlib.suppress(Exception):
+                await event_client.close()
+            with contextlib.suppress(Exception):
+                await app_server.close()
             _AUTO_CODEX_APP_SERVERS.pop(session_id, None)
             raise
 
@@ -6897,6 +6966,9 @@ async def _codex_discover_thread_and_forward(
             clear_bridge_startup_error(bridge_dir)
         if apply_plan_mode is not None:
             await apply_plan_mode(thread_id)
+        from omnigent.runner.bgr_runtime import wait_bgr_brain_ready
+
+        await wait_bgr_brain_ready(session_id, thread_id)
         write_bridge_state(
             bridge_dir,
             CodexNativeBridgeState(

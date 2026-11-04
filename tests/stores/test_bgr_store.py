@@ -14,6 +14,7 @@ from omnigent.bgr import (
     ConfigUpdate,
     Contract,
     Fence,
+    LaunchRequest,
     LeaseRequest,
     MailboxDiscard,
     NativeBrainBinding,
@@ -84,6 +85,89 @@ def question(task, **overrides):
             **overrides,
         }
     )
+
+
+def test_launch_intent_is_retry_stable_across_restarts_and_concurrent_requests(db_uri):
+    request = LaunchRequest(
+        team_id=TEAM,
+        agent_id="registered-agent",
+        workspace="/work/repo",
+        config=CONFIG,
+        initial_prompt="Implement the requested change",
+    )
+
+    def reserve(_):
+        return BgrStore(db_uri).reserve_launch(OWNER, HOST, request)
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        launches = list(pool.map(reserve, range(8)))
+    assert len({launch.brain_session_id for launch in launches}) == 1
+    assert len({launch.controller_id for launch in launches}) == 1
+    assert reserve(None) == launches[0]
+    for owner, host, body in [
+        ("bob", HOST, request),
+        (OWNER, "another-host", request),
+        (OWNER, HOST, request.model_copy(update={"initial_prompt": "Different task"})),
+        (OWNER, HOST, request.model_copy(update={"workspace": "/another"})),
+        (OWNER, HOST, request.model_copy(update={"agent_id": "another-agent"})),
+    ]:
+        with pytest.raises(OmnigentError):
+            BgrStore(db_uri).reserve_launch(owner, host, body)
+    with workspace_scope(99):
+        other = reserve(None)
+    assert other.brain_session_id != launches[0].brain_session_id
+
+
+def test_launch_claim_fences_concurrent_and_expired_handlers(db_uri):
+    now = [1000]
+    store = BgrStore(db_uri, clock=lambda: now[0])
+    request = LaunchRequest(
+        team_id=TEAM, agent_id="agent", workspace="/work", config=CONFIG, initial_prompt="Task"
+    )
+    intent = store.reserve_launch(OWNER, HOST, request)
+    first, second = uuid4().hex, uuid4().hex
+    assert store.claim_launch(OWNER, TEAM, first, ttl_seconds=5) == intent
+    assert store.claim_launch(OWNER, TEAM, second) is None
+    with pytest.raises(OmnigentError):
+        store.finish_launch(OWNER, TEAM, second, state="running")
+    now[0] += 6
+    assert store.claim_launch(OWNER, TEAM, second) == intent
+    with pytest.raises(OmnigentError):
+        store.finish_launch(OWNER, TEAM, first, state="running")
+    starting = store.finish_launch(OWNER, TEAM, second, state="starting")
+    assert starting.brain_session_id == intent.brain_session_id
+    assert BgrStore(db_uri).get_launch(OWNER, TEAM) == starting
+    with pytest.raises(OmnigentError):
+        store.get_launch("bob", TEAM)
+    assert store.claim_launch(OWNER, TEAM, first) == starting
+    running = store.finish_launch(OWNER, TEAM, first, state="running")
+    assert running.state == "running"
+    assert running.brain_session_id == intent.brain_session_id
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"workspace": "relative"},
+        {"workspace": "/a/../b"},
+        {"workspace": "/a\x00b"},
+        {"initial_prompt": "  "},
+        {"initial_prompt": "x" * 8001},
+        {"team_id": "invalid"},
+        {"unknown": "value"},
+    ],
+)
+def test_launch_request_rejects_invalid_input(changes):
+    payload = {
+        "team_id": TEAM,
+        "agent_id": "agent",
+        "workspace": "/work",
+        "config": CONFIG,
+        "initial_prompt": "Task",
+        **changes,
+    }
+    with pytest.raises(ValidationError):
+        LaunchRequest.model_validate(payload)
 
 
 def test_task_anchor_supports_native_question_progress_and_results(store):

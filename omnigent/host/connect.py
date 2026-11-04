@@ -120,6 +120,8 @@ from omnigent.host.frames import (
     HostPluginsResultFrame,
     HostProbeAccountsFrame,
     HostProbeAccountsResultFrame,
+    HostProbeBgrFrame,
+    HostProbeBgrResultFrame,
     HostRefreshHarnessesFrame,
     HostRefreshHarnessesResultFrame,
     HostRemoveWorktreeFrame,
@@ -5960,6 +5962,34 @@ class HostProcess:
                     install_result.gateway_inference,
                 )
             await self._send_text(ws, encode_host_frame(install_result))
+        elif isinstance(frame, HostProbeBgrFrame):
+            try:
+                from omnigent.runner.bgr_runtime import probe_bgr_runtime
+
+                result = await probe_bgr_runtime()
+                harnesses = result.get("supported_harnesses")
+                reason = result.get("reason")
+                probe_result = HostProbeBgrResultFrame(
+                    request_id=frame.request_id,
+                    launch_supported=result.get("launch_supported") is True,
+                    reviewer_isolation=result.get("reviewer_isolation") is True,
+                    supported_harnesses=[
+                        harness
+                        for harness in (harnesses if isinstance(harnesses, list) else [])
+                        if isinstance(harness, str)
+                    ],
+                    reason=reason if isinstance(reason, str) else None,
+                )
+            except Exception:
+                _logger.exception("BGR native runtime probe failed")
+                probe_result = HostProbeBgrResultFrame(
+                    request_id=frame.request_id,
+                    launch_supported=False,
+                    reviewer_isolation=False,
+                    supported_harnesses=[],
+                    reason="BGR runtime probe failed; update the host and MultiDex",
+                )
+            await self._send_text(ws, encode_host_frame(probe_result))
         elif isinstance(frame, HostProbeAccountsFrame):
             await self._send_text(
                 ws,

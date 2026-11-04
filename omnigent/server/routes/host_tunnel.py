@@ -60,6 +60,7 @@ from omnigent.host.frames import (
     HostModelOptionsResultFrame,
     HostPluginsResultFrame,
     HostProbeAccountsResultFrame,
+    HostProbeBgrResultFrame,
     HostRefreshHarnessesResultFrame,
     HostRemoveWorktreeResultFrame,
     HostRunnerExitedFrame,
@@ -1028,6 +1029,19 @@ async def _receive_loop(
                         "harness_accounts": frame.harness_accounts,
                         "gateway_inference": frame.gateway_inference,
                         "error": frame.error,
+                    }
+                )
+            continue
+
+        if isinstance(frame, HostProbeBgrResultFrame):
+            probe_future = conn.pending_bgr_probes.pop(frame.request_id, None)
+            if probe_future is not None and not probe_future.done():
+                probe_future.set_result(
+                    {
+                        "launch_supported": frame.launch_supported,
+                        "reviewer_isolation": frame.reviewer_isolation,
+                        "supported_harnesses": frame.supported_harnesses,
+                        "reason": frame.reason,
                     }
                 )
             continue

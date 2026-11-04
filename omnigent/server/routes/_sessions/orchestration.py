@@ -11509,6 +11509,8 @@ async def _create_session_from_existing_agent(
     background_title_coordinator: BackgroundSessionTitleCoordinator | None = None,
     project_store: ProjectStore | None = None,
     created_by_session_id: str | None = None,
+    conversation_id: str | None = None,
+    framework_labels: dict[str, str] | None = None,
 ) -> tuple[SessionResponse, Conversation]:
     """
     Create a session bound to an already-registered agent.
@@ -11539,6 +11541,8 @@ async def _create_session_from_existing_agent(
         to the runner.
     :param artifact_store: Optional binary content store for the same.
     :param created_by_session_id: Server-authorized source of an independent worker.
+    :param conversation_id: Server-reserved retry identity, never read from the request body.
+    :param framework_labels: Server-authored lifecycle bindings, added after client validation.
     :returns: The newly created session snapshot and its conversation row.
     :raises OmnigentError: 404 if no agent matches ``body.agent_id``;
         403/404 if ``parent_session_id`` or session-scoped ``agent_id``
@@ -12092,6 +12096,7 @@ async def _create_session_from_existing_agent(
 
     native_agent = native_coding_agent_for_agent_name(agent.name)
     initial_labels = dict(body.labels) if body.labels else {}
+    initial_labels.update(framework_labels or {})
     client_surface = resolve_client_surface(
         request.headers,
         parent_labels=_parent_for_routing.labels if _parent_for_routing is not None else None,
@@ -12168,6 +12173,7 @@ async def _create_session_from_existing_agent(
         )
         with creation_stage("create_persistence_ms"):
             conv = conversation_store.create_conversation(
+                conversation_id=conversation_id,
                 agent_id=agent.id,
                 title=body.title,
                 parent_conversation_id=body.parent_session_id,

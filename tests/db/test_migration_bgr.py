@@ -28,12 +28,12 @@ def test_bgr_upgrade_downgrade_and_model_parity(database):
             ),
             {"id": session},
         )
-    _migrate(uri, engine, "upgrade", "b7e9f1a3c546")
+    _migrate(uri, engine, "upgrade", "head")
     inspector = sa.inspect(engine)
     models = [
         table for name, table in OmnigentBase.metadata.tables.items() if name.startswith("bgr_")
     ]
-    assert len(models) == 7
+    assert len(models) >= 8
     for table in models:
         assert set(table.c.keys()) == {
             column["name"] for column in inspector.get_columns(table.name)
@@ -56,7 +56,9 @@ def test_bgr_upgrade_downgrade_and_model_parity(database):
         }
         columns = {column["name"]: column for column in inspector.get_columns(table.name)}
         assert isinstance(columns["document"]["type"], sa.LargeBinary)
-        assert table.c.document.type.max_stored_bytes == 16_383
+        assert table.c.document.type.max_stored_bytes == (
+            65_535 if table.name == "bgr_launches" else 16_383
+        )
         for column in columns.values():
             assert column["default"] is None
             assert not isinstance(column["type"], sa.Float)
@@ -84,14 +86,17 @@ def test_bgr_upgrade_downgrade_and_model_parity(database):
 def test_bgr_ddl_without_application_metadata(database):
     uri, engine = database
     scripts = ScriptDirectory.from_config(_build_alembic_config(uri))
-    revisions = ["e4b6c8d0f213", "f5c7d9e1a324", "a6d8e0f2b435", "b7e9f1a3c546"]
+    revisions = [
+        revision.revision
+        for revision in reversed(list(scripts.iterate_revisions("heads", "d0a1f879a01d")))
+    ]
     with engine.begin() as connection, Operations.context(MigrationContext.configure(connection)):
         for revision in revisions:
             namespace = runpy.run_path(scripts.get_revision(revision).path)
             namespace["upgrade"]()
         inspector = sa.inspect(connection)
         assert (
-            len([table for table in inspector.get_table_names() if table.startswith("bgr_")]) == 7
+            len([table for table in inspector.get_table_names() if table.startswith("bgr_")]) >= 8
         )
         for table in inspector.get_table_names():
             assert all(column["default"] is None for column in inspector.get_columns(table))

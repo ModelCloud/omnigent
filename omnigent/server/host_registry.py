@@ -48,6 +48,7 @@ from omnigent.host.frames import (
     HostMcpToolsResultFrame,
     HostPluginsResultFrame,
     HostProbeAccountsFrame,
+    HostProbeBgrFrame,
     HostSkillContentResultFrame,
     HostSkillsResultFrame,
     encode_host_frame,
@@ -194,6 +195,7 @@ def _fail_pending_mcp_servers(conn: HostConnection) -> None:
 def _fail_pending_worktrees(conn: HostConnection) -> None:
     """Fail worktree requests as soon as their host disappears."""
     for pending in (
+        conn.pending_bgr_probes,
         conn.pending_create_worktrees,
         conn.pending_remove_worktrees,
         conn.pending_list_worktrees,
@@ -539,6 +541,8 @@ class HostConnection:
     pending_harness_account_probes: dict[str, asyncio.Future[dict[str, Any]]] = field(
         default_factory=dict,
     )
+    pending_bgr_probes: dict[str, asyncio.Future[dict[str, Any]]] = field(default_factory=dict)
+    bgr_probe_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     harness_account_probe_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     harness_accounts_probed_at: float | None = None
     pending_harness_login_starts: dict[str, asyncio.Future[dict[str, Any]]] = field(
@@ -962,6 +966,20 @@ class HostRegistry:
                 raise ConnectionError(f"host {conn.host_id!r} connection was replaced")
 
         conn.enqueue(data)
+
+    async def request_bgr_probe(
+        self, conn: HostConnection, *, timeout_s: float = 30
+    ) -> dict[str, Any]:
+        """Request one owner-checked, metadata-only native runtime probe."""
+        async with conn.bgr_probe_lock:
+            request_id = secrets.token_hex(8)
+            future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+            conn.pending_bgr_probes[request_id] = future
+            try:
+                self.send_text(conn, encode_host_frame(HostProbeBgrFrame(request_id=request_id)))
+                return await asyncio.wait_for(future, timeout=timeout_s)
+            finally:
+                conn.pending_bgr_probes.pop(request_id, None)
 
     async def request_harness_accounts(
         self,

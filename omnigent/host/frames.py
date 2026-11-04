@@ -81,6 +81,7 @@ CAP_SKILL_CONTENT = "skill_content"
 CAP_MCP_TOOLS = "mcp_tools"
 CAP_REFRESH_HARNESSES = "refresh_harnesses"
 CAP_HARNESS_ACCOUNTS = "harness_accounts"
+CAP_BGR_PROBE = "bgr_probe"
 CAP_HARNESS_LOGIN = "harness_login"
 CAP_MCP_REGISTRY = "mcp_registry"
 # The host bounds a whole worktree create by ``HostCreateWorktreeFrame.timeout_s``:
@@ -88,6 +89,7 @@ CAP_WORKTREE_CREATE_BUDGET = "worktree_create_budget"
 
 # Every capability THIS build supports; reported verbatim in the hello frame.
 HOST_CAPABILITIES: list[str] = [
+    CAP_BGR_PROBE,
     CAP_CODEX_SIDE_CHAT,
     CAP_CODEX_PLAN_AT_LAUNCH,
     CAP_FILESYSTEM_ATTACHMENTS,
@@ -180,6 +182,8 @@ class HostFrameKind(str, Enum):
     REFRESH_HARNESSES_RESULT = "host.refresh_harnesses_result"
     PROBE_HARNESS_ACCOUNTS = "host.probe_harness_accounts"
     PROBE_HARNESS_ACCOUNTS_RESULT = "host.probe_harness_accounts_result"
+    PROBE_BGR = "host.probe_bgr"
+    PROBE_BGR_RESULT = "host.probe_bgr_result"
     HARNESS_LOGIN = "host.harness_login"
     HARNESS_LOGIN_RESULT = "host.harness_login_result"
     HARNESS_LOGIN_CANCEL = "host.harness_login_cancel"
@@ -888,6 +892,24 @@ class HostRefreshHarnessesResultFrame:
 
 
 @dataclass
+class HostProbeBgrFrame:
+    """Server → host: probe installed BGR runtime without a model turn."""
+
+    request_id: str
+
+
+@dataclass
+class HostProbeBgrResultFrame:
+    """Host → server: verified native/controller launch support."""
+
+    request_id: str
+    launch_supported: bool
+    reviewer_isolation: bool
+    supported_harnesses: list[str]
+    reason: str | None = None
+
+
+@dataclass
 class HostProbeAccountsFrame:
     """Server → host: probe non-secret harness account metadata."""
 
@@ -1482,6 +1504,8 @@ HostFrame = (
     | HostRefreshHarnessesResultFrame
     | HostProbeAccountsFrame
     | HostProbeAccountsResultFrame
+    | HostProbeBgrFrame
+    | HostProbeBgrResultFrame
     | HostHarnessLoginFrame
     | HostHarnessLoginResultFrame
     | HostHarnessLoginCancelFrame
@@ -1828,6 +1852,21 @@ def encode_host_frame(frame: HostFrame) -> str:
                 "harness_accounts": frame.harness_accounts,
                 "gateway_inference": frame.gateway_inference,
                 "error": frame.error,
+            }
+        )
+    if isinstance(frame, HostProbeBgrFrame):
+        return _encode_payload(
+            {"kind": HostFrameKind.PROBE_BGR.value, "request_id": frame.request_id}
+        )
+    if isinstance(frame, HostProbeBgrResultFrame):
+        return _encode_payload(
+            {
+                "kind": HostFrameKind.PROBE_BGR_RESULT.value,
+                "request_id": frame.request_id,
+                "launch_supported": frame.launch_supported,
+                "reviewer_isolation": frame.reviewer_isolation,
+                "supported_harnesses": frame.supported_harnesses,
+                "reason": frame.reason,
             }
         )
     if isinstance(frame, HostProbeAccountsFrame):
@@ -2465,6 +2504,16 @@ def _decode_known_host_frame(
             return HostRefreshHarnessesFrame(request_id=_required_str(msg, "request_id"))
         case HostFrameKind.REFRESH_HARNESSES_RESULT:
             return _decode_refresh_harnesses_result(msg)
+        case HostFrameKind.PROBE_BGR:
+            return HostProbeBgrFrame(request_id=_required_str(msg, "request_id"))
+        case HostFrameKind.PROBE_BGR_RESULT:
+            return HostProbeBgrResultFrame(
+                request_id=_required_str(msg, "request_id"),
+                launch_supported=_required_bool(msg, "launch_supported"),
+                reviewer_isolation=_required_bool(msg, "reviewer_isolation"),
+                supported_harnesses=_optional_str_list(msg, "supported_harnesses"),
+                reason=_optional_nullable_str(msg, "reason"),
+            )
         case HostFrameKind.PROBE_HARNESS_ACCOUNTS:
             return HostProbeAccountsFrame(
                 request_id=_required_str(msg, "request_id"),
