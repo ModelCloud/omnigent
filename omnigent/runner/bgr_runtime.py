@@ -10,6 +10,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
+from uuid import uuid4
 
 import httpx
 from fastapi import APIRouter
@@ -127,9 +128,10 @@ async def unregister_bgr_brain(
     if process is not None and process.returncode is None:
         return False
     async with runtime._lock:
+        runtime._recovering = True
         for role in tuple(runtime.roles.values()):
             if role is not runtime.brain and not role.stopped:
-                result = await runtime.operation("stop", {"session_id": role.session_id})
+                result = await runtime._stop_role(role)
                 if result.get("stop_confirmed") is not True:
                     return False
         for role in runtime.roles.values():
@@ -176,6 +178,8 @@ class BgrRuntime:
         self.server_client = server_client
         self.team_id = team_id
         self.roles = {brain.session_id: brain}
+        self.runtime_id = uuid4().hex
+        self._recovering = False
         self.ready = asyncio.Event()
         self._lock = asyncio.Lock()
         self._workspaces: dict[str, Workspace] = {}
@@ -185,6 +189,10 @@ class BgrRuntime:
 
     def observe(self, role: _RoleProcess) -> None:
         async def emitted(message: CodexMessage) -> None:
+            if self._recovering:
+                raise OmnigentError(
+                    "Native runtime is fenced for recovery", code=ErrorCode.CONFLICT
+                )
             params = _JSON.validate_python(message.get("params"))
             thread_id = params.get("threadId")
             if role.thread_id is None or thread_id != role.thread_id:
@@ -203,6 +211,8 @@ class BgrRuntime:
         role.remove_observers.append(role.client.add_notification_observer("bgr/message", emitted))
 
     async def thread_ready(self, thread_id: str) -> None:
+        if self._recovering:
+            raise OmnigentError("Native runtime is fenced for recovery", code=ErrorCode.CONFLICT)
         if self.brain.thread_id not in {None, thread_id}:
             raise OmnigentError("Brain thread changed", code=ErrorCode.CONFLICT)
         self.brain.thread_id = thread_id
@@ -211,12 +221,49 @@ class BgrRuntime:
                 "session_id": self.brain.session_id,
                 "thread_id": thread_id,
                 "method": "runtime/thread-ready",
-                "params": {"thread_id": thread_id},
+                "params": {
+                    "thread_id": thread_id,
+                    "runtime_id": self.runtime_id,
+                    "host_id": self.host_id,
+                },
             }
         )
-        self.ready.set()
+        if not self._recovering:
+            self.ready.set()
 
     async def operation(
+        self, operation: str, parameters: dict[str, JsonValue]
+    ) -> dict[str, JsonValue]:
+        async with self._lock:
+            if operation == "stop_generation":
+                if parameters.get("runtime_id") != self.runtime_id:
+                    raise OmnigentError("Native owner generation changed", code=ErrorCode.CONFLICT)
+                self._recovering = True
+                self.ready.clear()
+                for role in tuple(self.roles.values()):
+                    await self._stop_role(role)
+                return {
+                    "runtime_id": self.runtime_id,
+                    "host_id": self.host_id,
+                    "domain_stop_confirmed": False,
+                    "reason": "Process-group shutdown cannot prove escaped descendant quiescence",
+                }
+            if self._recovering and operation != "stop":
+                raise OmnigentError(
+                    "Native runtime is fenced for recovery", code=ErrorCode.CONFLICT
+                )
+            return await self._operation(operation, parameters)
+
+    async def _stop_role(self, role: _RoleProcess) -> dict[str, JsonValue]:
+        for remove in role.remove_observers:
+            remove()
+        if role is not self.brain:
+            await role.client.close()
+        await role.server.close()
+        role.stopped = role.server.proc is None
+        return {"stop_confirmed": role.stopped}
+
+    async def _operation(
         self, operation: str, parameters: dict[str, JsonValue]
     ) -> dict[str, JsonValue]:
         if operation in {"publication_preview", "publish", "publication_reconcile"}:
@@ -237,24 +284,22 @@ class BgrRuntime:
         if operation == "brain":
             if self.brain.thread_id is None:
                 raise OmnigentError("Brain thread not discovered", code=ErrorCode.CONFLICT)
-            return {"thread_id": self.brain.thread_id}
+            return {
+                "thread_id": self.brain.thread_id,
+                "runtime_id": self.runtime_id,
+                "host_id": self.host_id,
+                "process_loss_recovery": False,
+            }
         if operation == "workspace":
             return await self._workspace(parameters)
         if operation == "spawn":
-            async with self._lock:
-                return await self._spawn(parameters)
+            return await self._spawn(parameters)
         session_id = parameters.get("session_id")
         role = self.roles.get(session_id) if isinstance(session_id, str) else None
         if role is None:
             raise OmnigentError("Unknown native role process", code=ErrorCode.FORBIDDEN)
         if operation == "stop":
-            for remove in role.remove_observers:
-                remove()
-            if role is not self.brain:
-                await role.client.close()
-            await role.server.close()
-            role.stopped = role.server.proc is None
-            return {"stop_confirmed": role.stopped}
+            return await self._stop_role(role)
         if operation != "rpc" or role.stopped:
             raise OmnigentError(
                 "Unsupported native runtime operation", code=ErrorCode.INVALID_INPUT
@@ -509,6 +554,7 @@ class RuntimeCall(Record):
         "spawn",
         "rpc",
         "stop",
+        "stop_generation",
         "publication_preview",
         "publish",
         "publication_reconcile",

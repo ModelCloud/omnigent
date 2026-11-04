@@ -42,6 +42,8 @@ from omnigent.bgr import (
     Receipt,
     Record,
     Recovery,
+    RuntimeRecovery,
+    RuntimeStopEvidence,
     Send,
     Task,
     TaskClose,
@@ -250,7 +252,7 @@ class BgrStore:
 
         def apply(db: Session) -> LaunchIntent:
             team = self._owned(db, team_id, user_id)
-            self._fence(team, session_id, fence)
+            self._fence(team, session_id, fence, allow_recovery=True)
             binding_row = db.get(
                 SqlBgrNativeBinding, (current_workspace_id(), _team(team).brain_agent_id)
             )
@@ -267,6 +269,22 @@ class BgrStore:
                 raise _forbidden()
             intent = intent.model_copy(update={"state": "running", "reason": None})
             row.document = intent.model_dump_json()
+            history = _team(team).runtime_recoveries
+            if history:
+                if history[-1].state not in {"binding", "attached"}:
+                    raise _conflict("Replacement Brain has not been bound")
+                team.document = (
+                    _team(team)
+                    .model_copy(
+                        update={
+                            "runtime_recoveries": [
+                                *history[:-1],
+                                history[-1].model_copy(update={"state": "attached"}),
+                            ]
+                        }
+                    )
+                    .model_dump_json()
+                )
             return intent
 
         return self._write("record_verified_brain_attachment", apply)
@@ -376,13 +394,18 @@ class BgrStore:
         if row.brain_session_id != session_id:
             raise _forbidden()
 
-    def _epoch(self, row: SqlBgrTeam, epoch: int) -> None:
+    def _epoch(self, row: SqlBgrTeam, epoch: int, *, allow_recovery: bool = False) -> None:
         if row.epoch != epoch or row.lease_expires_at_us <= self._now_us():
             raise _conflict("BGR coordinator epoch is stale or its lease expired; reconcile first")
+        history = _team(row).runtime_recoveries
+        if history and history[-1].state != "attached" and not allow_recovery:
+            raise _conflict("BGR runtime replacement is not attached")
 
-    def _fence(self, row: SqlBgrTeam, session_id: str, body: Fence) -> None:
+    def _fence(
+        self, row: SqlBgrTeam, session_id: str, body: Fence, *, allow_recovery: bool = False
+    ) -> None:
         self._brain(row, session_id)
-        self._epoch(row, body.epoch)
+        self._epoch(row, body.epoch, allow_recovery=allow_recovery)
         if row.controller_id != body.controller_id:
             raise _conflict("Another BGR controller owns this epoch")
 
@@ -410,17 +433,259 @@ class BgrStore:
         def apply(db: Session) -> Team:
             row = self._owned(db, team_id, user_id)
             self._brain(row, session_id)
+            history = _team(row).runtime_recoveries
+            if history and history[-1].state != "attached":
+                raise _conflict(
+                    "Previous native process stops or replacement attach are unconfirmed"
+                )
             now = self._now_us()
             if row.lease_expires_at_us > now:
                 if row.controller_id != body.controller_id:
                     raise _conflict("Another BGR controller has a live lease")
             else:
+                if db.get(
+                    SqlBgrNativeBinding, (current_workspace_id(), _team(row).brain_agent_id)
+                ):
+                    raise _conflict("Native lease expiry requires verified process-loss recovery")
                 row.epoch += 1
             row.controller_id = body.controller_id
             row.lease_expires_at_us = now + body.ttl_seconds * _MICROSECONDS
             return _team(row)
 
         return self._write("acquire_controller", apply)
+
+    def begin_runtime_recovery(
+        self,
+        user_id: str,
+        session_id: str,
+        team_id: str,
+        fence: Fence,
+        *,
+        recovery_id: str,
+        runtime_id: str,
+        replacement_controller_id: str,
+    ) -> RuntimeRecovery:
+        """Fence old authority before asking its authenticated host to stop processes."""
+
+        def apply(db: Session) -> RuntimeRecovery:
+            row = self._owned(db, team_id, user_id)
+            self._brain(row, session_id)
+            team = _team(row)
+            if team.runtime_recoveries:
+                previous = team.runtime_recoveries[-1]
+                if previous.recovery_id == recovery_id:
+                    if (
+                        previous.runtime_id != runtime_id
+                        or previous.previous_epoch != fence.epoch
+                        or previous.previous_controller_id != fence.controller_id
+                        or previous.replacement_controller_id != replacement_controller_id
+                    ):
+                        raise _conflict("Recovery ID has different arguments")
+                    return previous
+                if previous.state != "attached":
+                    raise _conflict("Existing runtime recovery must be reconciled first")
+            if row.epoch != fence.epoch or row.controller_id != fence.controller_id:
+                raise _conflict("Recovery source fence changed")
+            mapping = db.get(SqlBgrNativeBinding, (current_workspace_id(), team.brain_agent_id))
+            if mapping is None:
+                raise _conflict("Recovery requires an exact native Brain owner")
+            binding = NativeBrainBinding.model_validate_json(mapping.document)
+            if (
+                binding.runtime_id != runtime_id
+                or binding.epoch != fence.epoch
+                or binding.host_id is None
+            ):
+                raise _conflict("Recovery requires the recorded native runtime generation")
+            recovery = RuntimeRecovery(
+                recovery_id=recovery_id,
+                runtime_id=runtime_id,
+                host_id=binding.host_id,
+                previous_thread_id=binding.thread_id,
+                previous_epoch=fence.epoch,
+                previous_controller_id=fence.controller_id,
+                replacement_controller_id=replacement_controller_id,
+            )
+            row.document = team.model_copy(
+                update={"runtime_recoveries": [*team.runtime_recoveries[-31:], recovery]}
+            ).model_dump_json()
+            row.lease_expires_at_us = 0
+            launch = db.get(SqlBgrLaunch, (current_workspace_id(), team_id))
+            if launch is not None:
+                launch.document = (
+                    LaunchIntent.model_validate_json(launch.document)
+                    .model_copy(
+                        update={
+                            "state": "blocked",
+                            "reason": "Native runtime stop is not yet confirmed",
+                        }
+                    )
+                    .model_dump_json()
+                )
+            return recovery
+
+        return self._write("fence_lost_runtime_before_host_stop", apply)
+
+    def complete_runtime_recovery(
+        self,
+        user_id: str,
+        session_id: str,
+        team_id: str,
+        *,
+        recovery_id: str,
+        evidence: RuntimeStopEvidence,
+    ) -> Team:
+        """Accept only complete exact-generation host stop evidence, never native ACKs."""
+
+        def apply(db: Session) -> Team:
+            from omnigent.bgr_review import ReviewResult, ReviewRound
+            from omnigent.db.bgr_models import SqlBgrReviewRound
+
+            row = self._owned(db, team_id, user_id)
+            self._brain(row, session_id)
+            team = _team(row)
+            if not team.runtime_recoveries:
+                raise _conflict("No runtime recovery is pending")
+            recovery = team.runtime_recoveries[-1]
+            digest = _digest(evidence.model_dump(mode="json"))
+            if (
+                recovery.recovery_id != recovery_id
+                or recovery.runtime_id != evidence.runtime_id
+                or recovery.host_id != evidence.host_id
+            ):
+                raise _conflict("Stop evidence belongs to another native runtime")
+            if recovery.state != "stopping":
+                if recovery.stop_manifest_sha256 != digest:
+                    raise _conflict("Recovery already has different stop evidence")
+                return team
+            stopped = {process.session_id: process for process in evidence.processes}
+            if len(stopped) != len(evidence.processes):
+                raise _conflict("Stop inventory contains duplicate sessions")
+            brain = stopped.get(session_id)
+            if (
+                brain is None
+                or brain.role != "brain"
+                or brain.thread_id != recovery.previous_thread_id
+            ):
+                raise _conflict("Exact previous Brain process stop is unconfirmed")
+            agents = {
+                agent.id: Agent.model_validate_json(agent.document)
+                for agent in db.scalars(
+                    select(SqlBgrAgent).where(
+                        SqlBgrAgent.workspace_id == current_workspace_id(),
+                        SqlBgrAgent.team_id == team_id,
+                    )
+                )
+            }
+            for mapping in db.scalars(
+                select(SqlBgrNativeBinding).where(
+                    SqlBgrNativeBinding.workspace_id == current_workspace_id(),
+                    SqlBgrNativeBinding.team_id == team_id,
+                )
+            ):
+                if mapping.id == team.brain_agent_id:
+                    continue
+                binding = NativeBinding.model_validate_json(mapping.document)
+                if binding.epoch != recovery.previous_epoch:
+                    continue
+                attempt_row = self._attempt(db, team_id, binding.attempt_id)
+                attempt = Attempt.model_validate_json(attempt_row.document)
+                process = stopped.get(attempt.session_id)
+                if (
+                    process is None
+                    or process.thread_id != binding.thread_id
+                    or process.role != agents[attempt.agent_id].role
+                ):
+                    raise _conflict("An owned native process stop is unconfirmed")
+            for attempt_row in db.scalars(
+                select(SqlBgrAttempt).where(
+                    SqlBgrAttempt.workspace_id == current_workspace_id(),
+                    SqlBgrAttempt.team_id == team_id,
+                )
+            ):
+                attempt = Attempt.model_validate_json(attempt_row.document)
+                if attempt.epoch == recovery.previous_epoch and attempt.state == "reserved":
+                    attempt_row.document = attempt.model_copy(
+                        update={"state": "failed"}
+                    ).model_dump_json()
+                    attempt_row.active_writer_key = None
+            for review_row in db.scalars(
+                select(SqlBgrReviewRound).where(
+                    SqlBgrReviewRound.workspace_id == current_workspace_id(),
+                    SqlBgrReviewRound.team_id == team_id,
+                )
+            ):
+                round = ReviewRound.model_validate_json(review_row.document)
+                if round.epoch == recovery.previous_epoch:
+                    jobs = [
+                        job
+                        if job.state == "sealed"
+                        else job.model_copy(
+                            update={
+                                "state": "sealed",
+                                "result": ReviewResult(
+                                    status="incomplete",
+                                    summary=(
+                                        "Native reviewer process was lost and its host "
+                                        "confirmed shutdown. No completed review is available."
+                                    ),
+                                ),
+                            }
+                        )
+                        for job in round.jobs
+                    ]
+                    review_row.document = round.model_copy(update={"jobs": jobs}).model_dump_json()
+            now = self._now_us()
+            for envelope_row in db.scalars(
+                select(SqlBgrEnvelope).where(
+                    SqlBgrEnvelope.workspace_id == current_workspace_id(),
+                    SqlBgrEnvelope.team_id == team_id,
+                    SqlBgrEnvelope.consumed_at_us.is_(None),
+                    SqlBgrEnvelope.discarded_at_us.is_(None),
+                )
+            ):
+                envelope = _envelope(envelope_row)
+                if envelope.epoch <= recovery.previous_epoch:
+                    envelope_row.document = envelope.model_copy(
+                        update={
+                            "discard": DiscardEvidence(
+                                epoch=recovery.previous_epoch + 1,
+                                session_id=session_id,
+                                reason=(
+                                    "Previous native generation stopped; "
+                                    "delivery/consumption is unknown, not replayed"
+                                ),
+                                discarded_at=now / _MICROSECONDS,
+                            )
+                        }
+                    ).model_dump_json()
+                    envelope_row.discarded_at_us = now
+            recovery = recovery.model_copy(
+                update={"state": "ready", "stop_manifest_sha256": digest}
+            )
+            row.document = team.model_copy(
+                update={"runtime_recoveries": [*team.runtime_recoveries[:-1], recovery]}
+            ).model_dump_json()
+            row.epoch = recovery.previous_epoch + 1
+            row.controller_id = recovery.replacement_controller_id
+            row.lease_expires_at_us = now + 300 * _MICROSECONDS
+            launch = db.get(SqlBgrLaunch, (current_workspace_id(), team_id))
+            if launch is not None:
+                launch.document = (
+                    LaunchIntent.model_validate_json(launch.document)
+                    .model_copy(
+                        update={
+                            "controller_id": row.controller_id,
+                            "state": "pending",
+                            "reason": None,
+                        }
+                    )
+                    .model_dump_json()
+                )
+                launch.claim_id = None
+                launch.claim_expires_at_us = 0
+            return _team(row)
+
+        return self._write("replace_fenced_runtime_after_all_processes_stopped", apply)
 
     def reserve(self, user_id: str, session_id: str, team_id: str, body: TaskReserve) -> Task:
         def apply(db: Session) -> Task:
@@ -564,6 +829,14 @@ class BgrStore:
         with self._sessions("read_team") as db:
             row = self._owned(db, team_id, user_id, lock=False)
             self._brain(row, session_id)
+            return _team(row)
+
+    def check_runtime_input(self, user_id: str, session_id: str, team_id: str) -> Team:
+        """Authorize public input only while the Brain's current runtime has a live lease."""
+        with self._sessions("authorize_runtime_input") as db:
+            row = self._owned(db, team_id, user_id, lock=False)
+            self._brain(row, session_id)
+            self._epoch(row, row.epoch)
             return _team(row)
 
     def recover(
@@ -843,7 +1116,7 @@ class BgrStore:
 
         def apply(db: Session) -> NativeBrainBinding:
             team = self._owned(db, team_id, user_id)
-            self._fence(team, session_id, fence)
+            self._fence(team, session_id, fence, allow_recovery=binding is not None)
             if _team(team).config.brain.harness != "codex-native":
                 raise _conflict("Native Brain requires an explicit codex-native profile")
             brain_agent_id = _team(team).brain_agent_id
@@ -863,7 +1136,35 @@ class BgrStore:
                         )
                     )
                 elif NativeBrainBinding.model_validate_json(existing.document) != binding:
-                    raise _conflict("Brain already has another immutable native binding")
+                    history = _team(team).runtime_recoveries
+                    previous = NativeBrainBinding.model_validate_json(existing.document)
+                    if (
+                        not history
+                        or history[-1].state != "ready"
+                        or history[-1].previous_epoch != previous.epoch
+                        or history[-1].previous_thread_id != previous.thread_id
+                        or history[-1].runtime_id != previous.runtime_id
+                        or binding.epoch != previous.epoch + 1
+                        or binding.runtime_id is None
+                        or binding.runtime_id == previous.runtime_id
+                        or binding.thread_id == previous.thread_id
+                        or binding.host_id != previous.host_id
+                    ):
+                        raise _conflict("Brain already has another immutable native binding")
+                    existing.thread_id = binding.thread_id
+                    existing.document = binding.model_dump_json()
+                    team.document = (
+                        _team(team)
+                        .model_copy(
+                            update={
+                                "runtime_recoveries": [
+                                    *history[:-1],
+                                    history[-1].model_copy(update={"state": "binding"}),
+                                ]
+                            }
+                        )
+                        .model_dump_json()
+                    )
             elif existing is None:
                 raise _conflict("Brain has no native binding")
             else:

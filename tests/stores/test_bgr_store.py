@@ -319,7 +319,7 @@ def test_native_brain_binding_has_no_fabricated_task_or_attempt_and_is_epoch_fen
         store.native_brain_binding(OWNER, BRAIN, TEAM, fence)
     assert store.native_brain_binding(OWNER, BRAIN, TEAM, fence, binding=binding) == binding
     assert store.native_brain_binding(OWNER, BRAIN, TEAM, fence) == binding
-    assert set(binding.model_dump()) == {"team_id", "epoch", "thread_id"}
+    assert set(binding.model_dump(exclude_none=True)) == {"team_id", "epoch", "thread_id"}
     with pytest.raises(OmnigentError):
         store.native_brain_binding(
             OWNER,
@@ -331,7 +331,8 @@ def test_native_brain_binding_has_no_fabricated_task_or_attempt_and_is_epoch_fen
     with pytest.raises(OmnigentError):
         store.native_brain_binding("other", BRAIN, TEAM, fence)
     now[0] += 6
-    store.acquire(OWNER, BRAIN, TEAM, LeaseRequest(controller_id=CONTROLLER))
+    with pytest.raises(OmnigentError, match="Native lease expiry"):
+        store.acquire(OWNER, BRAIN, TEAM, LeaseRequest(controller_id=CONTROLLER))
     for epoch in (1, 2):
         with pytest.raises(OmnigentError):
             store.native_brain_binding(

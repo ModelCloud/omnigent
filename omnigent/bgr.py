@@ -234,6 +234,49 @@ class TaskClose(Fence):
         return value
 
 
+class RuntimeStop(Record):
+    session_id: Identifier
+    thread_id: str | None
+    role: Literal["brain", "grunt", "reviewer"]
+    process_tag: Label
+    process_domain_id: Label
+    domain_stop_confirmed: Literal[True]
+    stop_confirmed: Literal[True]
+
+    @field_validator("stop_confirmed", "domain_stop_confirmed", mode="before")
+    @classmethod
+    def explicit_stop(cls, value: object) -> object:
+        if value is not True:
+            raise ValueError("Native process stop requires explicit true")
+        return value
+
+
+class RuntimeStopEvidence(Record):
+    runtime_id: Identifier
+    host_id: Label
+    inventory_complete: Literal[True]
+    processes: Annotated[list[RuntimeStop], Field(min_length=1, max_length=1024)]
+
+    @field_validator("inventory_complete", mode="before")
+    @classmethod
+    def complete_inventory(cls, value: object) -> object:
+        if value is not True:
+            raise ValueError("Native stop inventory must include starting and unbound processes")
+        return value
+
+
+class RuntimeRecovery(Record):
+    recovery_id: Identifier
+    runtime_id: Identifier
+    host_id: Label
+    previous_thread_id: str
+    previous_epoch: Annotated[int, Field(ge=1)]
+    previous_controller_id: Identifier
+    replacement_controller_id: Identifier
+    state: Literal["stopping", "ready", "binding", "attached"] = "stopping"
+    stop_manifest_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = None
+
+
 class Team(Record):
     protocol_version: Literal[1] = 1
     team_id: Identifier
@@ -245,6 +288,7 @@ class Team(Record):
     epoch: int
     controller_id: Identifier | None
     lease_expires_at: float
+    runtime_recoveries: Annotated[list[RuntimeRecovery], Field(max_length=32)] = []
 
 
 class Agent(Record):
@@ -296,6 +340,8 @@ class NativeAssignment(Record):
 class NativeBrainBinding(Record):
     team_id: Identifier
     epoch: Annotated[int, Field(ge=1)]
+    runtime_id: Identifier | None = None
+    host_id: Label | None = None
     thread_id: Annotated[
         str, Field(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
     ]

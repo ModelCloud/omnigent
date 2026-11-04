@@ -23,11 +23,16 @@ async def controller(route):
     processes = {BRAIN: brain}
     calls = []
     role_sessions = AsyncMock()
+    runtime_id = mailbox.store.native_brain_binding(OWNER, BRAIN, TEAM, mailbox.fence).runtime_id
 
     async def host_call(operation, parameters):
         calls.append((operation, parameters))
         if operation == "brain":
-            return {"thread_id": brain.connection.thread_id}
+            return {
+                "thread_id": brain.connection.thread_id,
+                "runtime_id": runtime_id,
+                "host_id": HOST,
+            }
         if operation == "workspace":
             return {
                 "workspace": {
@@ -100,6 +105,37 @@ async def controller(route):
         yield current, processes, calls, role_sessions
     finally:
         await registry.close()
+
+
+async def test_same_live_attach_inspects_owner_and_rejects_changed_generation(controller):
+    current, processes, _calls, role_sessions = controller
+    registry = BgrControllers(current.store, role_sessions)
+    registry._controllers[BRAIN] = current
+    before = len(processes[BRAIN].calls)
+    assert (
+        await registry.attach(
+            user_id=OWNER,
+            brain_session_id=BRAIN,
+            team_id=TEAM,
+            fence=current.fence,
+            runtime=current.runtime,
+        )
+        is current
+    )
+    assert len(processes[BRAIN].calls) > before
+
+    async def changed(operation, parameters):
+        metadata = await current.runtime.call(operation, parameters)
+        return {**metadata, "runtime_id": uuid4().hex}
+
+    with pytest.raises(OmnigentError, match="generation changed"):
+        await registry.attach(
+            user_id=OWNER,
+            brain_session_id=BRAIN,
+            team_id=TEAM,
+            fence=current.fence,
+            runtime=BgrHostRuntime(BRAIN, changed),
+        )
 
 
 async def test_brain_create_is_durable_retry_stable_and_capacity_bounded(controller):

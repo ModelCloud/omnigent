@@ -225,6 +225,40 @@ async def test_unregister_requires_stopped_exact_owner_and_joins_children(tmp_pa
         await worker_client.close()
 
 
+async def test_stop_generation_serializes_spawn_and_never_claims_domain_quiescence(tmp_path):
+    stopped, release = asyncio.Event(), asyncio.Event()
+    native = SimpleNamespace(proc=SimpleNamespace(returncode=None))
+
+    async def close():
+        stopped.set()
+        await release.wait()
+        native.proc = None
+
+    native.close = close
+    role = runtime._RoleProcess(BRAIN, "brain", 1, SimpleNamespace(), native, str(uuid4()))
+    owner = runtime.BgrRuntime(
+        role, workspace=tmp_path, profiles=CONFIG, callback=AsyncMock(), host_id=HOST, spec=None
+    )
+    with pytest.raises(OmnigentError, match="generation changed"):
+        await owner.operation("stop_generation", {"runtime_id": uuid4().hex})
+    stopping = asyncio.create_task(
+        owner.operation("stop_generation", {"runtime_id": owner.runtime_id})
+    )
+    await stopped.wait()
+    spawning = asyncio.create_task(owner.operation("spawn", {}))
+    assert not spawning.done()
+    release.set()
+    result = await stopping
+    assert native.proc is None and result["domain_stop_confirmed"] is False
+    with pytest.raises(OmnigentError, match="fenced"):
+        await spawning
+    for operation in ("brain", "publication_preview", "publish", "publication_reconcile", "rpc"):
+        with pytest.raises(OmnigentError, match="fenced"):
+            await owner.operation(operation, {})
+    with pytest.raises(OmnigentError, match="fenced"):
+        await owner.thread_ready(role.thread_id)
+
+
 @pytest.mark.parametrize("fresh", [False, True])
 @pytest.mark.parametrize("failure", [None, "bind", "materialize"])
 async def test_brain_preparation_retains_tool_enabled_thread_without_a_turn(

@@ -659,3 +659,88 @@ reattach surviving reservations but cannot replace a lost brain or allocate a
 fresh attempt under an existing task; automatic recovery and attempt history
 require a subsequent schema/API extension. Archiving/compacting bounded retention
 and actual host-path canonicalization also remain explicit follow-ups.
+
+## Process-loss fencing primitives (replacement disabled)
+
+The current host launcher **cannot prove complete descendant quiescence**.
+`server.proc is None`, process-group termination, native cancellation, archive,
+checkpoint and an empty mailbox are not whole-domain stop evidence. Escaped
+descendants are not covered. Consequently this implementation never advertises
+working process-loss replacement and never automatically restarts the initial task.
+A trusted containment supervisor is required before enabling replacement.
+
+`BgrRuntime` allocates a fresh 32-hex `runtime_id` per registration. Same-live
+registration preserves that generation; unregister/re-registration does not.
+`runtime/thread-ready.params` carries `thread_id`, `runtime_id`, `host_id`.
+The immutable native Brain binding persists the same generation and host alongside
+its epoch and thread UUID. Reattach requires all three to match and a successful
+native identity inspection; native lease expiry alone cannot acquire a new epoch.
+
+Private host RPC is `POST /v1/sessions/{brain_session_id}/bgr/runtime`:
+
+```json
+{"operation":"brain","parameters":{}}
+```
+
+It returns `thread_id`, `runtime_id`, `host_id`, `process_loss_recovery:false`.
+After durable revocation, an authenticated owner recovery flow may request:
+
+```json
+{"operation":"stop_generation","parameters":{"runtime_id":"<exact old generation>"}}
+```
+
+This serializes with spawn, ordinary RPC, publication, stop and unregister. It
+fences subsequent callbacks/operations and closes the owned app-server groups.
+Its response is **not** stop evidence:
+
+```json
+{
+  "runtime_id":"<exact old generation>",
+  "host_id":"<registered host>",
+  "domain_stop_confirmed":false,
+  "reason":"Process-group shutdown cannot prove escaped descendant quiescence"
+}
+```
+
+The durable store APIs are:
+
+- `begin_runtime_recovery(user, brain_session, team, fence, *, recovery_id,
+  runtime_id, replacement_controller_id)`: valid even after old lease expiry;
+  atomically revokes the old lease, blocks launch and records the previous
+  controller, epoch, runtime and thread. Exact argument retries are stable.
+- `check_runtime_input(user, brain_session, team)`: shared public-input guard;
+  requires owner/Brain identity, a live lease and no unfinished recovery.
+- `complete_runtime_recovery(user, brain_session, team, *, recovery_id, evidence)`:
+  trusted-supervisor-only transition. Evidence must contain matching `runtime_id`,
+  `host_id`, explicit `inventory_complete:true` (including starting/unbound process
+  claims), and a `processes` entry for the exact Brain and every previous-epoch
+  native binding. Entries contain `session_id`, `thread_id`, `role`, `process_tag`,
+  `process_domain_id`, literal `stop_confirmed:true` and
+  `domain_stop_confirmed:true`. Native ACKs, unknown domains and truthy substitutes
+  do not qualify. The present host has no producer of such evidence.
+
+Only verified completion advances the epoch and makes the next controller ready.
+Old reserved attempts become failed with checkpoints preserved, unfinished reviews
+become explicitly incomplete, and unconsumed old envelopes get unknown/not-replayed
+discard evidence, never fabricated consumption. Publication claims remain intact
+for reconciliation. The logical Brain/team and original launch request are unchanged.
+The replacement must use a fresh native home/thread/runtime and a **separate recovery
+context**, never the already-delivered initial task or temporary reviewer roots.
+
+Recovery progresses `stopping → ready → binding → attached`. Normal input,
+`sys_bgr_control`, callbacks and publication must remain blocked until `attached`.
+Only trusted startup can install the one fresh native Brain binding in `ready`;
+`mark_launch_running` finishes its attachment. A second different binding is denied.
+The supervisor-free host remains in `stopping`; no launcher retry is authorized by
+an UNKNOWN response. These are guarded ledger primitives, not an operator UI or a
+successful integrated process-loss recovery demonstration.
+
+```bash
+.venv/bin/python -m pytest -q tests/stores/test_bgr_recovery.py \
+  tests/harnesses/codex_native/test_bgr_runtime.py \
+  tests/harnesses/codex_native/test_bgr_controller.py --reruns 0
+```
+
+Recovery tests inject explicit supervisor fixtures to exercise atomic state/fence
+transitions. Host tests separately prove the real process-group adapter returns
+UNKNOWN and blocks further operations; they do not claim escaped tools were reaped.

@@ -21,7 +21,7 @@ from omnigent.runner.bgr_mailbox import BgrNativeMailbox
 from omnigent.stores.bgr_review_store import BgrReviewStore
 from tests.stores.test_bgr_review_store import activate
 from tests.stores.test_bgr_review_store import request as review_request
-from tests.stores.test_bgr_store import BRAIN, CONFIG, CONTROLLER, OWNER, TEAM, reservation
+from tests.stores.test_bgr_store import BRAIN, CONFIG, CONTROLLER, HOST, OWNER, TEAM, reservation
 
 CAPTURED = json.loads(Path(__file__).with_name("bgr-general-capabilities.json").read_text())
 FENCE = Fence(controller_id=CONTROLLER, epoch=1)
@@ -114,7 +114,9 @@ def route(db_uri):
         BRAIN,
         TEAM,
         FENCE,
-        binding=NativeBrainBinding(team_id=TEAM, epoch=1, thread_id=str(uuid4())),
+        binding=NativeBrainBinding(
+            team_id=TEAM, epoch=1, thread_id=str(uuid4()), runtime_id=uuid4().hex, host_id=HOST
+        ),
     )
     store.bind_native(
         OWNER,

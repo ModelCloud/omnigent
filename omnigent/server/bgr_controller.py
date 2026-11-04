@@ -431,6 +431,19 @@ class BgrControllers:
                 old.authorize(user_id, brain_session_id)
                 if old.team_id != team_id or old.fence != fence:
                     raise OmnigentError("Controller fence conflict", code=ErrorCode.CONFLICT)
+                metadata = await runtime.call("brain", {})
+                binding = self.store.native_brain_binding(
+                    user_id, brain_session_id, team_id, fence
+                )
+                if (
+                    binding.runtime_id is None
+                    or binding.host_id is None
+                    or metadata.get("runtime_id") != binding.runtime_id
+                    or metadata.get("host_id") != binding.host_id
+                    or metadata.get("thread_id") != binding.thread_id
+                ):
+                    raise OmnigentError("Native owner generation changed", code=ErrorCode.CONFLICT)
+                await old.brain.inspect()
                 return old
             team = self.store.get_team(user_id, brain_session_id, team_id)
             metadata = await runtime.call("brain", {})
@@ -446,8 +459,14 @@ class BgrControllers:
                 brain_session_id,
                 team_id,
                 fence,
-                binding=NativeBrainBinding(
-                    team_id=team_id, epoch=fence.epoch, thread_id=thread_id
+                binding=NativeBrainBinding.model_validate(
+                    {
+                        "team_id": team_id,
+                        "epoch": fence.epoch,
+                        "thread_id": thread_id,
+                        "runtime_id": metadata.get("runtime_id"),
+                        "host_id": metadata.get("host_id"),
+                    }
                 ),
             )
             identity = NativeIdentity.model_validate(
