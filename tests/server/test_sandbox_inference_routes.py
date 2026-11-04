@@ -750,8 +750,9 @@ async def test_rejected_native_switch_restores_saved_model(
     forwarded_model: str,
 ):
     """An allowed selection must not persist when the live native runner rejects it."""
-    bindings = env.catalog.runtime_config["inference"]["harnesses"]
-    bindings["codex-native"] = copy.deepcopy(bindings["codex"])
+    # `codex` and `codex-native` canonicalize to the same fork harness, so the
+    # existing binding already serves `codex-native`; adding a second one would
+    # be rejected as a duplicate.
     agent = await create_test_agent(
         env.client,
         name="codex-native-ui",
@@ -799,6 +800,7 @@ async def test_rejected_native_switch_restores_saved_model(
         "type": "model_change",
         "model": forwarded_model,
         "rollback_on_refusal": True,
+        "cold_start_settings": True,
     }
     saved = env.store.get_conversation(session_id)
     assert saved is not None
