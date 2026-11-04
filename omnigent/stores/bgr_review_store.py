@@ -10,13 +10,14 @@ from pydantic import JsonValue, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from omnigent.bgr import Agent, Attempt, Contract, Fence, NativeBinding, Record, Send, Workspace
+from omnigent.bgr import Agent, Attempt, Fence, NativeBinding, Record, Send, Workspace
 from omnigent.bgr_review import (
     Publication,
     ReviewJob,
     ReviewResult,
     ReviewRound,
     ReviewRoundCreate,
+    independent_review_contract,
     publication_body,
     sanitize_review,
     sanitize_review_payload,
@@ -197,6 +198,32 @@ class BgrReviewStore(BgrStore):
 
         return self._write("reserve_independent_review_round", apply)
 
+    def claim_reviewer_start(
+        self,
+        user_id: str,
+        session_id: str,
+        team_id: str,
+        fence: Fence,
+        *,
+        round_id: str,
+        review_id: str,
+    ) -> bool:
+        """Claim once before the non-idempotent native factory; uncertainty needs recovery."""
+
+        def apply(db: Session) -> bool:
+            team = self._owned(db, team_id, user_id)
+            self._fence(team, session_id, fence)
+            row, round = self._round(db, team_id, round_id)
+            if round.epoch != fence.epoch:
+                raise _conflict("Review round belongs to another controller epoch")
+            job = self._job(round, review_id)
+            if job.state != "reserved":
+                return False
+            self._replace(row, round, job.model_copy(update={"state": "starting"}))
+            return True
+
+        return self._write("claim_atomic_independent_reviewer_start", apply)
+
     def activate_reviewer(
         self,
         user_id: str,
@@ -225,7 +252,7 @@ class BgrReviewStore(BgrStore):
                 or workspace.base_sha != round.base_sha
             ):
                 raise _conflict("Reviewer binding does not match its frozen assignment")
-            if job.state != "reserved":
+            if job.state not in {"reserved", "starting"}:
                 if (
                     job.state == "running"
                     and job.native_thread_id == binding.thread_id
@@ -275,15 +302,7 @@ class BgrReviewStore(BgrStore):
                 config_revision=_team(team).config_revision,
                 review_round_id=round_id,
             )
-            contract = Contract(
-                objective=f"Independently review {round.repository} PR {round.pr_number}",
-                instructions=(
-                    "Review only the immutable assigned diff. Ask brain for clarification. "
-                    "Return structured findings without secrets or private data. Only the trusted "
-                    "publisher may post a new PR discussion comment for this review."
-                ),
-                acceptance=["Return complete or explicitly incomplete independent findings"],
-            )
+            contract = independent_review_contract(round, job)
             db.add(self._agent_row(agent))
             db.add(
                 SqlBgrTask(
@@ -312,6 +331,26 @@ class BgrReviewStore(BgrStore):
                     thread_id=binding.thread_id,
                     document=binding.model_dump_json(),
                 )
+            )
+            self._insert_envelope(
+                db,
+                team,
+                self._agent(db, team_id, session_id),
+                Send(
+                    **fence.model_dump(),
+                    message_id=job.task_id,
+                    recipient_agent_id=job.agent_id,
+                    task_id=job.task_id,
+                    attempt_id=job.attempt_id,
+                    kind="task",
+                    correlation_id=job.task_id,
+                    head_sha=round.head_sha,
+                    payload={
+                        "contract": contract.model_dump(mode="json"),
+                        "round_id": round_id,
+                        "review_id": review_id,
+                    },
+                ),
             )
             job = job.model_copy(
                 update={
@@ -382,11 +421,12 @@ class BgrReviewStore(BgrStore):
             self._fence(team, session_id, fence)
             row, round = self._round(db, team_id, round_id)
             job = self._job(round, review_id)
-            phase = (
-                "Unable to execute; no isolated reviewer was started"
-                if job.native_thread_id is None
-                else "Execution did not yield a completed independent review"
-            )
+            if job.state == "starting":
+                phase = "Unable to execute; isolated reviewer startup was not confirmed"
+            elif job.native_thread_id is None:
+                phase = "Unable to execute; no isolated reviewer was started"
+            else:
+                phase = "Execution did not yield a completed independent review"
             result = ReviewResult(
                 status="incomplete",
                 summary=(

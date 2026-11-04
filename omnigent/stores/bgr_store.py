@@ -528,6 +528,34 @@ class BgrStore:
         with self._sessions("recover_team") as db:
             return read(db)
 
+    def native_assignments(
+        self, user_id: str, session_id: str, team_id: str, fence: Fence
+    ) -> list[NativeAssignment]:
+        with self._sessions("read_current_native_role_bindings") as db:
+            team = self._owned(db, team_id, user_id)
+            self._fence(team, session_id, fence)
+            bindings = db.scalars(
+                select(SqlBgrNativeBinding).where(
+                    SqlBgrNativeBinding.workspace_id == current_workspace_id(),
+                    SqlBgrNativeBinding.team_id == team_id,
+                    SqlBgrNativeBinding.id != _team(team).brain_agent_id,
+                )
+            )
+            current = []
+            for binding_row in bindings:
+                binding = NativeBinding.model_validate_json(binding_row.document)
+                if binding.epoch != fence.epoch:
+                    continue
+                row = self._attempt(db, team_id, binding.attempt_id)
+                attempt = Attempt.model_validate_json(row.document)
+                if attempt.state == "reserved" and attempt.epoch == fence.epoch:
+                    current.append(
+                        self._native_assignment(
+                            db, user_id, session_id, team_id, attempt.attempt_id, fence
+                        )
+                    )
+            return current
+
     def _native_assignment(
         self,
         db: Session,

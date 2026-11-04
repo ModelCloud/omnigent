@@ -9,7 +9,7 @@ from typing import Annotated, Literal, Self
 
 from pydantic import AfterValidator, Field, JsonValue, field_validator, model_validator
 
-from omnigent.bgr import Commit, Fence, Identifier, Label, Profile, Record
+from omnigent.bgr import Commit, Contract, Fence, Identifier, Label, Profile, Record
 from omnigent.process_logging import redact_log_text
 
 
@@ -126,7 +126,7 @@ class ReviewJob(Record):
     agent_id: Identifier
     session_id: Identifier
     profile: Profile
-    state: Literal["reserved", "running", "sealed", "failed", "cancelled"] = "reserved"
+    state: Literal["reserved", "starting", "running", "sealed", "failed", "cancelled"] = "reserved"
     native_thread_id: Annotated[str, Field(max_length=36)] | None = None
     snapshot_root: Annotated[str, Field(max_length=1024)] | None = None
     result: ReviewResult | None = None
@@ -156,6 +156,30 @@ class ReviewRound(Record):
             if len({getattr(job, field) for job in self.jobs}) != len(self.jobs):
                 raise ValueError("reviewers require distinct identities and fresh contexts")
         return self
+
+
+def independent_review_contract(round: ReviewRound, job: ReviewJob) -> Contract:
+    if job not in round.jobs:
+        raise ValueError("Reviewer does not belong to this immutable review round")
+    return Contract(
+        objective=f"Independently review {round.repository} PR {round.pr_number}",
+        instructions=(
+            "Review only the assigned immutable diff using bgr_read_review_snapshot. "
+            "Ask brain for clarification through bgr_send_message/bgr_reply_message. "
+            "Do not request shell, MCP, delegation, credentials or forge writes. "
+            "Send one final result with status ('complete' or 'incomplete'), summary, "
+            "and findings (severity: critical/high/medium/low, description, relative path, "
+            "optional positive line). Report coverage limits in summary; never claim "
+            "unperformed checks. No findings still requires a result. Never include "
+            "keys, tokens or other private information. Every independent review and "
+            "re-review, including incomplete/no-findings, must receive a fresh PR discussion "
+            "comment through the trusted Brain-authorized publisher, never reviewer writes."
+        ),
+        acceptance=[
+            "Return complete or explicitly incomplete independent findings",
+            f"Frozen base {round.base_sha} and head {round.head_sha}",
+        ],
+    )
 
 
 def sensitive_review_key(key: str) -> bool:

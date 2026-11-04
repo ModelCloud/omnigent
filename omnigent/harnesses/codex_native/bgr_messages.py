@@ -122,6 +122,33 @@ class NativeBgrConnection:
             raise native_contract_error()
         return await self._accept("bgr/message/record", envelope)
 
+    async def authorize_peers(self, peers: list[NativeIdentity]) -> None:
+        if self.identity.role != "brain" or len({peer.agent_id for peer in peers}) != len(peers):
+            raise native_contract_error()
+        if any(
+            peer.role == "brain"
+            or peer.team_id != self.identity.team_id
+            or peer.epoch != self.identity.epoch
+            or peer.session_id == self.identity.session_id
+            or peer.agent_id == self.identity.agent_id
+            for peer in peers
+        ):
+            raise native_contract_error()
+        try:
+            response = await self.request(
+                "bgr/thread/peers",
+                {
+                    "threadId": self.thread_id,
+                    "identity": self.identity.wire(),
+                    "peers": [peer.wire() for peer in peers],
+                },
+            )
+            snapshot = NativeMailboxState.model_validate(response.get("result")).snapshot
+        except (ValidationError, CodexAppServerResponseError):
+            raise native_contract_error() from None
+        if snapshot.identity != self.identity or snapshot.cancelled:
+            raise native_contract_error()
+
     async def deliver(self, envelope: NativeEnvelope) -> NativeMessageAcceptance:
         if envelope.recipient_identity != self.identity:
             raise native_contract_error()

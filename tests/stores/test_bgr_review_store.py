@@ -78,6 +78,36 @@ def activate(reviews, round, job, **overrides):
     )
 
 
+def test_reviewer_start_claim_is_durable_once_and_activation_records_source_task(reviews, db_uri):
+    round = reviews.reserve_review_round(OWNER, BRAIN, TEAM, request())
+    job = round.jobs[0]
+    arguments = {"round_id": round.round_id, "review_id": job.review_id}
+    assert reviews.claim_reviewer_start(OWNER, BRAIN, TEAM, FENCE, **arguments)
+    restarted = BgrReviewStore(db_uri)
+    assert not restarted.claim_reviewer_start(OWNER, BRAIN, TEAM, FENCE, **arguments)
+    pending = restarted.get_review_round(OWNER, BRAIN, TEAM, round.round_id).jobs[0]
+    assert pending.state == "starting"
+    with pytest.raises(OmnigentError):
+        restarted.claim_reviewer_start(
+            OWNER, BRAIN, TEAM, FENCE.model_copy(update={"epoch": 2}), **arguments
+        )
+    running = activate(restarted, round, job)
+    assert running.state == "running"
+    assert not restarted.claim_reviewer_start(OWNER, BRAIN, TEAM, FENCE, **arguments)
+    anchor = restarted.drain(OWNER, job.session_id, TEAM)[0]
+    assert anchor.message_id == job.task_id
+    assert anchor.kind == "task" and anchor.correlation_id == job.task_id
+    assert anchor.head_sha == round.head_sha
+    assert anchor.attempt_id == job.attempt_id and anchor.task_id == job.task_id
+    assert anchor.payload["round_id"] == round.round_id
+    assert anchor.payload["review_id"] == job.review_id
+    contract = anchor.payload["contract"]
+    assert isinstance(contract, dict)
+    assert "trusted Brain-authorized publisher" in contract["instructions"]
+    assert "fresh PR discussion" in contract["instructions"]
+    assert restarted.drain(OWNER, job.session_id, TEAM) == [anchor]
+
+
 def message(round, job, brain_agent_id, **overrides):
     return Send.model_validate(
         {
@@ -169,7 +199,11 @@ def test_nested_credential_keys_are_redacted_before_durable_mailbox(reviews, fro
             payload=payload,
         ),
     )
-    envelope = reviews.drain(OWNER, job.session_id if from_brain else BRAIN, TEAM)[0]
+    envelope = next(
+        item
+        for item in reviews.drain(OWNER, job.session_id if from_brain else BRAIN, TEAM)
+        if item.message_id == receipt.message_id
+    )
     assert envelope.message_id == receipt.message_id
     assert envelope.payload == {
         "question": "Clarify the assignment",

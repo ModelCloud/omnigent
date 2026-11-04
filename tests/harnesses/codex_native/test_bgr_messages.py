@@ -11,7 +11,7 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from omnigent.bgr import Fence, LeaseRequest, NativeBinding, NativeBrainBinding, Send, TeamCreate
+from omnigent.bgr import Fence, LeaseRequest, NativeBinding, NativeBrainBinding, TeamCreate
 from omnigent.bgr_review import normalize_native_review_result
 from omnigent.errors import OmnigentError
 from omnigent.harnesses.codex_native.bgr import NativeCapabilities
@@ -40,7 +40,7 @@ class NativeProcess:
     async def request(self, method, params):
         self.calls.append((method, copy.deepcopy(params)))
         assert params["threadId"] == self.connection.thread_id
-        if method == "bgr/thread/inspect":
+        if method in {"bgr/thread/inspect", "bgr/thread/peers"}:
             return {
                 "result": {
                     "snapshot": {
@@ -333,19 +333,6 @@ async def test_reviewer_callbacks_sanitized_before_sealing_and_sibling_barrier(r
             thread_id, identity, process.request, brain.connection.capabilities
         )
         reviewers.append(process)
-        task = Send(
-            message_id=job.task_id,
-            recipient_agent_id=job.agent_id,
-            task_id=job.task_id,
-            attempt_id=job.attempt_id,
-            epoch=1,
-            controller_id=CONTROLLER,
-            kind="task",
-            correlation_id=job.task_id,
-            head_sha=round.head_sha,
-            payload={"objective": "Review"},
-        )
-        mailbox.store.send(OWNER, BRAIN, TEAM, task)
         anchors.append(
             mailbox.store.native_message(
                 OWNER,
@@ -353,7 +340,7 @@ async def test_reviewer_callbacks_sanitized_before_sealing_and_sibling_barrier(r
                 TEAM,
                 FENCE,
                 sender_agent_id=brain.connection.identity.agent_id,
-                message_id=task.message_id,
+                message_id=job.task_id,
             )
         )
     first, second = reviewers
