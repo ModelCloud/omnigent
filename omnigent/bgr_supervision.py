@@ -180,3 +180,8 @@ class SupervisorUnknown(Record):
     status: Literal["unknown"] = "unknown"
     request_id: Identifier
     reason: Label
+
+
+SupervisorStopResult = Annotated[
+    SupervisorStopped | SupervisorUnknown, Field(discriminator="status")
+]

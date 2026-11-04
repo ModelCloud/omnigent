@@ -883,6 +883,60 @@ This is not a working supervised launcher. Agent/event/MCP proxy transport,
 trusted admission wiring and replacement launch remain disabled pending their
 separate containment and transport integration.
 
+### External-supervisor stop primitives
+
+`bgr_supervisor_stop_v1` advertises only that the host understands the dedicated
+stop RPC. It is not containment readiness or permission to replace a Brain.
+The host channel can carry an exact generation stop request after its runner
+tunnel disappears. The server checks the original host owner, current connection,
+request hash, recovery identity and original admission; late replaced-connection
+responses and ordinary runner stop ACKs cannot satisfy it.
+
+An administrator-configured `OMNIGENT_BGR_SUPERVISOR_SOCKET` selects the local
+supervisor channel. Its ancestors and socket must be root-controlled, with no
+symlink or writable-directory substitution; the connected peer must have root
+credentials. Responses are bounded, versioned and correlated. An absent channel,
+unsupported host, timeout or incomplete proof yields UNKNOWN, without falling
+back to a runner, process group or direct launch.
+
+The external journal primitives fsync the generation marker and inventory before
+admission. Claims include reserved, starting and spawned-but-unbound work. A
+per-generation lock serializes admission with stop, unresolved claims are never
+evicted, and closing admissions is irreversible. Any uncertain write poisons its
+transaction. A missing previously seen journal or lock is UNKNOWN, never an empty
+replacement inventory. Receipt issuance requires a new kernel observation after
+the barrier is durably completed, and explicit cancellation of pending launchers.
+
+The Linux stop primitive pins and revalidates boot, cgroup-v2 mount, device,
+inode, protected migration controls and non-root domain identity. It writes
+`cgroup.kill` and waits for recursive `cgroup.events: populated=0`; a frozen
+domain can qualify, but main-PID exit or an empty root `cgroup.procs` cannot.
+These mechanics require a trusted launcher to isolate the worker and quiesce
+all out-of-domain launchers first. They do not establish those prerequisites
+by themselves.
+
+After supervisor restart, unfinished generations remain stop-only and cannot
+issue a new terminal receipt from matching path/inode values alone. Independent
+historical-domain reconciliation, including systemd invocation identity, is not
+implemented. Previously durable CLOSED receipts retain stable retry identity.
+
+No root broker/service or supervised start adapter is installed or enabled by
+these primitives. The public recovery endpoint still does not advance recovery
+from this transport. Dedicated admission, scoped runtime transport, trusted
+receipt reconciliation, fresh-input replacement and real privileged acceptance
+remain required before advertising process-loss recovery.
+
+```bash
+.venv/bin/python -m pytest tests/host/test_bgr_supervisor.py \
+  tests/host/test_bgr_cgroup.py tests/host/test_bgr_journal.py \
+  tests/server/test_bgr_supervisor_host.py --reruns 0
+```
+
+Kernel tests inject low-level observations; journal tests use real file locks and
+fsync with root ownership injected only in test setup. Host-channel coverage
+extends the existing ASGI tunnel scenario. None is an escaped-descendant,
+service-launch, network-isolation or real-root containment acceptance result.
+
 ```bash
 .venv/bin/python -m pytest tests/server/test_bgr_generation_auth.py \
   tests/stores/test_bgr_recovery.py tests/server/integration/test_bgr.py \

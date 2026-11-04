@@ -11,21 +11,18 @@ import sys
 from asyncio import open_unix_connection
 from contextlib import suppress
 from pathlib import Path
-from typing import Annotated
 
-from pydantic import Field, TypeAdapter
+from pydantic import TypeAdapter
 
 from omnigent.bgr_supervision import (
     GenerationStopReceipt,
-    SupervisorStopped,
     SupervisorStopRequest,
+    SupervisorStopResult,
     SupervisorUnknown,
 )
 
 _MAX_RESPONSE_BYTES = 1024 * 1024
-_STOP_RESPONSE = TypeAdapter(
-    Annotated[SupervisorStopped | SupervisorUnknown, Field(discriminator="status")]
-)
+_STOP_RESPONSE = TypeAdapter(SupervisorStopResult)
 
 
 class SupervisorUnavailable(RuntimeError):

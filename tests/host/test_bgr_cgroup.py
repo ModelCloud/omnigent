@@ -83,6 +83,7 @@ def test_recursive_empty_even_if_frozen(monkeypatch):
         ([], "kill"),
         (["frozen 0\n"], None),
         (["populated 0\npopulated 1\n"], None),
+        (["populated\npopulated 0\n"], None),
         (["populated unknown\n"], None),
         ([FileNotFoundError("unlinked cgroup")], None),
         ([PermissionError("events denied")], None),

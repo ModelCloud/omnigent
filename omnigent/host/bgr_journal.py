@@ -54,7 +54,6 @@ class GenerationJournal(Record):
     state: Literal["OPEN", "STOPPING", "CLOSED"] = "OPEN"
     domain: CgroupDomain | None = None
     closed_admission_sequence: Sequence | None = None
-    closed_monotonic: Annotated[float, Field(ge=0)] | None = None
     recovery_id: Identifier | None = None
     claims: Annotated[tuple[AdmissionClaim, ...], Field(min_length=1, max_length=1024)]
     receipt: GenerationStopReceipt | None = None
@@ -82,17 +81,12 @@ class GenerationJournal(Record):
         if self.state != "OPEN":
             if (
                 self.recovery_id is None
-                or self.closed_monotonic is None
                 or self.closed_admission_sequence is None
                 or self.closed_admission_sequence < sequences[-1]
                 or self.closed_admission_sequence >= self.sequence
             ):
                 raise ValueError("Closed admission barrier is missing")
-        elif (
-            self.recovery_id is not None
-            or self.closed_admission_sequence is not None
-            or self.closed_monotonic is not None
-        ):
+        elif self.recovery_id is not None or self.closed_admission_sequence is not None:
             raise ValueError("Open generation cannot contain a stop barrier")
         if self.state == "CLOSED":
             if (
@@ -148,6 +142,7 @@ class JournalTransaction:
         self.journal = journal
         self.document = document
         self._active = True
+        self._barrier_observed_monotonic = monotonic() if document.state != "OPEN" else None
 
     def _require_active(self) -> None:
         if not self._active:
@@ -157,7 +152,11 @@ class JournalTransaction:
         self._require_active()
         values = {**self.document.model_dump(), **updates}
         document = GenerationJournal.model_validate(values)
-        self.journal._write(document)
+        try:
+            self.journal._write(document)
+        except BaseException:
+            self._active = False
+            raise
         self.document = document
         return document
 
@@ -234,13 +233,14 @@ class JournalTransaction:
             if self.document.recovery_id != request.recovery_id:
                 raise SupervisorUnavailable("Generation already has a different stop request")
             return self.document
-        return self._save(
+        document = self._save(
             state="STOPPING",
             recovery_id=request.recovery_id,
             closed_admission_sequence=self.document.sequence,
-            closed_monotonic=monotonic(),
             sequence=self.document.sequence + 1,
         )
+        self._barrier_observed_monotonic = monotonic()
+        return document
 
     def seal(
         self,
@@ -261,11 +261,13 @@ class JournalTransaction:
         if document.state == "CLOSED":
             assert document.receipt is not None
             return document.receipt
+        if document.supervisor_incarnation != self.journal.incarnation:
+            raise SupervisorUnavailable("Historical domain requires supervisor reconciliation")
         if (
             proof.boot_id != document.generation.boot_id
             or proof.domain != document.domain
-            or document.closed_monotonic is None
-            or proof.observed_monotonic < document.closed_monotonic
+            or self._barrier_observed_monotonic is None
+            or proof.observed_monotonic < self._barrier_observed_monotonic
         ):
             raise SupervisorUnavailable("Kernel proof belongs to another domain incarnation")
         claims = {claim.claim_id: claim for claim in document.claims}
@@ -315,12 +317,12 @@ class JournalTransaction:
 class SupervisorJournal:
     """Never delete unresolved records or reuse a generation filename."""
 
-    def __init__(self, directory: Path, *, incarnation: str | None = None) -> None:
+    def __init__(self, directory: Path) -> None:
         if sys.platform != "linux" or os.geteuid() != 0:
             raise SupervisorUnavailable(
                 "Supervisor journal requires an administrator-owned Linux service"
             )
-        self.incarnation = _IDENTIFIER.validate_python(incarnation or uuid4().hex)
+        self.incarnation = uuid4().hex
         self._directory_fd = _open_directory(directory)
         metadata = os.fstat(self._directory_fd)
         if metadata.st_mode & 0o077:
@@ -328,23 +330,54 @@ class SupervisorJournal:
             raise SupervisorUnavailable("Supervisor journal directory must be private")
 
     @contextmanager
-    def _lock(self, generation_id: str) -> Iterator[None]:
+    def _lock(self, generation_id: str, *, create: bool = False) -> Iterator[bool]:
         import fcntl
 
         generation_id = _IDENTIFIER.validate_python(generation_id)
-        fd = os.open(
-            f"{generation_id}.lock",
-            os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC,
-            0o600,
-            dir_fd=self._directory_fd,
-        )
+        fresh = False
+        flags = os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC
+        name = f"{generation_id}.lock"
+        if create:
+            try:
+                fd = os.open(
+                    name, flags | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=self._directory_fd
+                )
+                fresh = True
+            except FileExistsError:
+                fd = os.open(name, flags, dir_fd=self._directory_fd)
+        else:
+            fd = os.open(name, flags, dir_fd=self._directory_fd)
         try:
             metadata = os.fstat(fd)
             _root_protected(metadata)
-            if not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o077:
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_mode & 0o077
+                or metadata.st_nlink != 1
+            ):
                 raise SupervisorUnavailable("Supervisor journal lock is not private")
             fcntl.flock(fd, fcntl.LOCK_EX)
-            yield
+            marker = f"omnigent-bgr-generation-v1:{generation_id}\n".encode()
+            if fresh:
+                try:
+                    os.stat(
+                        f"{generation_id}.json",
+                        dir_fd=self._directory_fd,
+                        follow_symlinks=False,
+                    )
+                except FileNotFoundError:
+                    contents = marker
+                else:
+                    contents = b"UNKNOWN: original lock identity is missing\n"
+                if os.write(fd, contents) != len(contents):
+                    raise SupervisorUnavailable("Generation marker write was incomplete")
+                os.fsync(fd)
+                os.fsync(self._directory_fd)
+                if contents != marker:
+                    raise SupervisorUnavailable("Original generation lock identity is missing")
+            elif os.pread(fd, len(marker) + 1, 0) != marker:
+                raise SupervisorUnavailable("Generation marker is missing or unreconciled")
+            yield fresh
         finally:
             os.close(fd)
 
@@ -420,12 +453,18 @@ class SupervisorJournal:
                 ),
             ),
         )
-        with self._lock(generation.generation_id):
+        with self._lock(generation.generation_id, create=True) as fresh:
             try:
                 existing = self._read(generation.generation_id)
             except FileNotFoundError:
+                if not fresh:
+                    raise SupervisorUnavailable(
+                        "Previously seen generation inventory is missing"
+                    ) from None
                 self._write(document)
                 return document
+            if fresh:
+                raise SupervisorUnavailable("Original generation lock identity is missing")
             if (
                 existing.generation != generation
                 or existing.domain_id != domain_id

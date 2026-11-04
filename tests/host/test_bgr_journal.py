@@ -22,6 +22,8 @@ class _TestOs:
     def __init__(self):
         self.syncs = []
         self.fail_sync = False
+        self.fail_next_directory_sync = False
+        self.on_next_file_sync = None
 
     def __getattr__(self, name):
         return getattr(os, name)
@@ -30,9 +32,16 @@ class _TestOs:
         return 0
 
     def fsync(self, fd):
+        directory = stat.S_ISDIR(os.fstat(fd).st_mode)
+        if not directory and self.on_next_file_sync is not None:
+            callback, self.on_next_file_sync = self.on_next_file_sync, None
+            callback()
+        if directory and self.fail_next_directory_sync:
+            self.fail_next_directory_sync = False
+            raise OSError("Injected post-rename fsync failure")
         if self.fail_sync:
             raise OSError("Injected fsync failure")
-        self.syncs.append(stat.S_ISDIR(os.fstat(fd).st_mode))
+        self.syncs.append(directory)
         os.fsync(fd)
 
 
@@ -86,7 +95,7 @@ def test_journal_fsyncs_before_admission_and_seals_all_claims(journal_env, reque
     journal = SupervisorJournal(root)
     try:
         _admit(journal, request_stop)
-        assert operations.syncs == [False, True] * 6
+        assert operations.syncs == [False, True] * 7
         generation_id = request_stop.admission.generation.generation_id
         with journal.transaction(generation_id) as transaction:
             transaction.close_admissions(request_stop)
@@ -102,7 +111,7 @@ def test_journal_fsyncs_before_admission_and_seals_all_claims(journal_env, reque
             assert len(receipt.manifest.claims) == 2
             assert receipt.manifest.claims[1].session_id is None
             assert receipt.manifest.claims[1].disposition == "cancelled_before_exec"
-        assert operations.syncs == [False, True] * 9
+        assert operations.syncs == [False, True] * 10
         with pytest.raises(SupervisorUnavailable, match="ended"):
             transaction.close_admissions(request_stop)
         with journal.transaction(generation_id) as retried:
@@ -114,7 +123,7 @@ def test_journal_fsyncs_before_admission_and_seals_all_claims(journal_env, reque
         journal.close()
 
 
-def test_supervisor_restart_is_stop_only_and_preserves_receipt(journal_env, request_stop):
+def test_supervisor_restart_is_stop_only_until_independently_reconciled(journal_env, request_stop):
     root, _ = journal_env
     first = SupervisorJournal(root)
     _admit(first, request_stop)
@@ -127,16 +136,38 @@ def test_supervisor_restart_is_stop_only_and_preserves_receipt(journal_env, requ
             with pytest.raises(SupervisorUnavailable, match="reconciliation"):
                 transaction.transition(request_stop.admission.root_claim_id, "BOUND")
             transaction.close_admissions(request_stop)
+            with pytest.raises(SupervisorUnavailable, match="reconciliation"):
+                transaction.seal(
+                    request_stop, _proof(request_stop), cancelled_before_exec=frozenset({"f" * 32})
+                )
+    finally:
+        restarted.close()
+
+
+def test_durable_closed_receipt_survives_supervisor_restart(journal_env, request_stop):
+    root, _ = journal_env
+    first = SupervisorJournal(root)
+    _admit(first, request_stop)
+    generation_id = request_stop.admission.generation.generation_id
+    try:
+        with first.transaction(generation_id) as transaction:
+            transaction.close_admissions(request_stop)
             receipt = transaction.seal(
                 request_stop, _proof(request_stop), cancelled_before_exec=frozenset({"f" * 32})
             )
     finally:
-        restarted.close()
+        first.close()
     cold = SupervisorJournal(root)
     try:
         assert _reserve(cold, request_stop).receipt == receipt
         with cold.transaction(generation_id) as transaction:
             assert transaction.close_admissions(request_stop).receipt == receipt
+            assert (
+                transaction.seal(
+                    request_stop, _proof(request_stop), cancelled_before_exec=frozenset()
+                )
+                == receipt
+            )
             with pytest.raises(SupervisorUnavailable):
                 transaction.close_admissions(
                     request_stop.model_copy(update={"recovery_id": "0" * 32})
@@ -311,5 +342,102 @@ def test_retry_requires_durable_storage_even_after_lost_ack(journal_env, request
             _reserve(journal, request_stop)
         operations.fail_sync = False
         assert _reserve(journal, request_stop).generation == request_stop.admission.generation
+    finally:
+        journal.close()
+
+
+def test_failed_barrier_directory_fsync_poisons_open_transaction(journal_env, request_stop):
+    root, operations = journal_env
+    journal = SupervisorJournal(root)
+    generation_id = request_stop.admission.generation.generation_id
+    try:
+        _admit(journal, request_stop)
+        with journal.transaction(generation_id) as transaction:
+            operations.fail_next_directory_sync = True
+            with pytest.raises(OSError, match="post-rename"):
+                transaction.close_admissions(request_stop)
+            assert json.loads((root / f"{generation_id}.json").read_text())["state"] == "STOPPING"
+            with pytest.raises(SupervisorUnavailable, match="ended"):
+                transaction.reserve(
+                    AdmissionClaim(
+                        claim_id="0" * 32,
+                        admission_sequence=transaction.document.sequence + 1,
+                        role="helper",
+                    )
+                )
+        with journal.transaction(generation_id) as transaction:
+            assert transaction.document.state == "STOPPING"
+            with pytest.raises(SupervisorUnavailable, match="closed"):
+                transaction.transition(request_stop.admission.root_claim_id, "BOUND")
+    finally:
+        journal.close()
+
+
+def test_failed_pin_directory_fsync_cannot_replace_original_inode(journal_env, request_stop):
+    root, operations = journal_env
+    journal = SupervisorJournal(root)
+    generation_id = request_stop.admission.generation.generation_id
+    try:
+        _reserve(journal, request_stop)
+        with journal.transaction(generation_id) as transaction:
+            transaction.transition(request_stop.admission.root_claim_id, "STARTING")
+            operations.fail_next_directory_sync = True
+            with pytest.raises(OSError, match="post-rename"):
+                transaction.pin(request_stop.admission.domain)
+            with pytest.raises(SupervisorUnavailable, match="ended"):
+                transaction.pin(request_stop.admission.domain.model_copy(update={"inode": 99}))
+        with journal.transaction(generation_id) as transaction:
+            with pytest.raises(SupervisorUnavailable, match="domain"):
+                transaction.pin(request_stop.admission.domain.model_copy(update={"inode": 99}))
+            assert transaction.pin(request_stop.admission.domain) == request_stop.admission
+    finally:
+        journal.close()
+
+
+@pytest.mark.parametrize("missing", ["json", "lock"])
+def test_seen_generation_cannot_be_reconstructed_after_inventory_loss(
+    journal_env, request_stop, missing
+):
+    root, _ = journal_env
+    journal = SupervisorJournal(root)
+    generation_id = request_stop.admission.generation.generation_id
+    try:
+        _admit(journal, request_stop)
+        (root / f"{generation_id}.{missing}").unlink()
+        os.fsync(journal._directory_fd)
+        with pytest.raises(SupervisorUnavailable, match="missing"):
+            _reserve(journal, request_stop)
+        with pytest.raises(SupervisorUnavailable, match="missing"):
+            _reserve(journal, request_stop)
+    finally:
+        journal.close()
+
+
+def test_proof_sampled_during_barrier_write_is_not_fresh(journal_env, request_stop):
+    root, operations = journal_env
+    journal = SupervisorJournal(root)
+    generation_id = request_stop.admission.generation.generation_id
+    captured = []
+
+    def sample_early_proof():
+        assert json.loads((root / f"{generation_id}.json").read_text())["state"] == "OPEN"
+        captured.append(_proof(request_stop))
+
+    try:
+        _admit(journal, request_stop)
+        with journal.transaction(generation_id) as transaction:
+            operations.on_next_file_sync = sample_early_proof
+            transaction.close_admissions(request_stop)
+            assert len(captured) == 1
+            with pytest.raises(SupervisorUnavailable, match="incarnation"):
+                transaction.seal(
+                    request_stop, captured[0], cancelled_before_exec=frozenset({"f" * 32})
+                )
+            assert (
+                transaction.seal(
+                    request_stop, _proof(request_stop), cancelled_before_exec=frozenset({"f" * 32})
+                ).manifest.state
+                == "CLOSED"
+            )
     finally:
         journal.close()

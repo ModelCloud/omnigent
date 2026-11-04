@@ -28,8 +28,9 @@ from os import PathLike
 from typing import Any, NoReturn
 from urllib.parse import urlsplit
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
+from omnigent.bgr_supervision import SupervisorStopRequest, SupervisorStopResult
 from omnigent.entities.scheduled_task import ScheduledRunLogContext
 from omnigent.harness_accounts import HarnessAccounts, normalize_harness_accounts
 from omnigent.harness_availability import HarnessAvailability, is_harness_availability
@@ -82,6 +83,8 @@ CAP_MCP_TOOLS = "mcp_tools"
 CAP_REFRESH_HARNESSES = "refresh_harnesses"
 CAP_HARNESS_ACCOUNTS = "harness_accounts"
 CAP_BGR_PROBE = "bgr_probe"
+# The stop RPC is understood; this does not advertise a configured supervisor or recovery.
+CAP_BGR_SUPERVISOR_STOP = "bgr_supervisor_stop_v1"
 CAP_HARNESS_LOGIN = "harness_login"
 CAP_MCP_REGISTRY = "mcp_registry"
 # The host bounds a whole worktree create by ``HostCreateWorktreeFrame.timeout_s``:
@@ -90,6 +93,7 @@ CAP_WORKTREE_CREATE_BUDGET = "worktree_create_budget"
 # Every capability THIS build supports; reported verbatim in the hello frame.
 HOST_CAPABILITIES: list[str] = [
     CAP_BGR_PROBE,
+    CAP_BGR_SUPERVISOR_STOP,
     CAP_CODEX_SIDE_CHAT,
     CAP_CODEX_PLAN_AT_LAUNCH,
     CAP_FILESYSTEM_ATTACHMENTS,
@@ -184,6 +188,8 @@ class HostFrameKind(str, Enum):
     PROBE_HARNESS_ACCOUNTS_RESULT = "host.probe_harness_accounts_result"
     PROBE_BGR = "host.probe_bgr"
     PROBE_BGR_RESULT = "host.probe_bgr_result"
+    STOP_BGR_GENERATION = "host.stop_bgr_generation"
+    STOP_BGR_GENERATION_RESULT = "host.stop_bgr_generation_result"
     HARNESS_LOGIN = "host.harness_login"
     HARNESS_LOGIN_RESULT = "host.harness_login_result"
     HARNESS_LOGIN_CANCEL = "host.harness_login_cancel"
@@ -899,6 +905,28 @@ class HostProbeBgrFrame:
 
 
 @dataclass
+class HostStopBgrGenerationFrame:
+    """Server → host: stop an exact durably admitted generation without a runner tunnel."""
+
+    request: SupervisorStopRequest
+
+    @property
+    def request_id(self) -> str:
+        return self.request.request_id
+
+
+@dataclass
+class HostStopBgrGenerationResultFrame:
+    """Host → server: supervisor receipt, not an ordinary runner stop ACK."""
+
+    result: SupervisorStopResult
+
+    @property
+    def request_id(self) -> str:
+        return self.result.request_id
+
+
+@dataclass
 class HostProbeBgrResultFrame:
     """Host → server: verified native/controller launch support."""
 
@@ -1506,6 +1534,8 @@ HostFrame = (
     | HostProbeAccountsResultFrame
     | HostProbeBgrFrame
     | HostProbeBgrResultFrame
+    | HostStopBgrGenerationFrame
+    | HostStopBgrGenerationResultFrame
     | HostHarnessLoginFrame
     | HostHarnessLoginResultFrame
     | HostHarnessLoginCancelFrame
@@ -1857,6 +1887,20 @@ def encode_host_frame(frame: HostFrame) -> str:
     if isinstance(frame, HostProbeBgrFrame):
         return _encode_payload(
             {"kind": HostFrameKind.PROBE_BGR.value, "request_id": frame.request_id}
+        )
+    if isinstance(frame, HostStopBgrGenerationFrame):
+        return _encode_payload(
+            {
+                "kind": HostFrameKind.STOP_BGR_GENERATION.value,
+                "request": frame.request.model_dump(mode="json"),
+            }
+        )
+    if isinstance(frame, HostStopBgrGenerationResultFrame):
+        return _encode_payload(
+            {
+                "kind": HostFrameKind.STOP_BGR_GENERATION_RESULT.value,
+                "result": frame.result.model_dump(mode="json"),
+            }
         )
     if isinstance(frame, HostProbeBgrResultFrame):
         return _encode_payload(
@@ -2506,6 +2550,14 @@ def _decode_known_host_frame(
             return _decode_refresh_harnesses_result(msg)
         case HostFrameKind.PROBE_BGR:
             return HostProbeBgrFrame(request_id=_required_str(msg, "request_id"))
+        case HostFrameKind.STOP_BGR_GENERATION:
+            return HostStopBgrGenerationFrame(
+                request=SupervisorStopRequest.model_validate(msg.get("request"))
+            )
+        case HostFrameKind.STOP_BGR_GENERATION_RESULT:
+            return HostStopBgrGenerationResultFrame(
+                result=TypeAdapter(SupervisorStopResult).validate_python(msg.get("result"))
+            )
         case HostFrameKind.PROBE_BGR_RESULT:
             return HostProbeBgrResultFrame(
                 request_id=_required_str(msg, "request_id"),

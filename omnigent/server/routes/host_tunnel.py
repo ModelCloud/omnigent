@@ -68,6 +68,7 @@ from omnigent.host.frames import (
     HostSkillContentResultFrame,
     HostSkillsResultFrame,
     HostStatResultFrame,
+    HostStopBgrGenerationResultFrame,
     HostStopRunnerResultFrame,
     HostStoreSecretResultFrame,
     ImportLocalSessionChunkAssembler,
@@ -1044,6 +1045,12 @@ async def _receive_loop(
                         "reason": frame.reason,
                     }
                 )
+            continue
+
+        if isinstance(frame, HostStopBgrGenerationResultFrame):
+            stop_future = conn.pending_bgr_stops.pop(frame.request_id, None)
+            if stop_future is not None and not stop_future.done():
+                stop_future.set_result(frame.result.model_dump(mode="json"))
             continue
 
         if isinstance(frame, HostProbeAccountsResultFrame):

@@ -177,15 +177,15 @@ class PinnedCgroup:
             while True:
                 self._validate()
                 rows = [row.split() for row in self._read_control("cgroup.events").splitlines()]
-                populated = [row[1] for row in rows if len(row) == 2 and row[0] == "populated"]
-                if populated == ["0"]:
+                populated = [row for row in rows if row and row[0] == "populated"]
+                if populated == [["populated", "0"]]:
                     self._validate()
                     return CgroupEmptyProof(
                         boot_id=self.boot_id,
                         domain=self.domain,
                         observed_monotonic=monotonic(),
                     )
-                if populated != ["1"]:
+                if populated != [["populated", "1"]]:
                     raise SupervisorUnavailable("Recursive cgroup population is unknown")
                 remaining = deadline - monotonic()
                 if remaining <= 0:

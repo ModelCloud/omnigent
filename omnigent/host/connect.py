@@ -135,6 +135,8 @@ from omnigent.host.frames import (
     HostSkillsResultFrame,
     HostStatFrame,
     HostStatResultFrame,
+    HostStopBgrGenerationFrame,
+    HostStopBgrGenerationResultFrame,
     HostStopRunnerFrame,
     HostStopRunnerResultFrame,
     HostStoreSecretFrame,
@@ -1318,6 +1320,8 @@ class HostProcess:
             self._interactive_shells = ["bash"]
         self._harness_tmp_parent = resolve_harness_tmp_parent()
         self._runners: dict[str, _RunnerHandle] = {}
+        supervisor_socket = os.environ.get("OMNIGENT_BGR_SUPERVISOR_SOCKET", "").strip()
+        self._bgr_supervisor_socket = Path(supervisor_socket) if supervisor_socket else None
         from omnigent.host.skills import HostSkillDiscovery
 
         self._skill_discovery = HostSkillDiscovery(self._fetch_skill_bundle)
@@ -2007,6 +2011,37 @@ class HostProcess:
             "host tunnel route. The server URL may be wrong, or the server "
             "may predate the host API (the /v1/hosts tunnel route). Check the "
             "URL and that the server is up to date, then retry."
+        )
+
+    async def _handle_bgr_generation_stop(
+        self, frame: HostStopBgrGenerationFrame
+    ) -> HostStopBgrGenerationResultFrame:
+        from omnigent.bgr_supervision import (
+            SupervisorStopped,
+            SupervisorUnknown,
+            supervision_digest,
+        )
+        from omnigent.host.bgr_supervisor import BgrSupervisorClient, SupervisorUnavailable
+
+        request = frame.request
+        result = SupervisorUnknown(
+            request_id=request.request_id, reason="Trusted supervisor is unavailable"
+        )
+        if (
+            request.admission.generation.host_id != self._identity.host_id
+            or self._bgr_supervisor_socket is None
+        ):
+            return HostStopBgrGenerationResultFrame(result)
+        try:
+            receipt = await BgrSupervisorClient(self._bgr_supervisor_socket).stop(request)
+        except (SupervisorUnavailable, OSError, ValueError):
+            return HostStopBgrGenerationResultFrame(result)
+        return HostStopBgrGenerationResultFrame(
+            SupervisorStopped(
+                request_id=request.request_id,
+                request_sha256=supervision_digest(request),
+                receipt=receipt,
+            )
         )
 
     async def _handle_launch(self, frame: HostLaunchRunnerFrame) -> HostLaunchRunnerResultFrame:
@@ -5962,6 +5997,10 @@ class HostProcess:
                     install_result.gateway_inference,
                 )
             await self._send_text(ws, encode_host_frame(install_result))
+        elif isinstance(frame, HostStopBgrGenerationFrame):
+            await self._send_text(
+                ws, encode_host_frame(await self._handle_bgr_generation_stop(frame))
+            )
         elif isinstance(frame, HostProbeBgrFrame):
             try:
                 from omnigent.runner.bgr_runtime import probe_bgr_runtime
