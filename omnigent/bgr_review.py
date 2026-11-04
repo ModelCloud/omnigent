@@ -6,12 +6,23 @@ import html
 import re
 from typing import Annotated, Literal, Self
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import AfterValidator, Field, field_validator, model_validator
 
 from omnigent.bgr import Commit, Fence, Identifier, Profile, Record
 from omnigent.process_logging import redact_log_text
 
-Repository = Annotated[str, Field(pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", max_length=256)]
+
+def _repository_slug(value: str) -> str:
+    if any(part in {".", ".."} for part in value.split("/")):
+        raise ValueError("repository requires an owner/name slug without traversal components")
+    return value
+
+
+Repository = Annotated[
+    str,
+    Field(pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", max_length=256),
+    AfterValidator(_repository_slug),
+]
 
 
 class ReviewFinding(Record):

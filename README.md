@@ -413,7 +413,10 @@ to a reviewer from a different vendor than the one that wrote it. You merge.
 The separate [BGR controller foundation](docs/BGR_CONTROLLER.md) provides a durable,
 owner-authorized team/task ledger and mailbox, plus an opt-in codex-native
 status-protocol translator with explicit host/native identity mapping. The
-translator is not wired to runtime scheduling or callbacks. New Chat offers
+translator is not wired to runtime scheduling or callbacks. The independent-review
+core persists immutable assignments and sealed results, with a trusted, sanitized
+per-review publication outbox and uncertain-write reconciliation. Native isolated
+startup and controller scheduling are not wired. New Chat offers
 **BGR → Configure draft** alongside Polly on an ordinary host: configure one
 brain, dynamic grunts and one or two reviewer profiles with a single
 Harness → Model → Provider → Variant → Reasoning flow. Harnesses use

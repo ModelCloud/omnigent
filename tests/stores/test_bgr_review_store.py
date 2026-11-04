@@ -246,6 +246,12 @@ def test_review_findings_reject_private_or_nonrelative_paths(path):
         ReviewFinding(severity="high", description="Sensitive file", path=path)
 
 
+@pytest.mark.parametrize("repository", ["../repo", "owner/..", "./repo", "owner/."])
+def test_review_repository_rejects_forge_path_traversal(repository):
+    with pytest.raises(ValidationError, match="traversal components"):
+        ReviewRoundCreate.model_validate({**request().model_dump(), "repository": repository})
+
+
 def test_review_output_is_redacted_and_html_cannot_spoof_job_markers(reviews):
     round = sealed_round(reviews)
     result = sanitize_review(

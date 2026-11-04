@@ -125,6 +125,7 @@ def test_owner_id_length_bound_prevents_partial_creation(db_uri, character, leng
         "bgr_attempts",
         "bgr_envelopes",
         "bgr_native_bindings",
+        "bgr_review_rounds",
     ],
 )
 def test_all_documents_enforce_actual_stored_byte_cap(table_name, db_uri):
