@@ -6030,12 +6030,15 @@ async def _auto_create_codex_terminal(
     bgr_profiles = None
     bgr_config_overrides: tuple[str, ...] = ()
     if bgr_labels.get("omnigent.bgr.team_id"):
-        from omnigent.bgr import TeamConfig
-        from omnigent.runner.bgr_runtime import bgr_native_config_overrides
+        from omnigent.runner.bgr_runtime import bgr_native_config_overrides, load_bgr_team_config
 
         if server_client is None or not bgr_labels.get("omnigent.bgr.host_id"):
             raise RuntimeError("BGR Brain requires an authenticated host/server binding")
-        bgr_profiles = TeamConfig.model_validate_json(bgr_labels["omnigent.bgr.config"])
+        bgr_profiles = await load_bgr_team_config(
+            server_client=server_client,
+            session_id=session_id,
+            team_id=bgr_labels["omnigent.bgr.team_id"],
+        )
         bgr_config_overrides = bgr_native_config_overrides()
 
     # Symmetric with the claude-native arm: an auto-harness session landing on

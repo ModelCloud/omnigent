@@ -978,7 +978,6 @@ def register_core_routes(
                     framework_labels={
                         "omnigent.bgr.team_id": body.team_id,
                         "omnigent.bgr.host_id": host_id,
-                        "omnigent.bgr.config": body.config.model_dump_json(),
                     },
                 )
             if conv.labels.get("omnigent.bgr.team_id") != body.team_id or conv.host_id != host_id:

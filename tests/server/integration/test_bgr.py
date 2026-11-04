@@ -10,6 +10,7 @@ from starlette.requests import Request
 
 from omnigent.bgr import Fence, NativeBrainBinding
 from omnigent.errors import OmnigentError
+from omnigent.runner.bgr_runtime import load_bgr_team_config
 from omnigent.runner.identity import (
     ORCHESTRATION_SOURCE_HEADER,
     RUNNER_TUNNEL_TOKEN_HEADER,
@@ -127,6 +128,12 @@ async def test_http_control_and_callback_fail_closed_before_brain_attach(bgr_env
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
         team, _ = await create_team(client, brain)
+        client.headers.update(headers(brain))
+        config = await load_bgr_team_config(
+            server_client=client, session_id=brain, team_id=team["team_id"]
+        )
+        assert config.model_dump(mode="json") == team["config"]
+        assert len(config.model_dump_json()) > 256
         for session in (brain, worker()):
             response = await client.post(
                 f"{PREFIX}/control",

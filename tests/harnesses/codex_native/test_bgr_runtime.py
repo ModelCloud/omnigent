@@ -5,9 +5,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
+import httpx
 import pytest
 
-from omnigent.bgr import Profile, Workspace
+from omnigent.bgr import Profile, Team, Workspace
 from omnigent.errors import OmnigentError
 from omnigent.harnesses.codex_native.app_server import CodexAppServerClient
 from omnigent.harnesses.multidex_native.config import MultiDexConfig, MultiDexModelRegistration
@@ -15,7 +16,47 @@ from omnigent.runner import bgr_runtime as runtime
 from omnigent.runner.native import orchestration
 from omnigent.spec.types import AgentSpec
 from tests.harnesses.codex_native.test_bgr_messages import CAPTURED
-from tests.stores.test_bgr_store import BRAIN, CONFIG, HOST
+from tests.stores.test_bgr_store import BRAIN, CONFIG, CONTROLLER, HOST, OWNER, TEAM
+
+
+@pytest.mark.parametrize("foreign", ["team_id", "brain_session_id", None])
+async def test_team_config_fetch_uses_authenticated_durable_team_and_checks_identity(foreign):
+    from omnigent.runner.identity import ORCHESTRATION_SOURCE_HEADER
+
+    team = Team(
+        team_id=TEAM,
+        owner_id=OWNER,
+        brain_agent_id=uuid4().hex,
+        brain_session_id=BRAIN,
+        config=CONFIG,
+        epoch=1,
+        controller_id=CONTROLLER,
+        lease_expires_at=0,
+    )
+    if foreign is not None:
+        team = team.model_copy(update={foreign: uuid4().hex})
+
+    def handler(request):
+        assert request.url.path == f"/v1/bgr/teams/{TEAM}"
+        assert request.url.params["limit"] == "1"
+        assert request.headers[ORCHESTRATION_SOURCE_HEADER] == BRAIN
+        return httpx.Response(200, json={"team": team.model_dump(mode="json")})
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://server"
+    ) as client:
+        if foreign:
+            with pytest.raises(ValueError, match="another team or Brain"):
+                await runtime.load_bgr_team_config(
+                    server_client=client, session_id=BRAIN, team_id=TEAM
+                )
+        else:
+            assert (
+                await runtime.load_bgr_team_config(
+                    server_client=client, session_id=BRAIN, team_id=TEAM
+                )
+                == CONFIG
+            )
 
 
 @pytest.mark.parametrize("hardened", [False, True])

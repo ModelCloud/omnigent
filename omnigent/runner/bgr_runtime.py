@@ -10,13 +10,14 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
+from urllib.parse import quote
 from uuid import uuid4
 
 import httpx
 from fastapi import APIRouter
 from pydantic import JsonValue, TypeAdapter
 
-from omnigent.bgr import Identifier, Profile, Record, TeamConfig, Workspace
+from omnigent.bgr import Identifier, Profile, Record, Team, TeamConfig, Workspace
 from omnigent.bgr_review import sanitize_review_payload
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.harnesses.codex_native.app_server import (
@@ -58,6 +59,24 @@ _RPC_METHODS = frozenset(
         "thread/read",
     }
 )
+
+
+async def load_bgr_team_config(
+    *, server_client: httpx.AsyncClient, session_id: str, team_id: str
+) -> TeamConfig:
+    from omnigent.runner.identity import ORCHESTRATION_SOURCE_HEADER
+
+    response = await server_client.get(
+        f"/v1/bgr/teams/{quote(team_id, safe='')}",
+        params={"limit": 1},
+        headers={ORCHESTRATION_SOURCE_HEADER: session_id},
+        timeout=30,
+    )
+    response.raise_for_status()
+    team = Team.model_validate(response.json()["team"])
+    if team.team_id != team_id or team.brain_session_id != session_id:
+        raise ValueError("BGR configuration belongs to another team or Brain")
+    return team.config
 
 
 def bgr_brain_registered(session_id: str) -> bool:

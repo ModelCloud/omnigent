@@ -121,7 +121,7 @@ async def test_launch_retries_reuse_one_private_brain_and_one_initial_task(
 
 @pytest.mark.parametrize("speed,selected", [(1.0, "1"), (2.0, "2"), (1.25, "1.25")])
 async def test_launch_accepts_browser_numeric_speed_without_rewriting_profile(
-    auth_client, auth_app, bgr_launch_env, speed, selected
+    auth_client, auth_app, db_uri, bgr_launch_env, speed, selected
 ):
     host_id, body, frames, row = bgr_launch_env
     row.update(variant="regular", speed=speed)
@@ -131,6 +131,11 @@ async def test_launch_accepts_browser_numeric_speed_without_rewriting_profile(
     brain_id = response.json()["brain_session_id"]
     team = auth_app.state.bgr_store.get_team("alice", brain_id, body["team_id"])
     assert team.config == TeamConfig.model_validate(body["config"])
+    assert len(team.config.model_dump_json()) > 256
+    assert (
+        "omnigent.bgr.config"
+        not in SqlAlchemyConversationStore(db_uri).get_conversation(brain_id).labels
+    )
     assert sum(isinstance(frame, HostLaunchRunnerFrame) for frame in frames) == 1
 
 
