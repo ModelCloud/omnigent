@@ -767,22 +767,44 @@ def test_reviewer_channels_and_foreign_acknowledgements_fail_closed(store):
     from omnigent.bgr import Agent
     from omnigent.db.bgr_models import SqlBgrAgent
 
-    task = store.reserve(OWNER, BRAIN, TEAM, reservation())
+    tasks = [store.reserve(OWNER, BRAIN, TEAM, reservation()) for _ in range(2)]
     snapshot = store.recover(OWNER, BRAIN, TEAM)
-    worker = next(agent for agent in snapshot.agents if agent.role == "grunt")
-    reviewer = Agent(**{**worker.model_dump(), "role": "reviewer"})
+    workers = [agent for agent in snapshot.agents if agent.role == "grunt"]
+    assert len({worker.session_id for worker in workers}) == 2
     # Even imported future reviewer records cannot open an unsafe channel.
     with store._sessions("fixture_future_reviewer") as database:
-        database.execute(
-            update(SqlBgrAgent)
-            .where(SqlBgrAgent.id == worker.agent_id)
-            .values(document=reviewer.model_dump_json())
-        )
-    with pytest.raises(OmnigentError, match="independent-review"):
-        store.send(OWNER, BRAIN, TEAM, question(task))
-    envelope = store.drain(OWNER, worker.session_id, TEAM)[0]
-    with pytest.raises(OmnigentError):
-        store.ack(OWNER, BRAIN, TEAM, Ack(envelope_id=envelope.envelope_id, epoch=1))
+        for worker in workers:
+            reviewer = Agent(
+                **{
+                    **worker.model_dump(),
+                    "role": "reviewer",
+                    "name": f"reviewer-{worker.agent_id}",
+                }
+            )
+            database.execute(
+                update(SqlBgrAgent)
+                .where(SqlBgrAgent.id == worker.agent_id)
+                .values(document=reviewer.model_dump_json())
+            )
+    for task in tasks:
+        with pytest.raises(OmnigentError, match="independent-review"):
+            store.send(OWNER, BRAIN, TEAM, question(task))
+        for kind in ("question", "result"):
+            with pytest.raises(OmnigentError, match="independent-review"):
+                store.send(
+                    OWNER,
+                    task.attempt.session_id,
+                    TEAM,
+                    question(
+                        task,
+                        controller_id=None,
+                        recipient_agent_id=snapshot.team.brain_agent_id,
+                        kind=kind,
+                    ),
+                )
+        envelope = store.drain(OWNER, task.attempt.session_id, TEAM)[0]
+        with pytest.raises(OmnigentError):
+            store.ack(OWNER, BRAIN, TEAM, Ack(envelope_id=envelope.envelope_id, epoch=1))
 
 
 def test_team_create_idempotency_and_single_brain(store):

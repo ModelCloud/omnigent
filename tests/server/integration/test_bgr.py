@@ -341,6 +341,102 @@ async def test_http_restart_acceptance_correlation_checkpoint_and_ack(bgr_enviro
         assert len(snapshot["tasks"]) == 1 and len(snapshot["agents"]) == 2
 
 
+async def test_http_bidirectional_questions_and_worker_result(bgr_environment):
+    application, brain, worker, _, _ = bgr_environment
+    child = worker()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application()), base_url="http://test"
+    ) as client:
+        team, fence = await create_team(client, brain)
+        endpoint = f"{PREFIX}/teams/{team['team_id']}"
+        response = await client.post(
+            f"{endpoint}/tasks", headers=headers(brain), json=task_request(child, fence)
+        )
+        assert response.status_code == 201, response.text
+        task = response.json()
+        attempt = task["attempt"]
+        assignment = {
+            "epoch": fence["epoch"],
+            "task_id": task["task_id"],
+            "attempt_id": attempt["attempt_id"],
+            "head_sha": SHA,
+        }
+        for asker, responder, recipient in (
+            (brain, child, attempt["agent_id"]),
+            (child, brain, team["brain_agent_id"]),
+        ):
+            question = {
+                **assignment,
+                "controller_id": fence["controller_id"] if asker == brain else None,
+                "message_id": uuid4().hex,
+                "recipient_agent_id": recipient,
+                "kind": "question",
+                "correlation_id": uuid4().hex,
+                "payload": {"question": "Which checks does this task require?"},
+            }
+            response = await client.post(
+                f"{endpoint}/envelopes", headers=headers(asker), json=question
+            )
+            assert response.status_code == 202, response.text
+            delivery = (await client.get(f"{endpoint}/mailbox", headers=headers(responder))).json()
+            received = next(
+                item for item in delivery if item["message_id"] == question["message_id"]
+            )
+            assert received["sender_session_id"] == asker
+            assert received["correlation_id"] == question["correlation_id"]
+            response = await client.post(
+                f"{endpoint}/mailbox/ack",
+                headers=headers(responder),
+                json={"epoch": fence["epoch"], "envelope_id": received["envelope_id"]},
+            )
+            assert response.status_code == 200, response.text
+            answer = {
+                **question,
+                "controller_id": fence["controller_id"] if responder == brain else None,
+                "message_id": uuid4().hex,
+                "recipient_agent_id": received["sender_agent_id"],
+                "kind": "answer",
+                "in_reply_to": question["message_id"],
+                "payload": {"answer": "Run the task's specified focused checks."},
+            }
+            for mismatch in ({"correlation_id": uuid4().hex}, {"head_sha": "e" * 40}):
+                response = await client.post(
+                    f"{endpoint}/envelopes",
+                    headers=headers(responder),
+                    json={**answer, **mismatch},
+                )
+                assert response.status_code == 409, response.text
+            response = await client.post(
+                f"{endpoint}/envelopes", headers=headers(responder), json=answer
+            )
+            assert response.status_code == 202, response.text
+            receipt = response.json()
+            assert (
+                await client.post(f"{endpoint}/envelopes", headers=headers(responder), json=answer)
+            ).json() == receipt
+            inbox = (await client.get(f"{endpoint}/mailbox", headers=headers(asker))).json()
+            callback = next(item for item in inbox if item["message_id"] == answer["message_id"])
+            assert callback["sender_session_id"] == responder
+            assert callback["in_reply_to"] == question["message_id"]
+            assert callback["correlation_id"] == question["correlation_id"]
+            assert callback["payload"] == answer["payload"]
+        result = {
+            **assignment,
+            "message_id": uuid4().hex,
+            "recipient_agent_id": team["brain_agent_id"],
+            "kind": "result",
+            "payload": {"summary": "Focused checks passed", "head_sha": SHA},
+        }
+        response = await client.post(f"{endpoint}/envelopes", headers=headers(child), json=result)
+        assert response.status_code == 202, response.text
+        inbox = (await client.get(f"{endpoint}/mailbox", headers=headers(brain))).json()
+        received = next(item for item in inbox if item["message_id"] == result["message_id"])
+        assert received["sender_agent_id"] == attempt["agent_id"]
+        assert received["payload"] == result["payload"]
+        snapshot = (await client.get(endpoint, headers=headers(brain))).json()
+        assert snapshot["tasks"][0]["attempt"]["state"] == "reserved"
+
+
 @pytest.mark.parametrize(
     "case,expected",
     [

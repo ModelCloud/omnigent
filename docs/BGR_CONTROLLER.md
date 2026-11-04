@@ -168,6 +168,10 @@ proceeding, not blindly execute or redeliver them. Nothing clears them implicitl
 Profiles preserve provider, model, optional variant/speed/reasoning and optional
 harness, without guessing defaults or model-family substitutions. One or two
 reviewer profiles are required, but no reviewer session/channel can be used yet.
+The [Brain-to-Reviewer instruction contract](BRAIN_EXECUTOR_REVIEWER_DESIGN.md#required-brain-to-reviewer-instructions)
+requires a new, sanitized PR discussion comment for each review, through a
+trusted publisher without giving reviewers publication credentials. That prompt
+dispatch and publishing lifecycle are not implemented by this ledger.
 Profile values are ledger snapshots, **not validated backend capabilities**.
 The active brain profile is pinned; configuration updates apply to future grunt
 assignments only. Lowering the cap never kills or discards existing reservations.
