@@ -9,7 +9,19 @@ import pytest
 from dev import bgr_controller_driver as driver
 from omnigent.bgr_control import BgrControl
 
-CONTROL = "mcp__omnigent__sys_bgr_control"
+CONTROL = "sys_bgr_control"
+NAMESPACE = "mcp__omnigent"
+TOOLS = [
+    {
+        "type": "namespace",
+        "name": NAMESPACE,
+        "tools": [{"type": "function", "name": CONTROL}],
+    },
+    *[
+        {"type": "function", "name": name}
+        for name in ("bgr_reply_message", "bgr_send_message", "bgr_report_status")
+    ],
+]
 
 
 @pytest.fixture
@@ -31,11 +43,11 @@ def drive(tmp_path, monkeypatch):
     driver._STATES.clear()
     thread = str(uuid4())
 
-    def run(*inputs, thread_id=thread):
+    def run(*inputs, thread_id=thread, tools=TOOLS):
         return driver.respond(
             {
                 "prompt_cache_key": thread_id,
-                "tools": [{"name": CONTROL}, {"name": "bgr_reply_message"}],
+                "tools": tools,
                 "input": list(inputs),
             },
             {},
@@ -49,7 +61,12 @@ def command(response):
     call = response["items"][0]
     arguments = json.loads(call["arguments"])
     if call["name"] == CONTROL:
+        assert call["namespace"] == NAMESPACE
+        assert isinstance(call["call_id"], str) and call["call_id"]
+        assert call["type"] == "function_call"
         BgrControl.model_validate(arguments)
+    else:
+        assert "namespace" not in call
     return call, arguments
 
 
@@ -190,7 +207,32 @@ def test_driver_refuses_uncertain_control_without_new_action(drive):
     assert next(iter(driver._STATES.values()))["pending"]["arguments"] == command(create)[1]
 
 
-def test_driver_refuses_missing_advertised_tools(drive):
-    drive()
+@pytest.mark.parametrize(
+    "tools",
+    [
+        [],
+        TOOLS[:1],
+        TOOLS[1:],
+        [{"type": "function", "name": CONTROL}, *TOOLS[1:]],
+        [{"type": "function", "name": f"{NAMESPACE}__{CONTROL}"}, *TOOLS[1:]],
+        [{**TOOLS[0], "name": "mcp__other"}, *TOOLS[1:]],
+        [TOOLS[0], *TOOLS],
+        [
+            {**TOOLS[0], "tools": [{"type": "function", "name": f"{NAMESPACE}__{CONTROL}"}]},
+            *TOOLS[1:],
+        ],
+    ],
+    ids=[
+        "none",
+        "no-reply",
+        "no-control",
+        "unscoped",
+        "flattened",
+        "foreign",
+        "duplicate",
+        "flattened-in-namespace",
+    ],
+)
+def test_driver_refuses_missing_advertised_tools(drive, tools):
     with pytest.raises(ValueError, match="actual control"):
-        driver.respond({"prompt_cache_key": next(iter(driver._STATES)), "tools": []}, {})
+        drive(tools=tools)

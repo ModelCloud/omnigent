@@ -37,16 +37,17 @@ def _objects(value):
                 yield from _objects(child)
 
 
-def _call(name, arguments, call_id):
+def _call(name, arguments, call_id, *, namespace=None):
+    item = {
+        "type": "function_call",
+        "call_id": call_id,
+        "name": name,
+        "arguments": json.dumps(arguments),
+    }
+    if namespace is not None:
+        item["namespace"] = namespace
     return {
-        "items": [
-            {
-                "type": "function_call",
-                "call_id": call_id,
-                "name": name,
-                "arguments": json.dumps(arguments),
-            }
-        ]
+        "items": [item],
     }
 
 
@@ -76,8 +77,15 @@ def _respond(request: dict) -> dict:
             "revision_started": False,
         }
     state = _STATES[thread]
-    tools = {tool["name"] for tool in request.get("tools", []) if "name" in tool}
-    controls = [name for name in tools if name.endswith("sys_bgr_control")]
+    advertised = request.get("tools", [])
+    tools = {tool.get("name") for tool in advertised if tool.get("type") == "function"}
+    controls = [
+        (namespace["name"], tool["name"])
+        for namespace in advertised
+        if namespace.get("type") == "namespace" and namespace.get("name") == "mcp__omnigent"
+        for tool in namespace.get("tools", [])
+        if tool.get("type") == "function" and tool.get("name") == "sys_bgr_control"
+    ]
     if len(controls) != 1 or "bgr_reply_message" not in tools:
         raise ValueError("Brain must advertise the actual control and native reply tools")
     objects = list(_objects(request.get("input", [])))
@@ -165,7 +173,8 @@ def _respond(request: dict) -> dict:
         command = {"action": action, "action_id": uuid4().hex, **arguments}
         pending = {"arguments": command, "call_id": "control-" + command["action_id"]}
         state["pending"] = pending
-        return _call(controls[0], command, pending["call_id"])
+        namespace, name = controls[0]
+        return _call(name, command, pending["call_id"], namespace=namespace)
 
     plan = state["plan"]
     if len(state["grunts"]) < plan.get("grunts", 2):
