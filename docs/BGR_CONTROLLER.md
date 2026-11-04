@@ -372,7 +372,16 @@ brain_session_id=..., team_id=..., fence=Fence(...))` reads
 `hostDelivery:true`, `liveReattach:true`, a positive `maxQueriesPerAttempt <= 128`,
 and a nondeferred `bgr_report_status` function specification. Durable native
 mailbox, restart recovery, reviewer sandbox, cross-host delivery and task dispatch
-must all be false for this contract. Missing/old/unsupported capabilities fail
+must all be false for the legacy contract. The additive general-message contract
+is accepted explicitly too: all three status scopes, all eight message kinds,
+`generalMessaging`, `messageCallbacks`, `taskDispatch`, evidence limits and
+nondeferred `sendTool`/`replyTool` specifications must agree. Partial upgrades fail;
+`consumptionReceipts:false` remains false rather than becoming an inferred receipt.
+The legacy translator still starts only its status tool and does not enable
+general transport or reviewers merely because negotiation succeeded. Its modern
+schema regression is source-derived from
+[MultiDex 99ac0e1f5](https://github.com/ModelCloud/MultiDex/commit/99ac0e1f50e7a93f585ee7b86941375dc5b6c278),
+not a captured modern binary exchange. Missing/old/unsupported capabilities fail
 with `runner_capability_mismatch`. There is no model-family/profile fallback.
 
 `startup_options()` returns the negotiated `reportTool` unchanged in

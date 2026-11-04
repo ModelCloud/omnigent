@@ -41,6 +41,54 @@ CAPABILITIES = NATIVE_CONFORMANCE["capabilitiesRead"]["result"]
 
 
 @pytest.fixture
+def general_capabilities():
+    """Source-derived schema coverage, not proof of running native model execution."""
+    capabilities = copy.deepcopy(CAPABILITIES)
+    capabilities.update(
+        statusScopes=["now", "since_time", "since_commit"],
+        messageKinds=[
+            "task",
+            "question",
+            "answer",
+            "progress",
+            "result",
+            "cancel",
+            "status_query",
+            "status_reply",
+        ],
+        generalMessaging=True,
+        messageCallbacks=True,
+        consumptionReceipts=False,
+        statusEvidence=(
+            "model_self_summary_with_explicit_missing_evidence; no backend history attestation"
+        ),
+        taskDispatch=True,
+    )
+    for key, name, required in (
+        (
+            "sendTool",
+            "bgr_send_message",
+            [
+                "messageId",
+                "recipientAgentId",
+                "kind",
+                "correlationId",
+                "payload",
+            ],
+        ),
+        ("replyTool", "bgr_reply_message", ["messageId", "inReplyTo", "kind", "payload"]),
+    ):
+        capabilities[key] = {
+            "type": "function",
+            "name": name,
+            "description": "General communication",
+            "deferLoading": False,
+            "inputSchema": {"type": "object", "required": required},
+        }
+    return capabilities
+
+
+@pytest.fixture
 def ledger(db_uri):
     store = BgrStore(db_uri)
     config = CONFIG.model_copy(
@@ -302,6 +350,46 @@ async def test_unsupported_capabilities_never_bind_or_deliver(ledger, field, val
     rpc.capabilities[field] = value
     if value is None:
         del rpc.capabilities[field]
+    with pytest.raises(OmnigentError) as error:
+        await adapter(ledger, rpc)
+    assert error.value.code == ErrorCode.RUNNER_CAPABILITY_MISMATCH
+    assert [method for method, _ in rpc.calls] == ["bgr/capabilities/read"]
+
+
+async def test_general_superset_keeps_legacy_status_and_acceptance_is_not_consumption(
+    ledger, worker, general_capabilities
+):
+    rpc = WorkerRpc(capabilities=general_capabilities)
+    bridge = await bound(ledger, worker, rpc)
+    assert bridge.capabilities.general_messaging
+    assert bridge.capabilities.task_dispatch and bridge.capabilities.message_callbacks
+    assert bridge.capabilities.consumption_receipts is False
+    assert bridge.capabilities.reviewer_sandbox is False
+    query = persist_query(ledger, worker)
+    assert await bridge.deliver(worker.attempt.attempt_id, query.message_id) is False
+    assert ledger.drain(OWNER, worker.attempt.session_id, TEAM)[0].consumed_at is None
+    assert len(bridge.startup_options()["dynamicTools"]) == 1
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("generalMessaging", False),
+        ("messageCallbacks", False),
+        ("taskDispatch", False),
+        ("consumptionReceipts", "false"),
+        ("statusEvidence", None),
+        ("sendTool", None),
+        ("replyTool", {}),
+        ("messageKinds", ["task", "result"]),
+        ("statusScopes", ["now"]),
+    ],
+)
+async def test_partial_general_superset_fails_before_binding(
+    ledger, general_capabilities, field, value
+):
+    general_capabilities[field] = value
+    rpc = WorkerRpc(capabilities=general_capabilities)
     with pytest.raises(OmnigentError) as error:
         await adapter(ledger, rpc)
     assert error.value.code == ErrorCode.RUNNER_CAPABILITY_MISMATCH

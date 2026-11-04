@@ -33,6 +33,24 @@ class _Wire(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, extra="forbid", strict=True, frozen=True)
 
 
+def _require_tool(tool: dict[str, JsonValue] | None, name: str, required: set[str]) -> None:
+    schema = tool.get("inputSchema") if tool else None
+    fields = schema.get("required") if isinstance(schema, dict) else None
+    if (
+        not tool
+        or tool.get("type") != "function"
+        or tool.get("name") != name
+        or not isinstance(tool.get("description"), str)
+        or tool.get("deferLoading", False) is not False
+        or not isinstance(schema, dict)
+        or schema.get("type") != "object"
+        or not isinstance(fields, list)
+        or not all(isinstance(field, str) for field in fields)
+        or not required <= set(fields)
+    ):
+        raise ValueError(f"requires a nondeferred {name} dynamic tool specification")
+
+
 class NativeCapabilities(_Wire):
     version: Annotated[int, Field(ge=1, le=1)]
     roles: list[str]
@@ -47,13 +65,17 @@ class NativeCapabilities(_Wire):
     cross_host_delivery: bool
     task_dispatch: bool
     max_queries_per_attempt: Annotated[int, Field(ge=1, le=128)]
+    send_tool: dict[str, JsonValue] | None = None
+    reply_tool: dict[str, JsonValue] | None = None
+    general_messaging: bool = False
+    message_callbacks: bool = False
+    consumption_receipts: bool = False
+    status_evidence: Annotated[str, Field(min_length=1, max_length=512)] | None = None
 
     @model_validator(mode="after")
     def supported_contract(self) -> Self:
         if (
             set(self.roles) != {"brain", "grunt"}
-            or self.status_scopes != ["now"]
-            or set(self.message_kinds) != {"status_query", "status_reply"}
             or not self.host_delivery
             or not self.live_reattach
             or any(
@@ -62,26 +84,49 @@ class NativeCapabilities(_Wire):
                     self.restart_recovery,
                     self.reviewer_sandbox,
                     self.cross_host_delivery,
-                    self.task_dispatch,
                 )
             )
         ):
-            raise ValueError("requires the v1 host-delivery status-only capability contract")
-        tool = self.report_tool
-        schema = tool.get("inputSchema")
-        required = schema.get("required") if isinstance(schema, dict) else None
-        if (
-            tool.get("type") != "function"
-            or tool.get("name") != "bgr_report_status"
-            or not isinstance(tool.get("description"), str)
-            or tool.get("deferLoading", False) is not False
-            or not isinstance(schema, dict)
-            or schema.get("type") != "object"
-            or not isinstance(required, list)
-            or not all(isinstance(name, str) for name in required)
-            or not {"messageId", "inReplyTo", "payload"} <= set(required)
+            raise ValueError("requires the v1 host-delivery brain/grunt capability contract")
+        _require_tool(self.report_tool, "bgr_report_status", {"messageId", "inReplyTo", "payload"})
+        if self.general_messaging:
+            if (
+                set(self.status_scopes) != {"now", "since_time", "since_commit"}
+                or set(self.message_kinds)
+                != {
+                    "task",
+                    "question",
+                    "answer",
+                    "progress",
+                    "result",
+                    "cancel",
+                    "status_query",
+                    "status_reply",
+                }
+                or not self.task_dispatch
+                or not self.message_callbacks
+                or self.status_evidence is None
+            ):
+                raise ValueError("incomplete native general-message capability contract")
+            _require_tool(
+                self.send_tool,
+                "bgr_send_message",
+                {"messageId", "recipientAgentId", "kind", "correlationId", "payload"},
+            )
+            _require_tool(
+                self.reply_tool, "bgr_reply_message", {"messageId", "inReplyTo", "kind", "payload"}
+            )
+        elif (
+            self.status_scopes != ["now"]
+            or set(self.message_kinds) != {"status_query", "status_reply"}
+            or self.task_dispatch
+            or self.message_callbacks
+            or self.consumption_receipts
+            or self.send_tool is not None
+            or self.reply_tool is not None
+            or self.status_evidence is not None
         ):
-            raise ValueError("requires a nondeferred bgr_report_status dynamic tool specification")
+            raise ValueError("requires the v1 host-delivery status-only capability contract")
         return self
 
 
@@ -216,12 +261,11 @@ class CodexNativeBgrAdapter:
             capabilities = NativeCapabilities.model_validate(
                 _result(await request("bgr/capabilities/read", {}))
             )
-        except (ValueError, OmnigentError, CodexAppServerResponseError) as exc:
+        except (ValueError, OmnigentError, CodexAppServerResponseError):
             raise OmnigentError(
-                "Native BGR requires experimental v1 hostDelivery status capabilities: "
-                + str(exc),
+                "Native BGR requires compatible experimental v1 hostDelivery capabilities",
                 code=ErrorCode.RUNNER_CAPABILITY_MISMATCH,
-            ) from exc
+            ) from None
         return cls(request, store, user_id, brain_session_id, team_id, fence, capabilities)
 
     def startup_options(self) -> CodexMessage:
