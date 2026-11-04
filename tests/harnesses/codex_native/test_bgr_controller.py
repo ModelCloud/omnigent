@@ -148,6 +148,39 @@ async def test_same_live_attach_inspects_owner_and_rejects_changed_generation(co
         )
 
 
+async def test_retire_revoked_controller_is_exact_fenced_and_idempotent(controller):
+    current, _processes, calls, role_sessions = controller
+    registry = BgrControllers(current.store, role_sessions)
+    registry._controllers[BRAIN] = current
+    heartbeat = current._heartbeat
+    assert heartbeat is not None
+    before = list(calls)
+    for fence in (
+        current.fence.model_copy(update={"epoch": current.fence.epoch + 1}),
+        current.fence.model_copy(update={"controller_id": uuid4().hex}),
+    ):
+        assert not await registry.retire(BRAIN, fence)
+        assert registry.get(BRAIN) is current and not heartbeat.cancelling()
+    assert not await registry.retire(uuid4().hex, current.fence)
+    binding = current.store.native_brain_binding(OWNER, BRAIN, TEAM, current.fence)
+    current.store.begin_runtime_recovery(
+        OWNER,
+        BRAIN,
+        TEAM,
+        current.fence,
+        recovery_id=uuid4().hex,
+        runtime_id=binding.runtime_id,
+        replacement_controller_id=uuid4().hex,
+    )
+    assert await registry.retire(BRAIN, current.fence)
+    assert heartbeat.cancelling()
+    with pytest.raises(OmnigentError, match="not attached"):
+        registry.get(BRAIN)
+    assert not await registry.retire(BRAIN, current.fence)
+    assert calls == before
+    assert not registry._attach_lock.locked() and not current._callbacks_lock.locked()
+
+
 @pytest.mark.parametrize("cached", [True, False])
 @pytest.mark.parametrize("expired", [True, False])
 @pytest.mark.parametrize(
@@ -193,6 +226,17 @@ async def test_replacement_attach_retries_only_exact_live_native_binding(
         first = await registry.attach(
             user_id=OWNER, brain_session_id=session, team_id=TEAM, fence=fence, runtime=runtime
         )
+        recovery = store.get_team(OWNER, session, TEAM).runtime_recoveries[-1]
+        assert not await registry.retire(
+            session,
+            fence.model_copy(
+                update={
+                    "epoch": recovery.previous_epoch,
+                    "controller_id": recovery.previous_controller_id,
+                }
+            ),
+        )
+        assert registry.get(session) is first and not first._heartbeat.cancelling()
         if not cached:
             await registry.close()
             registry = BgrControllers(store, AsyncMock())

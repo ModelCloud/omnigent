@@ -20,6 +20,8 @@ from omnigent.bgr import (
 )
 from omnigent.bgr_control import BgrControl
 from omnigent.bgr_review import ReviewRoundCreate
+from omnigent.db import current_workspace_id
+from omnigent.db.bgr_models import SqlBgrNativeBinding, SqlBgrTeam
 from omnigent.errors import OmnigentError
 from omnigent.stores.bgr_control_store import BgrControlActions
 from omnigent.stores.bgr_review_store import BgrReviewStore
@@ -416,3 +418,88 @@ def test_owner_recovery_target_uses_durable_binding_after_lease_expiry(
     assert team.epoch == fence.epoch and team.controller_id == fence.controller_id
     with pytest.raises(OmnigentError):
         store.runtime_recovery_target("other-owner", TEAM)
+
+
+@pytest.mark.parametrize("state", ["ready", "binding", "attached"])
+@pytest.mark.parametrize("cold", [False, True])
+def test_recovery_target_resolves_exact_generation_across_replacement(
+    replacement_recovery, db_uri, monkeypatch, state, cold
+):
+    store, intent, fence, replacement = replacement_recovery
+    brain = intent.brain_session_id
+    if state != "ready":
+        store.native_brain_binding(OWNER, brain, TEAM, fence, binding=replacement)
+    if state == "attached":
+        store.mark_launch_running(OWNER, brain, TEAM, fence)
+    if cold:
+        store = BgrReviewStore(db_uri)
+    monkeypatch.setattr(store, "_now_us", lambda: 10**18)
+    session, team, target = store.runtime_recovery_target(OWNER, TEAM)
+    recovery = team.runtime_recoveries[-1]
+    assert session == brain and recovery.state == state
+    assert team.epoch == fence.epoch and team.controller_id == fence.controller_id
+    if state == "ready":
+        assert target == NativeBrainBinding(
+            team_id=TEAM,
+            epoch=recovery.previous_epoch,
+            thread_id=recovery.previous_thread_id,
+            runtime_id=recovery.runtime_id,
+            host_id=recovery.host_id,
+        )
+    else:
+        assert target == replacement
+    with pytest.raises(OmnigentError):
+        store.runtime_recovery_target("other-owner", TEAM)
+    if state != "attached":
+        with pytest.raises(OmnigentError, match="launch retry"):
+            store.claim_launch(OWNER, TEAM, uuid4().hex)
+    with pytest.raises(OmnigentError):
+        store.check_session_runtime_input(brain)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("team_id", "e" * 32),
+        ("epoch", 2),
+        ("thread_id", "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"),
+        ("runtime_id", "e" * 32),
+        ("host_id", "other-host"),
+        ("team_epoch", 3),
+        ("team_controller", "e" * 32),
+        ("missing_history", None),
+        ("missing_digest", None),
+    ],
+)
+def test_ready_recovery_target_rejects_inconsistent_durable_identity(
+    replacement_recovery, db_uri, field, value
+):
+    store, intent, _fence, _replacement = replacement_recovery
+    _brain, team, binding = store.runtime_recovery_target(OWNER, TEAM)
+    with store._sessions("fixture_inconsistent_recovery_identity") as db:
+        if field in {"team_epoch", "team_controller", "missing_history", "missing_digest"}:
+            row = db.get(SqlBgrTeam, (current_workspace_id(), TEAM))
+            if field == "team_epoch":
+                row.epoch = value
+            elif field == "team_controller":
+                row.controller_id = value
+            else:
+                history = (
+                    []
+                    if field == "missing_history"
+                    else [
+                        team.runtime_recoveries[-1].model_copy(
+                            update={"stop_manifest_sha256": None}
+                        )
+                    ]
+                )
+                row.document = team.model_copy(
+                    update={"runtime_recoveries": history}
+                ).model_dump_json()
+        else:
+            row = db.get(SqlBgrNativeBinding, (current_workspace_id(), team.brain_agent_id))
+            row.document = binding.model_copy(update={field: value}).model_dump_json()
+    cold = BgrReviewStore(db_uri)
+    with pytest.raises(OmnigentError):
+        cold.runtime_recovery_target(OWNER, TEAM)
+    assert cold.get_launch(OWNER, TEAM).request.initial_prompt == intent.request.initial_prompt

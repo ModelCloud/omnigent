@@ -569,6 +569,15 @@ class BgrControllers:
             )
             return controller
 
+    async def retire(self, brain_session_id: str, fence: Fence) -> bool:
+        """Forget only the revoked controller; process shutdown is a separate operation."""
+        async with self._attach_lock:
+            controller = self._controllers.get(brain_session_id)
+            if controller is None or controller.fence != fence:
+                return False
+            self.remove(brain_session_id, fence)
+            return True
+
     def remove(self, brain_session_id: str, fence: Fence) -> None:
         controller = self.get(brain_session_id)
         if controller.fence != fence:

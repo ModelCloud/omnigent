@@ -769,8 +769,11 @@ An owner can initiate revocation even without a live controller via
 `POST /v1/bgr/teams/{team_id}/recover` with JSON `{}` and ordinary authenticated
 owner credentials. The team, Brain, host and generation come from durable records;
 caller-supplied fences or stop attestations are rejected. Revocation commits before
-any runner RPC. The server checks the bound host/generation before requesting
-`stop_generation`. Retries reuse the pending recovery. An unreachable runner,
+any runner RPC. It then retires only the cached controller with the exact revoked
+fence and cancels its lease heartbeat, serialized against attachment; a newer
+controller is untouched. Retirement is not process-stop evidence and does not await
+host shutdown under controller locks. The server checks the bound host/generation
+before requesting `stop_generation`. Retries reuse the pending recovery. An unreachable runner,
 generation mismatch or the current unverified process-group stop returns HTTP 202
 with `stop_status:"unknown"`, `replacement_enabled:false` and recovery `stopping`.
 Even a positive bare host boolean is not accepted as complete stop evidence. No epoch
@@ -780,6 +783,9 @@ The durable store APIs are:
 
 - `runtime_recovery_target(user, team)`: owner-only durable Brain/native identity;
   intentionally does not require a live lease or live controller object.
+  In `ready`, it resolves the exact stopped Brain mapping against the completed
+  recovery and advanced team fence, including after a cold store restart. This is
+  reconciliation lookup only, not replacement launch or renewed old authority.
 - `resume_live_runtime_recovery(user, brain, team, fence, binding=...)`: trusted
   attach-only renewal of an already persisted replacement `binding`, after exact
   authenticated host metadata and native identity inspection. It does not bind a
@@ -802,7 +808,10 @@ The durable store APIs are:
   native binding. Entries contain `session_id`, `thread_id`, `role`, `process_tag`,
   `process_domain_id`, literal `stop_confirmed:true` and
   `domain_stop_confirmed:true`. Native ACKs, unknown domains and truthy substitutes
-  do not qualify. The present host has no producer of such evidence.
+  do not qualify. The present host has no producer of such evidence. Bound-session
+  matching alone cannot verify starting/unbound inventory completeness; an
+  authenticated durable supervisor admission journal is still required before
+  exposing this transition through a recovery endpoint.
 
 Only verified completion advances the epoch and makes the next controller ready.
 Old reserved attempts become failed with checkpoints preserved, unfinished reviews

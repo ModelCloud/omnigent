@@ -99,6 +99,13 @@ def create_bgr_control_router(
                 runtime_id=binding.runtime_id,
                 replacement_controller_id=uuid4().hex,
             )
+        await controllers.retire(
+            session,
+            Fence(
+                controller_id=recovery.previous_controller_id,
+                epoch=recovery.previous_epoch,
+            ),
+        )
         try:
             from omnigent.server.routes.sessions import _get_runner_client
 

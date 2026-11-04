@@ -3,7 +3,7 @@
 import json
 from random import Random
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import httpx
@@ -959,8 +959,9 @@ async def test_public_input_and_mcp_deny_durable_roles_after_authority_loss(
 
 
 @pytest.mark.parametrize("host_result", ["unknown", "unavailable", "error", "foreign", "positive"])
-async def test_owner_recovery_fences_before_host_rpc_without_live_controller(
-    bgr_environment, monkeypatch, host_result
+@pytest.mark.parametrize("cached", ["absent", "old", "newer"])
+async def test_owner_recovery_retires_only_old_controller_before_host_rpc(
+    bgr_environment, monkeypatch, host_result, cached
 ):
     application, brain, _, permissions, now = bgr_environment
     app = application()
@@ -978,6 +979,16 @@ async def test_owner_recovery_fences_before_host_rpc_without_live_controller(
         )
         with pytest.raises(OmnigentError, match="not attached"):
             app.state.bgr_controllers.get(brain)
+        registry = app.state.bgr_controllers
+        heartbeat = Mock()
+        controller = SimpleNamespace(
+            fence=Fence.model_validate(fence_data)
+            if cached == "old"
+            else Fence(controller_id=uuid4().hex, epoch=2),
+            _heartbeat=heartbeat,
+        )
+        if cached != "absent":
+            registry._controllers[brain] = controller
         now[0] += 301
         operations = []
 
@@ -986,6 +997,12 @@ async def test_owner_recovery_fences_before_host_rpc_without_live_controller(
             current = store.get_team("alice", brain, team_id)
             assert current.runtime_recoveries[-1].state == "stopping"
             assert current.epoch == 1 and current.lease_expires_at == 0
+            assert not registry._attach_lock.locked()
+            if cached == "newer":
+                assert registry.get(brain) is controller
+            else:
+                with pytest.raises(OmnigentError, match="not attached"):
+                    registry.get(brain)
             with pytest.raises(OmnigentError):
                 store.check_session_runtime_input(brain)
             payload = json.loads(request.content)
@@ -1030,6 +1047,7 @@ async def test_owner_recovery_fences_before_host_rpc_without_live_controller(
             response = await client.post(url, headers={"X-Forwarded-Email": "bob"}, json={})
             assert response.status_code == 403
             assert store.get_team("alice", brain, team_id).runtime_recoveries == []
+            heartbeat.cancel.assert_not_called()
             response = await client.post(url, headers=owner, json={})
             assert response.status_code == 202, response.text
             result = response.json()
@@ -1038,6 +1056,12 @@ async def test_owner_recovery_fences_before_host_rpc_without_live_controller(
             assert "private host detail" not in response.text
             again = await client.post(url, headers=owner, json={})
             assert again.status_code == 202 and again.json() == result
+            assert heartbeat.cancel.call_count == (1 if cached == "old" else 0)
+            if cached == "newer":
+                assert registry.get(brain) is controller
+            else:
+                with pytest.raises(OmnigentError, match="not attached"):
+                    registry.get(brain)
             permissions.revoke("alice", brain)
             denied = await client.post(url, headers=owner, json={})
             assert denied.status_code == 404
