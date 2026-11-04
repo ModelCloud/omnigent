@@ -346,7 +346,7 @@ def test_multidex_switch_routes_openai_model_to_native_provider(
     (home / "config.toml").write_text(
         'model = "DS v4.1 Flash 1017"\n'
         'model_provider = "multidex"\n'
-        '[model_providers.omnigent_provider]\n'
+        "[model_providers.omnigent_provider]\n"
         'name = "Omnigent Provider"\n'
         'base_url = "https://openrouter.ai/api/v1"\n'
         'wire_api = "responses"\n'

@@ -2645,7 +2645,7 @@ class CodexNativeAppServer:
                             "session auth marker (%s)",
                             auth_path,
                         )
-                    except OSError:  # noqa: BLE001 - a repair failure is not fatal here
+                    except OSError:
                         _logger.warning(
                             "codex-native: could not repair the empty session auth marker "
                             "at %s; Codex will ask the user to sign in again.",
@@ -4745,9 +4745,7 @@ def _openai_vendor_pin_forbids(entry: object, model: str | None) -> bool:
             effective_model = entry.family_default_model("openai")  # type: ignore[attr-defined]
         except Exception:  # noqa: BLE001 - an unroutable entry is judged below
             effective_model = None
-    return _is_openai_vendor_model(effective_model) and not _serves_openai_vendor_natively(
-        entry
-    )
+    return _is_openai_vendor_model(effective_model) and not _serves_openai_vendor_natively(entry)
 
 
 def _codex_login_launch(model: str | None, *, summary: str) -> NativeCodexLaunch:
