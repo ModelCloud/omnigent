@@ -383,7 +383,7 @@ function ConfigurationModelSelectors({
         "Service serving this model",
       )}
       {field(
-        "Variant / Speed",
+        "Variant",
         pending ? undefined : selected?.id,
         providerRows.map((row) => [
           row.id,
@@ -398,12 +398,12 @@ function ConfigurationModelSelectors({
           const row = providerRows.find((candidate) => candidate.id === next);
           if (row) apply(row);
         },
-        providerRows.length ? "Choose a variant/speed" : "Choose a model and provider first",
+        providerRows.length ? "Choose a variant" : "Choose a model and provider first",
         "Relative endpoint speed, not an enforced execution mode.",
       )}
       {pending && (
         <p role="status" className="text-xs text-muted-foreground">
-          Choose a variant/speed to apply this model. Current profile values have not changed.
+          Choose a variant to apply this model. Current profile values have not changed.
         </p>
       )}
       {field(

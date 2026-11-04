@@ -72,13 +72,13 @@ it("saves and reloads all six axes for one brain, dynamic grunts and two reviewe
     fireEvent.change(fields.getByRole("combobox", { name: "Model" }), {
       target: { value: row.modelFamily },
     });
-    expect(fields.getByText(/Choose a variant\/speed to apply/)).toBeInTheDocument();
-    fireEvent.change(fields.getByRole("combobox", { name: "Variant / Speed" }), {
+    expect(fields.getByText(/Choose a variant to apply/)).toBeInTheDocument();
+    fireEvent.change(fields.getByRole("combobox", { name: "Variant" }), {
       target: { value: row.id },
     });
     expect(fields.getByRole("group", { name: "Provider" })).toHaveTextContent("actual-provider");
     expect(fields.getByText("Service serving this model")).toBeInTheDocument();
-    expect(fields.getByRole("group", { name: "Variant / Speed" })).toHaveTextContent("Fast · 2.5×");
+    expect(fields.getByRole("group", { name: "Variant" })).toHaveTextContent("Fast · 2.5×");
     fireEvent.change(fields.getByRole("combobox", { name: "Reasoning" }), {
       target: { value: "high" },
     });
@@ -150,7 +150,7 @@ it("preserves manual profile values across harness/catalog changes and reports m
   fireEvent.change(brain.getByRole("combobox", { name: "Model" }), {
     target: { value: row.modelFamily },
   });
-  fireEvent.change(brain.getByRole("combobox", { name: "Variant / Speed" }), {
+  fireEvent.change(brain.getByRole("combobox", { name: "Variant" }), {
     target: { value: row.id },
   });
   expect(brain.getByRole("combobox", { name: "Reasoning" })).toHaveValue("custom-reasoning");

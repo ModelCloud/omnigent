@@ -15,14 +15,14 @@ cap of 1–64 (default 4), and one or two **Reviewer** profiles for fresh
 provider, model, variant, speed and reasoning independently. No worker/session
 names or identities are fabricated by the form.
 
-Each role follows **Harness → Model → Provider → Variant/Speed → Reasoning**.
+Each role follows **Harness → Model → Provider → Variant → Reasoning**.
 Harness choices come from the existing agent catalog with shared friendly labels
 (for example, `codex-native` displays as **MultiDex**, not as a new wire ID).
 The host model catalog supplies one ordered selection flow, including ungrouped
 catalogs; there is no extra catalog-profile picker. **Provider** means “Service
 serving this model.” Single choices display as static values after selection,
 but even a sole model can be explicitly selected from an empty draft. Fast-only
-or otherwise non-regular models require an explicit variant/speed choice; merely
+or otherwise non-regular models require an explicit variant choice; merely
 choosing their family never commits an implicit fast variant.
 
 Applying an advertised model/variant replaces its four routing/metadata values;

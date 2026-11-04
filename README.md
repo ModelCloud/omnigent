@@ -396,7 +396,7 @@ status-protocol translator with explicit host/native identity mapping. The
 translator is not wired to runtime scheduling or callbacks. New Chat offers
 **BGR → Configure draft** alongside Polly on an ordinary host: configure one
 brain, dynamic grunts and one or two reviewer profiles with a single
-Harness → Model → Provider → Variant/Speed → Reasoning flow. Harnesses use
+Harness → Model → Provider → Variant → Reasoning flow. Harnesses use
 friendly names (for example, MultiDex); optional **Advanced manual overrides**
 preserve raw/unverified values without duplicate catalog pickers. Save a
 browser-local draft scoped to the server, user, project and host. This is

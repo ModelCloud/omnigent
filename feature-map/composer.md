@@ -19,7 +19,7 @@ apply only to that side chat. See the [side-chat settings recipe](sessions.md).
   configures one brain, a 1–64 dynamic grunt cap/default profile and one or two
   fresh-reviewer profiles. All six profile fields persist per
   browser/server/user/project/host. Each role uses friendly harness names (MultiDex,
-  not `codex-native`) and one Harness → Model → Provider → Variant/Speed → Reasoning
+  not `codex-native`) and one Harness → Model → Provider → Variant → Reasoning
   flow. The opt-in native selector form handles singleton/ungrouped catalogs and
   explicit fast-only variants without changing compact composer consumers.
   Provider means “Service serving this model”; missing metadata is not invented.
@@ -38,7 +38,7 @@ apply only to that side chat. See the [side-chat settings recipe](sessions.md).
 
   Manual journey: on an isolated server with a connected ordinary host, open
   New Chat → agent picker → BGR. Confirm MultiDex labels on every role and
-  Advanced collapsed by default. Choose a model, provider and variant/speed
+  Advanced collapsed by default. Choose a model, provider and variant
   (explicitly choose Fast when that is the only variant), then reasoning.
   Open Advanced to edit a manual provider and confirm its unverified notice,
   not another catalog row, is shown. Set 64 grunts and 2 reviewers,

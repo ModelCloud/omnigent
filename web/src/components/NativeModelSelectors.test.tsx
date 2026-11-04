@@ -361,7 +361,7 @@ it.each(["fast", "future-variant"])(
     });
     expect(onModelChange).not.toHaveBeenCalled();
     expect(screen.getByRole("group", { name: "Provider" })).toHaveTextContent("future-service");
-    fireEvent.change(screen.getByRole("combobox", { name: "Variant / Speed" }), {
+    fireEvent.change(screen.getByRole("combobox", { name: "Variant" }), {
       target: { value: "wire-only" },
     });
     expect(onModelChange).toHaveBeenCalledExactlyOnceWith("wire-only");
@@ -389,7 +389,7 @@ it("configuration keeps dependent picks explicit, uses exact row ids, and preser
   expect(screen.getAllByRole("group").map((node) => node.getAttribute("aria-label"))).toEqual([
     "Model",
     "Provider",
-    "Variant / Speed",
+    "Variant",
     "Reasoning",
   ]);
   expect(screen.getByRole("combobox", { name: "Reasoning" })).toHaveDisplayValue(
@@ -405,7 +405,7 @@ it("configuration keeps dependent picks explicit, uses exact row ids, and preser
     target: { value: "known:future" },
   });
   expect(onModelChange).not.toHaveBeenCalled();
-  fireEvent.change(screen.getByRole("combobox", { name: "Variant / Speed" }), {
+  fireEvent.change(screen.getByRole("combobox", { name: "Variant" }), {
     target: { value: "future-fast" },
   });
   expect(onModelChange).toHaveBeenCalledExactlyOnceWith("future-fast");
@@ -441,10 +441,8 @@ it("configuration distinguishes exact catalog rows sharing a variant and respect
     onEffortChange: vi.fn(),
   };
   const { rerender } = render(<NativeModelSelectors {...props} />);
-  expect(screen.getByRole("combobox", { name: "Variant / Speed" })).toHaveDisplayValue(
-    "Regular · 1×",
-  );
-  fireEvent.change(screen.getByRole("combobox", { name: "Variant / Speed" }), {
+  expect(screen.getByRole("combobox", { name: "Variant" })).toHaveDisplayValue("Regular · 1×");
+  fireEvent.change(screen.getByRole("combobox", { name: "Variant" }), {
     target: { value: "wire-2" },
   });
   expect(onModelChange).toHaveBeenCalledExactlyOnceWith("wire-2");
