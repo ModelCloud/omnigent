@@ -40,6 +40,7 @@ import {
   type ComposerConfigSection,
 } from "@/components/composer/ComposerConfigSections";
 import { NativeModelSelectors } from "@/components/NativeModelSelectors";
+import { compatibleModelEffort, hasGroupedModelOptions } from "@/lib/modelSelection";
 import { useComposerConfigCycleHotkeys } from "@/hooks/useComposerConfigCycleHotkeys";
 import { buildFusionSections } from "@/components/composer/fusionSections";
 import {
@@ -3803,16 +3804,12 @@ export function NewChatLandingScreen() {
     }
     const picked = model === MODEL_SELECT_DEFAULT ? "" : model;
     // Gateway catalogs carry no default row, so Default keeps no effort.
-    const effortModel = sandboxDefaultModelsEnabled
-      ? picked
-      : picked || codexModelOptions.find((option) => option.isDefault)?.id;
-    const effort =
-      (sandboxDefaultModelsEnabled || selectedNativeHarness === "codex-native") &&
-      !codexEffortLevelsForModel(
-        sandboxDefaultModelsEnabled ? pickerModelOptions : codexModelOptions,
-        effortModel,
-      ).includes(pickedEffort)
-        ? ""
+    const effort = sandboxDefaultModelsEnabled
+      ? codexEffortLevelsForModel(pickerModelOptions, picked).includes(pickedEffort)
+        ? pickedEffort
+        : ""
+      : selectedNativeHarness === "codex-native"
+        ? (compatibleModelEffort(codexModelOptions, picked, pickedEffort || null) ?? "")
         : pickedEffort;
     setPickedModel(picked);
     setPickedEffort(effort);
@@ -3876,7 +3873,7 @@ export function NewChatLandingScreen() {
     rememberPickerOptions(selectedNativeHarness, { model: modelUid, effort: "", routing: "off" });
   };
   const nativeModelSelectors =
-    selectedNativeHarness === "codex-native" && pickerModelOptions.some((row) => row.modelFamily);
+    selectedNativeHarness === "codex-native" && hasGroupedModelOptions(pickerModelOptions);
   const modelSection: ComposerConfigSection | undefined = nativeModelSelectors
     ? {
         testId: "new-chat-landing-agent-models",

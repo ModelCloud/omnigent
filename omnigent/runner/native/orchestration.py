@@ -5553,10 +5553,7 @@ async def _auto_create_codex_terminal(
         or (_codex_launch.model is None and _codex_launch.profile is None)
     ):
         from omnigent.harnesses.codex_native.app_server import codex_launch_models
-        from omnigent.models.codex_model_vocabulary import (
-            codex_reachable_model_slug,
-            codex_spawn_model,
-        )
+        from omnigent.models.codex_model_vocabulary import codex_reachable_model_slug
         from omnigent.models.model_catalog_store import default_row
 
         _launch_models = None
@@ -5664,6 +5661,8 @@ async def _auto_create_codex_terminal(
     # a resume must not drag a provider the user has since switched to back to
     # whatever the rollout first recorded.
     if pick_to_reset is not None:
+        from omnigent.models.codex_model_vocabulary import codex_spawn_model
+
         launched = _codex_launch.model
         launched_label = (
             (codex_spawn_model(launched) or launched) if launched else "the default model"

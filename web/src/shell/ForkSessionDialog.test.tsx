@@ -25,6 +25,7 @@ import {
 } from "@/hooks/useAvailableAgents";
 import { useSessionAgent } from "@/hooks/useAgents";
 import { useSession } from "@/hooks/useSession";
+import type { NativeModelOption, Session } from "@/lib/types";
 import { useHosts, useHostModelOptions, type Host } from "@/hooks/useHosts";
 import { useDirectorySessions } from "@/hooks/useDirectorySessions";
 import { useRunnerHealthRegistration } from "@/hooks/RunnerHealthProvider";
@@ -326,6 +327,208 @@ beforeEach(() => {
 });
 
 afterEach(cleanup);
+
+describe("MultiDex fork model selection", () => {
+  const models: NativeModelOption[] = [
+    {
+      id: "local-ds",
+      modelFamily: "ds",
+      modelLabel: "DeepSeek Flash",
+      providerId: "multidex",
+      providerHealth: "offline",
+      speed: 1,
+      isDefault: true,
+      defaultReasoningEffort: "max",
+      supportedReasoningEfforts: [{ reasoningEffort: "none" }, { reasoningEffort: "max" }],
+    },
+    ...["regular", "fast", "ultra"].map((variant, index) => ({
+      id: `lithos-${variant}`,
+      model: `wire-${variant}`,
+      modelFamily: "ds",
+      modelLabel: "DeepSeek Flash",
+      providerId: "lithos",
+      providerHealth: "online" as const,
+      variant,
+      speed: [1.25, 1.5, 2][index],
+      defaultReasoningEffort: "max",
+      supportedReasoningEfforts: [{ reasoningEffort: "none" }, { reasoningEffort: "max" }],
+    })),
+    {
+      id: "gpt-test",
+      displayName: "GPT Test",
+      providerId: "openai",
+      supportedReasoningEfforts: [{ reasoningEffort: "none" }, { reasoningEffort: "high" }],
+    },
+  ];
+
+  function setCatalog(data: NativeModelOption[], isLoading = false) {
+    useHostModelOptionsMock.mockReturnValue({ data, isLoading } as unknown as ReturnType<
+      typeof useHostModelOptions
+    >);
+  }
+
+  function setSource(overrides: Partial<Session> = {}) {
+    useSessionMock.mockReturnValue({
+      session: {
+        harness: "codex-native",
+        modelOverride: "wire-fast",
+        reasoningEffort: "max",
+        ...overrides,
+      },
+      isLoading: false,
+      error: null,
+    } as ReturnType<typeof useSession>);
+  }
+
+  async function pick(label: string, option: string | RegExp) {
+    fireEvent.keyDown(screen.getByRole("combobox", { name: label }), {
+      key: "ArrowDown",
+    });
+    fireEvent.click(await screen.findByRole("option", { name: option }));
+  }
+
+  beforeEach(() => {
+    setAgents(AVAILABLE_AGENTS, "codex-native");
+    setSource();
+    setCatalog(models);
+    forkSessionMock.mockResolvedValue({ id: "conv_fork" } as ForkResponse);
+  });
+
+  it("shares the grouped controls, preserves metadata and sends exact model/effort overrides", async () => {
+    renderDialog();
+    expect(screen.getByTestId("native-model-selectors")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Model" })).toHaveTextContent("DeepSeek Flash");
+    expect(screen.getByRole("combobox", { name: "Provider" })).toHaveTextContent("Lithos");
+    expect(screen.getByRole("combobox", { name: "Speed" })).toHaveTextContent("Fast");
+    expect(screen.getByRole("combobox", { name: "Reasoning" })).toHaveTextContent("Max");
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Provider" }), { key: "ArrowDown" });
+    expect(
+      screen.getByRole("option", { name: /Lithos.*speed 1.25–2.0, online/ }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("option", { name: /Local.*speed 1.0, offline/ }));
+    expect(screen.queryByRole("combobox", { name: "Speed" })).not.toBeInTheDocument();
+    await pick("Provider", /Lithos.*speed 1.25–2.0, online/);
+    await pick("Speed", /Ultra.*speed 2.0/);
+    await pick("Reasoning", "Off");
+    fireEvent.click(screen.getByTestId("fork-session-submit"));
+    await waitFor(() =>
+      expect(forkSessionMock).toHaveBeenCalledWith(
+        "conv_src",
+        expect.objectContaining({
+          config: { modelOverride: "lithos-ultra", reasoningEffort: "none" },
+        }),
+      ),
+    );
+  });
+
+  it.each(["max", "none", "minimal"])(
+    "does not emit untouched inherited settings (%s)",
+    async (reasoningEffort) => {
+      setSource({ reasoningEffort });
+      renderDialog();
+      fireEvent.click(screen.getByTestId("fork-session-submit"));
+      await waitFor(() =>
+        expect(forkSessionMock).toHaveBeenCalledWith(
+          "conv_src",
+          expect.objectContaining({ config: {} }),
+        ),
+      );
+    },
+  );
+
+  it.each(["max", "minimal"])(
+    "clears incompatible inherited effort %s on a model change",
+    async (reasoningEffort) => {
+      setSource({ reasoningEffort });
+      renderDialog();
+      await pick("Model", "GPT Test");
+      expect(screen.queryByRole("combobox", { name: "Provider" })).not.toBeInTheDocument();
+      fireEvent.click(screen.getByTestId("fork-session-submit"));
+      await waitFor(() =>
+        expect(forkSessionMock).toHaveBeenCalledWith(
+          "conv_src",
+          expect.objectContaining({
+            config: { modelOverride: "gpt-test", reasoningEffort: "default" },
+          }),
+        ),
+      );
+    },
+  );
+
+  it("preserves a compatible inherited Off effort when changing model", async () => {
+    setSource({ reasoningEffort: "none" });
+    renderDialog();
+    await pick("Model", "GPT Test");
+    expect(screen.getByRole("combobox", { name: "Reasoning" })).toHaveTextContent("Off");
+    fireEvent.click(screen.getByTestId("fork-session-submit"));
+    await waitFor(() =>
+      expect(forkSessionMock).toHaveBeenCalledWith(
+        "conv_src",
+        expect.objectContaining({
+          config: { modelOverride: "gpt-test" },
+        }),
+      ),
+    );
+  });
+
+  it("sends explicit defaults instead of omitting deliberate resets", async () => {
+    renderDialog();
+    await pick("Model", /^Default/);
+    await pick("Reasoning", "Default (Max)");
+    fireEvent.click(screen.getByTestId("fork-session-submit"));
+    await waitFor(() =>
+      expect(forkSessionMock).toHaveBeenCalledWith(
+        "conv_src",
+        expect.objectContaining({
+          config: { modelOverride: "default", reasoningEffort: "default" },
+        }),
+      ),
+    );
+  });
+
+  it("seeds a delayed catalog but never overwrites a user's selection on refetch", async () => {
+    setCatalog([], true);
+    const view = renderDialog();
+    expect(screen.queryByTestId("native-model-selectors")).not.toBeInTheDocument();
+    setCatalog(models);
+    view.refresh();
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Speed" })).toHaveTextContent("Fast"),
+    );
+    await pick("Model", "GPT Test");
+    setCatalog([...models]);
+    view.refresh();
+    expect(screen.getByRole("combobox", { name: "Model" })).toHaveTextContent("GPT Test");
+  });
+
+  it("does not reset the source when submitted before the catalog loads", async () => {
+    setCatalog([], true);
+    renderDialog();
+    fireEvent.click(screen.getByTestId("fork-session-submit"));
+    await waitFor(() =>
+      expect(forkSessionMock).toHaveBeenCalledWith(
+        "conv_src",
+        expect.objectContaining({ config: {} }),
+      ),
+    );
+  });
+
+  it("keeps the flat picker and catalog reasoning for older Codex catalogs", async () => {
+    setSource({ modelOverride: "gpt-test", reasoningEffort: "high" });
+    setCatalog([models[models.length - 1]]);
+    renderDialog();
+    expect(screen.queryByTestId("native-model-selectors")).not.toBeInTheDocument();
+    expect(screen.getByTestId("fork-session-config-effort")).toHaveTextContent("High");
+    await pick("Reasoning effort", "None");
+    fireEvent.click(screen.getByTestId("fork-session-submit"));
+    await waitFor(() =>
+      expect(forkSessionMock).toHaveBeenCalledWith(
+        "conv_src",
+        expect.objectContaining({ config: { reasoningEffort: "none" } }),
+      ),
+    );
+  });
+});
 
 describe("ForkSessionDialog", () => {
   it.each([

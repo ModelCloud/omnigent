@@ -13,6 +13,12 @@ const models = [
   {
     id: "model-a",
     displayName: "Model A",
+    modelFamily: "model-a",
+    providerId: "local",
+    variant: "fast",
+    speed: 2,
+    providerHealth: "online" as const,
+    runnerExtension: { channel: "preview" },
     isDefault: true,
     supportedReasoningEfforts: [{ reasoningEffort: "high" }],
   },

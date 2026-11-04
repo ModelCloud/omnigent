@@ -4,9 +4,10 @@ import { getCurrentUserId } from "./identity";
 import type { NativeModelOption } from "./types";
 
 // Rows must stay verbatim: the grouped codex picker reads extension fields
-// (modelFamily/providerId/variant/speed/…) that an undeclared field would
-// silently strip, flattening the drill-down back to a plain list.
-export const modelOptionSchema = z.object({
+// (modelFamily/providerId/variant/speed/…) that a closed schema would silently
+// strip, flattening the drill-down back to a plain list. Stay loose so
+// runner-added fields round-trip untouched.
+export const modelOptionSchema: z.ZodType<NativeModelOption> = z.looseObject({
   id: z.string(),
   model: z.string().optional(),
   displayName: z.string().optional(),

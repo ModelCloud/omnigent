@@ -74,6 +74,13 @@ retain the binary's reasoning metadata, and an `openrouter` registration uses
 the native provider id so `[model_providers.openrouter.provider]` routing
 preferences, including Wafer-only selection, reach the correct endpoint.
 
+New chat, chat settings, scheduled tasks, and session forks share the same
+Model → Provider → Speed (variant) → Reasoning selector for grouped MultiDex
+catalogs. It shows provider health and advertised speeds, and clears incompatible
+reasoning overrides when changing models. Forks inherit untouched settings.
+See the [session feature map](feature-map/sessions.md) for fork entry points and
+verification coverage.
+
 ### 1. Install
 
 One command installs Omnigent and everything it needs:

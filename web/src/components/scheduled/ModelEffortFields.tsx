@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/select";
 import { EFFORT_SELECT_NONE, MODEL_SELECT_DEFAULT } from "@/components/HarnessConfigControls";
 import { NativeModelSelectors } from "@/components/NativeModelSelectors";
-import { findNativeModelOption } from "@/lib/codexNativeModels";
+import { compatibleModelEffort, hasGroupedModelOptions } from "@/lib/modelSelection";
 import type { useScheduledHarnessSettings } from "./useScheduledHarnessSettings";
 
 /** Sentinel Select value for "no permission override" (use the agent default).
@@ -63,22 +63,13 @@ export function ModelEffortFields({
   // selectors (the same component the interactive picker uses) drive one
   // model-override id, with liveness dots and speed bolts on the options.
   const codexGrouped =
-    settings.harness === "codex-native" &&
-    settings.models.some((option) => option.modelFamily !== undefined);
+    settings.harness === "codex-native" && hasGroupedModelOptions(settings.models);
   const handleCodexModelChange = (id: string) => {
     onModelChange(id);
     // An effort the newly resolved row doesn't advertise can't be sent with it —
     // drop it back to the agent default rather than save a pair the harness rejects.
-    const row =
-      findNativeModelOption(settings.models, id) ??
-      // "" picks "Default": the launch resolves to the catalog's own default.
-      (id === "" ? settings.models.find((option) => option.isDefault) : null);
-    if (
-      effort !== "" &&
-      !(row?.supportedReasoningEfforts ?? []).some((e) => e.reasoningEffort === effort)
-    ) {
-      onEffortChange("");
-    }
+    const nextEffort = compatibleModelEffort(settings.models, id, effort || null) ?? "";
+    if (nextEffort !== effort) onEffortChange(nextEffort);
   };
 
   if (codexGrouped) {

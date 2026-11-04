@@ -79,7 +79,12 @@ the header menu), and each place is a separate entry point.
 - `fork`: fork the whole session or from a message; the fork keeps images and
   their files, elapsed "worked for" time, and can switch agent or host.
   For a native target, the fork dialog also offers model, reasoning effort,
-  and permission mode pickers. A long model list from several creators (Pi)
+  and permission mode pickers. MultiDex catalogs reuse the same Model → Provider
+  → Speed (variant) → Reasoning selector as new chat, chat settings, and scheduled
+  tasks, including provider health and speed indicators. Untouched settings
+  inherit from the source; changing model clears incompatible effort overrides.
+  Catalogs without grouped metadata keep the flat model picker.
+  A long model list from several creators (Pi)
   shows creator headings; it has no search or collapsible groups.
   Closing the dialog mid-clone keeps the clone running: a toast reports it
   (with **Open** on success), and reopening the dialog shows it again.
@@ -719,10 +724,14 @@ plain `uv run pytest`, which starts a private server for the test.
 - **`fork`, whole session and resources:**
   `tests/e2e_ui/fork_session/test_fork_preserves_image_attachment.py::test_fork_carries_image_reference_and_its_resource`.
   This uses the header menu and checks that the fork's image URL loads.
-  The dialog's permission-mode picker for native targets has component
-  coverage in `web/src/shell/ForkSessionDialog.test.tsx`; drive the model and
-  effort pickers by hand: fork a Codex session, pick another effort, and expect
-  the new session's pill to show it.
+  The dialog's native config and grouped MultiDex controls have component
+  coverage in `web/src/shell/ForkSessionDialog.test.tsx`, including exact model
+  IDs, provider/variant changes, Off versus Default effort, inheritance, delayed
+  catalogs, and flat-catalog fallback. Shared selector behavior has coverage in
+  `web/src/components/NativeModelSelectors.test.tsx`. Drive each fork entry point
+  by hand with a grouped Codex catalog: select another provider, speed, and effort;
+  expect the fork's model/effort to match. A second fork with untouched controls
+  must retain the source settings. Component tests do not prove these browser journeys.
   Duration coverage:
   `tests/e2e_ui/fork_session/test_fork_retains_worked_for.py::test_fork_retains_worked_for_duration`,
   and transcript-copy integration coverage (plain `uv run pytest`):
