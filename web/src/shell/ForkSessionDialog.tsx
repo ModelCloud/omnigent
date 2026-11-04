@@ -36,6 +36,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
+import { NativeModelSelectors } from "@/components/NativeModelSelectors";
+import { findNativeModelOption } from "@/lib/codexNativeModels";
+import { compatibleModelEffort, hasGroupedModelOptions } from "@/lib/modelSelection";
 import {
   SandboxProfilePicker,
   useSandboxProfileCatalog,
@@ -87,6 +90,7 @@ import {
   RoutingModelSelect,
   defaultModelLabel,
   nativeModelLabel,
+  nativeEffortOptions,
 } from "@/components/HarnessConfigControls";
 import { useDirectorySessions } from "@/hooks/useDirectorySessions";
 import { useRunnerHealthRegistration } from "@/hooks/RunnerHealthProvider";
@@ -336,12 +340,13 @@ function ForkRunConfig({
   const modelOptions = useMemo(
     () =>
       (hostModelOptions ?? []).map((option) => ({
-        id: option.id,
+        ...option,
         displayName: option.displayName ?? option.id,
-        isDefault: option.isDefault,
       })),
     [hostModelOptions],
   );
+  const groupedModels = isCodex && hasGroupedModelOptions(modelOptions);
+  const hasEffort = hasPermission || isCodex;
   const modelSelectOptions = useMemo(
     () => modelOptions.map((m) => ({ id: m.id, label: nativeModelLabel(m) })),
     [modelOptions],
@@ -355,17 +360,22 @@ function ForkRunConfig({
     // absent from the loaded options has no Select item to land on and would
     // blank the trigger. Until the catalog resolves, Default holds.
     const picked = sameFamilyAsSource ? sourceSession?.modelOverride : null;
-    return picked && modelOptions.some((m) => m.id === picked) ? picked : MODEL_SELECT_DEFAULT;
+    return findNativeModelOption(modelOptions, picked)?.id ?? MODEL_SELECT_DEFAULT;
   }, [sameFamilyAsSource, sourceSession, modelOptions]);
   const seededEffort = useMemo(() => {
     // Seed only an effort the picker can display; a source value outside the
     // offered vocabulary (e.g. "minimal") falls back to Default rather than
     // leaving the Select on an empty, unselectable value.
     const effort = sameFamilyAsSource ? sourceSession?.reasoningEffort : null;
-    return effort && CLAUDE_NATIVE_EFFORTS.some((e) => e.value === effort)
-      ? effort
-      : EFFORT_SELECT_NONE;
-  }, [sameFamilyAsSource, sourceSession]);
+    const validEffort = isCodex
+      ? compatibleModelEffort(
+          modelOptions,
+          seededModel === MODEL_SELECT_DEFAULT ? null : seededModel,
+          effort ?? null,
+        )
+      : CLAUDE_NATIVE_EFFORTS.find((e) => e.value === effort)?.value;
+    return validEffort || EFFORT_SELECT_NONE;
+  }, [sameFamilyAsSource, sourceSession, isCodex, modelOptions, seededModel]);
   const seededPermission = useMemo(() => {
     // Permission mode rides terminal_launch_args, which the backend copies
     // ONLY on a same-AGENT fork (copy_terminal_launch_args = not switching).
@@ -437,7 +447,21 @@ function ForkRunConfig({
   });
   const changeModel = (v: string) => {
     setTouched((t) => ({ ...t, model: true }));
-    setModel(v);
+    const nextModel = v === MODEL_SELECT_DEFAULT ? "" : v;
+    setModel(nextModel || MODEL_SELECT_DEFAULT);
+    if (isCodex) {
+      const currentEffort =
+        !touched.effort && sameFamilyAsSource
+          ? (sourceSession?.reasoningEffort ?? null)
+          : effort === EFFORT_SELECT_NONE
+            ? null
+            : effort;
+      const nextEffort = compatibleModelEffort(modelOptions, nextModel, currentEffort);
+      if (nextEffort !== currentEffort) {
+        setEffort(nextEffort ?? EFFORT_SELECT_NONE);
+        setTouched((t) => ({ ...t, effort: true }));
+      }
+    }
   };
   const changeEffort = (v: string) => {
     setTouched((t) => ({ ...t, effort: true }));
@@ -477,10 +501,10 @@ function ForkRunConfig({
     if (showModel && touched.model) {
       value.modelOverride = model === MODEL_SELECT_DEFAULT ? "default" : model;
     }
+    if (hasEffort && touched.effort) {
+      value.reasoningEffort = effort === EFFORT_SELECT_NONE ? "default" : effort;
+    }
     if (hasPermission) {
-      if (touched.effort) {
-        value.reasoningEffort = effort === EFFORT_SELECT_NONE ? "default" : effort;
-      }
       if (touched.permission) {
         value.terminalLaunchArgs =
           permission === CLAUDE_NATIVE_DEFAULT_PERMISSION_MODE
@@ -506,6 +530,7 @@ function ForkRunConfig({
   }, [
     showModel,
     hasPermission,
+    hasEffort,
     hasApproval,
     hasCursor,
     hasAgySkip,
@@ -518,6 +543,14 @@ function ForkRunConfig({
     onChange,
   ]);
 
+  const effortOptions = isCodex
+    ? (nativeEffortOptions(
+        targetHarness,
+        modelOptions,
+        model === MODEL_SELECT_DEFAULT ? null : model,
+      ) ?? [])
+    : CLAUDE_NATIVE_EFFORTS;
+
   if (
     targetHarness === null ||
     (!showModel && !hasPermission && !hasApproval && !hasCursor && !hasAgySkip)
@@ -527,71 +560,82 @@ function ForkRunConfig({
 
   return (
     <div className="flex flex-col gap-4" data-testid="fork-session-run-config">
-      {showModel && (
-        <ForkConfigRow label="Model">
-          <RoutingModelSelect
-            value={model}
-            onValueChange={changeModel}
-            offerSmartRouting={false}
-            testId="fork-session-config-model"
-            models={modelSelectOptions}
-            defaultLabel={defaultModelLabel(modelOptions)}
-            triggerClassName="text-sm"
-            contentClassName={FORK_SELECT_ITEM_SM}
-            componentId="fork_session.config.model"
-          >
-            {modelsLoading && (
-              <div className="px-2.5 py-1 text-sm text-muted-foreground">Loading models…</div>
-            )}
-            {!modelsLoading && modelOptions.length === 0 && (
-              <div className="px-2.5 py-1 text-sm text-muted-foreground">
-                {selectedHostId === null ? "Select a host to list models" : "Models unavailable"}
-              </div>
-            )}
-          </RoutingModelSelect>
-        </ForkConfigRow>
-      )}
-
-      {hasPermission && (
-        <>
-          <ForkConfigRow label="Effort">
-            <Select
-              value={effort}
-              onValueChange={changeEffort}
-              componentId="fork_session.config.effort"
-              valueHasNoPii
-            >
-              <SelectTrigger
-                className="w-full cursor-pointer text-sm"
-                data-testid="fork-session-config-effort"
-                aria-label="Reasoning effort"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent position="popper" align="start" className={FORK_SELECT_ITEM_SM}>
-                <SelectItem value={EFFORT_SELECT_NONE}>Default</SelectItem>
-                {CLAUDE_NATIVE_EFFORTS.map((e) => (
-                  <SelectItem key={e.value} value={e.value}>
-                    {e.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </ForkConfigRow>
-
-          <ForkConfigRow label="Permissions">
-            <DescribedSelect
-              value={permission}
-              onValueChange={changePermission}
-              options={CLAUDE_NATIVE_PERMISSION_MODES}
-              testId="fork-session-config-permission"
-              ariaLabel="Permissions"
+      {groupedModels ? (
+        <NativeModelSelectors
+          options={modelOptions}
+          selectedModel={model === MODEL_SELECT_DEFAULT ? null : model}
+          effort={effort === EFFORT_SELECT_NONE ? null : effort}
+          modelDefaultLabel={defaultModelLabel(modelOptions)}
+          onModelChange={changeModel}
+          onEffortChange={(value) => changeEffort(value ?? EFFORT_SELECT_NONE)}
+          className="min-w-0 p-0 [&_[data-slot=select-trigger]]:text-sm [&_[data-slot=select-item]]:text-sm"
+        />
+      ) : (
+        showModel && (
+          <ForkConfigRow label="Model">
+            <RoutingModelSelect
+              value={model}
+              onValueChange={changeModel}
+              offerSmartRouting={false}
+              testId="fork-session-config-model"
+              models={modelSelectOptions}
+              defaultLabel={defaultModelLabel(modelOptions)}
               triggerClassName="text-sm"
               contentClassName={FORK_SELECT_ITEM_SM}
-              componentId="fork_session.config.permission"
-            />
+              componentId="fork_session.config.model"
+            >
+              {modelsLoading && (
+                <div className="px-2.5 py-1 text-sm text-muted-foreground">Loading models…</div>
+              )}
+              {!modelsLoading && modelOptions.length === 0 && (
+                <div className="px-2.5 py-1 text-sm text-muted-foreground">
+                  {selectedHostId === null ? "Select a host to list models" : "Models unavailable"}
+                </div>
+              )}
+            </RoutingModelSelect>
           </ForkConfigRow>
-        </>
+        )
+      )}
+
+      {hasEffort && !groupedModels && (
+        <ForkConfigRow label="Effort">
+          <Select
+            value={effort}
+            onValueChange={changeEffort}
+            componentId="fork_session.config.effort"
+            valueHasNoPii
+          >
+            <SelectTrigger
+              className="w-full cursor-pointer text-sm"
+              data-testid="fork-session-config-effort"
+              aria-label="Reasoning effort"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent position="popper" align="start" className={FORK_SELECT_ITEM_SM}>
+              <SelectItem value={EFFORT_SELECT_NONE}>Default</SelectItem>
+              {effortOptions.map((e) => (
+                <SelectItem key={e.value} value={e.value}>
+                  {e.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </ForkConfigRow>
+      )}
+      {hasPermission && (
+        <ForkConfigRow label="Permissions">
+          <DescribedSelect
+            value={permission}
+            onValueChange={changePermission}
+            options={CLAUDE_NATIVE_PERMISSION_MODES}
+            testId="fork-session-config-permission"
+            ariaLabel="Permissions"
+            triggerClassName="text-sm"
+            contentClassName={FORK_SELECT_ITEM_SM}
+            componentId="fork_session.config.permission"
+          />
+        </ForkConfigRow>
       )}
 
       {hasApproval && (

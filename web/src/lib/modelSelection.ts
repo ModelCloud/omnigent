@@ -1,4 +1,23 @@
 import type { NativeModelOption } from "./types";
+import { findNativeModelOption } from "./codexNativeModels";
+
+export function hasGroupedModelOptions(options: readonly NativeModelOption[]): boolean {
+  return options.some((row) => Boolean(row.modelFamily));
+}
+
+/** Keep an explicit effort only when the selected row (or default) advertises it. */
+export function compatibleModelEffort(
+  options: readonly NativeModelOption[],
+  model: string | null,
+  effort: string | null,
+): string | null {
+  const row = model
+    ? findNativeModelOption(options, model)
+    : options.find((option) => option.isDefault);
+  return effort && row?.supportedReasoningEfforts?.some((e) => e.reasoningEffort === effort)
+    ? effort
+    : null;
+}
 
 export function familyId(row: NativeModelOption): string {
   return row.modelFamily ?? row.id;

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { NativeModelOption } from "./types";
 import { readRecentWorkspaces } from "@/hooks/useRecentWorkspaces";
 import { readLastAgentId } from "./agentPreferences";
 import { readDefaultBaseBranch } from "./baseBranchPreferences";
@@ -43,7 +44,7 @@ const pickerAgentSchema = agentSchema.extend({
 // fields (modelFamily/providerId/variant/speed/…) that a closed object schema
 // would silently strip, flattening the drill-down back to a plain list. Stay
 // loose so runner-added fields round-trip untouched.
-const modelOptionSchema = z.looseObject({
+const modelOptionSchema: z.ZodType<NativeModelOption> = z.looseObject({
   id: z.string(),
   model: z.string().optional(),
   displayName: z.string().optional(),

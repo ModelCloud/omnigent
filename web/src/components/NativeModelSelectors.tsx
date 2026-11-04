@@ -40,6 +40,7 @@ export function NativeModelSelectors({
   onEffortChange,
   modelDefaultLabel,
   onSelectOpenChange,
+  className,
 }: {
   options: readonly NativeModelOption[];
   selectedModel: string | null;
@@ -57,6 +58,7 @@ export function NativeModelSelectors({
   modelDefaultLabel?: string;
   /** Forwarded to each Select's onOpenChange (nested-dropdown dismiss guards). */
   onSelectOpenChange?: (open: boolean) => void;
+  className?: string;
 }) {
   const selected = findNativeModelOption(options, selectedModel);
   // No explicit pick under a "Default" entry still needs dependent rows: they
@@ -179,7 +181,7 @@ export function NativeModelSelectors({
     );
   }
   return (
-    <div className="min-w-72 space-y-2 p-2" data-testid="native-model-selectors">
+    <div className={cn("min-w-72 space-y-2 p-2", className)} data-testid="native-model-selectors">
       {field(
         "Model",
         modelDefaultLabel !== undefined && !selectedModel ? MODEL_SELECT_DEFAULT : family,
