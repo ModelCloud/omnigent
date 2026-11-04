@@ -82,6 +82,19 @@ export function bgrIncompleteProfiles(draft: BgrDraft): string[] {
   );
 }
 
+export function validateBgrLaunchDraft(draft: BgrDraft): string | null {
+  if (!draftSchema.safeParse(draft).success) {
+    return "Use 1–64 active grunts, 1–2 reviewers and at most 256 characters per profile field.";
+  }
+  if (bgrIncompleteProfiles(draft).length > 0) {
+    return "Choose a model and provider for every role before launching.";
+  }
+  if ([draft.brain, draft.grunt, ...draft.reviewers].some((profile) => !profile.harness.trim())) {
+    return "Choose a harness for every role before launching.";
+  }
+  return null;
+}
+
 /** Only advertised metadata is copied; catalog fallbacks are not provider authority. */
 export function bgrProfileFromCatalog(
   profile: BgrProfileDraft,

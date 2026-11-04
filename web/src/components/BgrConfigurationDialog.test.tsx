@@ -1,11 +1,18 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BgrConfigurationDialog } from "./BgrConfigurationDialog";
+import { BgrLaunchDialog } from "./BgrLaunchDialog";
+import { getBgrLaunchCapabilities, launchBgr } from "@/lib/bgrApi";
 import { useHostModelOptions, type Host } from "@/hooks/useHosts";
 import { testAgent } from "@/test/agentFixtures";
 import { bgrDraftStorageKey, emptyBgrDraft, readBgrDraft, writeBgrDraft } from "@/lib/bgrDraft";
 
 vi.mock("@/hooks/useHosts", () => ({ useHostModelOptions: vi.fn() }));
+vi.mock("@/lib/bgrApi", () => ({
+  getBgrLaunchCapabilities: vi.fn(),
+  launchBgr: vi.fn(),
+}));
 const host = { host_id: "host-a", name: "Test host", status: "online" } as Host;
 const agents = [
   testAgent("codex", "MultiDex", { harness: "codex-native" }),
@@ -25,6 +32,8 @@ const refetch = vi.fn();
 
 beforeEach(() => {
   localStorage.clear();
+  vi.mocked(getBgrLaunchCapabilities).mockReset();
+  vi.mocked(launchBgr).mockReset();
   vi.mocked(useHostModelOptions).mockReturnValue({
     data: [row],
     isLoading: false,
@@ -44,6 +53,7 @@ function renderDialog(overrides: Partial<Parameters<typeof BgrConfigurationDialo
       host={host}
       agents={agents}
       onClose={vi.fn()}
+      initialPrompt="Review this PR."
       {...overrides}
     />,
   );
@@ -318,3 +328,204 @@ it("shows catalog loading/error/empty states with retry and preserves offline ed
   expect(screen.getAllByText(/Connect this host/)).toHaveLength(3);
   expect(screen.getByRole("button", { name: "Save draft" })).toBeEnabled();
 });
+
+function readyDraft() {
+  const draft = emptyBgrDraft();
+  const profile = {
+    harness: "codex-native",
+    model: row.id,
+    provider: row.providerId,
+    variant: row.variant,
+    speed: String(row.speed),
+    reasoning: "high",
+  };
+  draft.brain = { ...profile };
+  draft.grunt = { ...profile, reasoning: "low" };
+  draft.reviewers = [{ ...profile }, { ...profile, provider: "second-provider" }];
+  writeBgrDraft(key, draft);
+  return draft;
+}
+
+it("launches once, freezes controls while pending, and closes only after confirmation", async () => {
+  const draft = readyDraft();
+  let complete!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    complete = resolve;
+  });
+  const onLaunch = vi.fn(() => pending);
+  const onClose = vi.fn();
+  renderDialog({ onLaunch, onClose });
+  const launch = screen.getByRole("button", { name: "Launch BGR" });
+  expect(launch).toBeEnabled();
+  fireEvent.click(launch);
+  fireEvent.click(launch);
+  expect(onLaunch).toHaveBeenCalledExactlyOnceWith(draft, "Review this PR.");
+  expect(screen.getByRole("button", { name: "Launching BGR…" })).toBeDisabled();
+  expect(screen.getByLabelText("Maximum active grunts")).toBeDisabled();
+  expect(screen.getByLabelText("Reviewers per publication")).toBeDisabled();
+  expect(
+    within(screen.getByRole("group", { name: "Brain" })).getByLabelText("Harness"),
+  ).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Save draft" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "Back to New Chat" }));
+  fireEvent.keyDown(document, { key: "Escape" });
+  expect(onClose).not.toHaveBeenCalled();
+  complete();
+  await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+});
+
+it("retains the draft after a server launch failure and allows an explicit retry", async () => {
+  const draft = readyDraft();
+  const onLaunch = vi
+    .fn<(configuration: typeof draft) => Promise<void>>()
+    .mockRejectedValueOnce(new Error("Reviewer isolation unavailable on this host."))
+    .mockResolvedValueOnce(undefined);
+  const onClose = vi.fn();
+  renderDialog({ onLaunch, onClose });
+  fireEvent.click(screen.getByRole("button", { name: "Launch BGR" }));
+  await waitFor(() =>
+    expect(screen.getByRole("alert")).toHaveTextContent("Reviewer isolation unavailable"),
+  );
+  expect(onClose).not.toHaveBeenCalled();
+  expect(readBgrDraft(key).draft).toEqual(draft);
+  expect(screen.getByRole("button", { name: "Launch BGR" })).toBeEnabled();
+  fireEvent.click(screen.getByRole("button", { name: "Launch BGR" }));
+  await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+  expect(onLaunch).toHaveBeenCalledTimes(2);
+});
+
+it.each([
+  { launchUnavailableReason: "This host cannot isolate reviewers." },
+  { host: { ...host, status: "offline" } as Host },
+  { scope: null },
+])("does not launch when preflight or target readiness blocks it (%s)", (overrides) => {
+  readyDraft();
+  const onLaunch = vi.fn();
+  renderDialog({ onLaunch, ...overrides });
+  const launch = screen.getByRole("button", { name: "Launch BGR" });
+  expect(launch).toBeDisabled();
+  fireEvent.click(launch);
+  expect(onLaunch).not.toHaveBeenCalled();
+});
+
+it("keeps incomplete configuration saveable but not launchable", () => {
+  const onLaunch = vi.fn();
+  renderDialog({ onLaunch });
+  expect(screen.getByRole("button", { name: "Save draft" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Launch BGR" })).toBeDisabled();
+  expect(onLaunch).not.toHaveBeenCalled();
+});
+
+it("requires an initial task and forwards edits without persisting the task in role drafts", async () => {
+  const draft = readyDraft();
+  const onLaunch = vi.fn().mockResolvedValue(undefined);
+  renderDialog({ onLaunch, initialPrompt: "" });
+  expect(screen.getByRole("button", { name: "Launch BGR" })).toBeDisabled();
+  fireEvent.change(screen.getByLabelText("Initial task"), {
+    target: { value: "Implement the fix and ask two reviewers." },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
+  expect(readBgrDraft(key).draft).toEqual(draft);
+  fireEvent.click(screen.getByRole("button", { name: "Launch BGR" }));
+  await waitFor(() =>
+    expect(onLaunch).toHaveBeenCalledExactlyOnceWith(
+      draft,
+      "Implement the fix and ask two reviewers.",
+    ),
+  );
+});
+
+it("keeps unsupported role harnesses saveable without launching them", () => {
+  readyDraft();
+  renderDialog({ onLaunch: vi.fn(), supportedHarnesses: ["claude-native"] });
+  expect(screen.getByRole("button", { name: "Launch BGR" })).toBeDisabled();
+  expect(screen.getByText(/cannot run one or more selected harnesses/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Save draft" })).toBeEnabled();
+});
+
+function renderLauncher(overrides: Partial<Parameters<typeof BgrLaunchDialog>[0]> = {}) {
+  return render(
+    <QueryClientProvider
+      client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+    >
+      <BgrLaunchDialog
+        scope="server/user/project"
+        host={host}
+        agents={agents}
+        harnessLabels={{ "codex-native": "MultiDex" }}
+        workspace="/repo"
+        initialPrompt="Review this PR."
+        projectId="project-a"
+        onClose={vi.fn()}
+        onLaunched={vi.fn()}
+        {...overrides}
+      />
+    </QueryClientProvider>,
+  );
+}
+
+it("negotiates capabilities, launches the exact profiles and reuses the retry key after failure", async () => {
+  const draft = readyDraft();
+  const onLaunched = vi.fn();
+  vi.mocked(getBgrLaunchCapabilities).mockResolvedValue({
+    launch_supported: true,
+    supported_harnesses: ["codex-native"],
+    reviewer_isolation: true,
+  });
+  vi.mocked(launchBgr)
+    .mockRejectedValueOnce(new Error("Connection lost"))
+    .mockResolvedValueOnce({ brainSessionId: "brain-session", state: "running" });
+  renderLauncher({ onLaunched });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Launch BGR" })).toBeEnabled());
+  expect(getBgrLaunchCapabilities).toHaveBeenCalledWith("host-a", expect.any(AbortSignal));
+  fireEvent.click(screen.getByRole("button", { name: "Launch BGR" }));
+  await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Connection lost"));
+  expect(onLaunched).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Launch BGR" }));
+  await waitFor(() =>
+    expect(onLaunched).toHaveBeenCalledExactlyOnceWith({
+      brainSessionId: "brain-session",
+      state: "running",
+    }),
+  );
+  expect(launchBgr).toHaveBeenCalledTimes(2);
+  const first = vi.mocked(launchBgr).mock.calls[0];
+  expect(first).toEqual([
+    "host-a",
+    {
+      teamId: expect.stringMatching(/^[0-9a-f]{32}$/),
+      agentId: agents[0].id,
+      workspace: "/repo",
+      config: draft,
+      initialPrompt: "Review this PR.",
+      projectId: "project-a",
+    },
+  ]);
+  expect(vi.mocked(launchBgr).mock.calls[1]).toEqual(first);
+});
+
+it.each(["unsupported", "unverified"])(
+  "never enables launch for %s host capabilities",
+  async (state) => {
+    readyDraft();
+    if (state === "unsupported") {
+      vi.mocked(getBgrLaunchCapabilities).mockResolvedValue({
+        launch_supported: true,
+        supported_harnesses: ["codex-native"],
+        reviewer_isolation: false,
+      });
+    } else {
+      vi.mocked(getBgrLaunchCapabilities).mockRejectedValue(new Error("offline"));
+    }
+    renderLauncher();
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          state === "unsupported" ? /does not support BGR launch/ : /Could not verify this host/,
+        ),
+      ).toBeInTheDocument(),
+    );
+    expect(screen.getByRole("button", { name: "Launch BGR" })).toBeDisabled();
+    expect(launchBgr).not.toHaveBeenCalled();
+  },
+);

@@ -40,7 +40,7 @@ import {
   type ComposerConfigSection,
 } from "@/components/composer/ComposerConfigSections";
 import { NativeModelSelectors } from "@/components/NativeModelSelectors";
-import { BgrConfigurationDialog } from "@/components/BgrConfigurationDialog";
+import { BgrLaunchDialog } from "@/components/BgrLaunchDialog";
 import { useComposerConfigCycleHotkeys } from "@/hooks/useComposerConfigCycleHotkeys";
 import { buildFusionSections } from "@/components/composer/fusionSections";
 import {
@@ -6438,13 +6438,21 @@ export function NewChatLandingScreen() {
       data-testid="new-chat-landing"
     >
       {bgrOpen && (
-        <BgrConfigurationDialog
+        <BgrLaunchDialog
           key={`${pickerCacheKey}:${selectedHostId}`}
           scope={pickerCacheKey}
           host={selectedHost}
           agents={agents ?? []}
           harnessLabels={brainHarnessLabelsAll}
+          workspace={workspace}
+          initialPrompt={sanitizeInitialPrompt(message)}
+          projectId={selectedProject ? configProjectId : null}
           onClose={() => setBgrOpen(false)}
+          onLaunched={({ brainSessionId }) => {
+            setSessionHost(brainSessionId, selectedHostId);
+            markSessionCreated(brainSessionId, "computer");
+            navigate(`/c/${brainSessionId}`);
+          }}
         />
       )}
       {/* Padding lives inside the 800px cap, so the composer surface reaches

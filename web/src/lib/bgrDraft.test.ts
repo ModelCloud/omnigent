@@ -5,6 +5,7 @@ import {
   bgrProfileFromCatalog,
   emptyBgrDraft,
   readBgrDraft,
+  validateBgrLaunchDraft,
   writeBgrDraft,
 } from "./bgrDraft";
 
@@ -106,4 +107,23 @@ it("copies advertised routing metadata, not labels/fallbacks, while retaining re
       source: { kind: "display-only", label: "Not provider identity" },
     }),
   ).toEqual({ ...profile, model: "only-id" });
+});
+
+it("requires complete role profiles and valid limits for launch, not merely saveable drafts", () => {
+  const draft = emptyBgrDraft();
+  expect(validateBgrLaunchDraft(draft)).toMatch(/model and provider/);
+  for (const profile of [draft.brain, draft.grunt, ...draft.reviewers]) {
+    profile.model = "model";
+    profile.provider = "provider";
+  }
+  expect(validateBgrLaunchDraft(draft)).toMatch(/harness/);
+  for (const profile of [draft.brain, draft.grunt, ...draft.reviewers]) {
+    profile.harness = "codex-native";
+  }
+  expect(validateBgrLaunchDraft(draft)).toBeNull();
+  draft.max_active_grunts = 1.5;
+  expect(validateBgrLaunchDraft(draft)).toMatch(/1–64/);
+  draft.max_active_grunts = 4;
+  draft.reviewers[0].model = " ";
+  expect(validateBgrLaunchDraft(draft)).toMatch(/model and provider/);
 });
