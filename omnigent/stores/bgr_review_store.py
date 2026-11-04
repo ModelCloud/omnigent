@@ -6,7 +6,7 @@ import hashlib
 from typing import Literal
 from uuid import uuid4
 
-from pydantic import JsonValue, ValidationError
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -19,8 +19,7 @@ from omnigent.bgr_review import (
     ReviewRoundCreate,
     publication_body,
     sanitize_review,
-    sanitize_review_text,
-    sensitive_review_key,
+    sanitize_review_payload,
 )
 from omnigent.db import current_workspace_id
 from omnigent.db.bgr_models import (
@@ -56,21 +55,6 @@ class _ResultPayload(Record):
     round_id: str
     review_id: str
     result: ReviewResult
-
-
-def _safe_payload(value: JsonValue) -> JsonValue:
-    if isinstance(value, str):
-        return sanitize_review_text(value)
-    if isinstance(value, list):
-        return [_safe_payload(item) for item in value]
-    if isinstance(value, dict):
-        return {
-            sanitize_review_text(key): (
-                "[REDACTED]" if sensitive_review_key(key) else _safe_payload(item)
-            )
-            for key, item in value.items()
-        }
-    return value
 
 
 def validate_review_message(
@@ -119,7 +103,7 @@ def validate_review_message(
                 code=ErrorCode.INVALID_INPUT,
             ) from None
     else:
-        safe = _safe_payload(body.payload)
+        safe = sanitize_review_payload(body.payload)
     try:
         return Send.model_validate({**body.model_dump(), "payload": safe})
     except ValidationError:

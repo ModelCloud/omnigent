@@ -16,6 +16,8 @@ from omnigent.bgr import (
     Fence,
     LeaseRequest,
     MailboxDiscard,
+    NativeBrainBinding,
+    NativeMessageOrigin,
     Profile,
     Send,
     StatusScope,
@@ -82,6 +84,130 @@ def question(task, **overrides):
             **overrides,
         }
     )
+
+
+def test_task_anchor_supports_native_question_progress_and_results(store):
+    task = store.reserve(OWNER, BRAIN, TEAM, reservation())
+    assignment = question(task, kind="task", payload={"objective": "Implement"})
+    store.send(OWNER, BRAIN, TEAM, assignment)
+    brain = store.get_team(OWNER, BRAIN, TEAM).brain_agent_id
+    worker = task.attempt.session_id
+
+    def reply(kind):
+        return assignment.model_copy(
+            update={
+                "message_id": uuid4().hex,
+                "recipient_agent_id": brain,
+                "controller_id": None,
+                "kind": kind,
+                "in_reply_to": assignment.message_id,
+                "payload": {"summary": kind},
+            }
+        )
+
+    inquiry = reply("question")
+    store.send(OWNER, worker, TEAM, inquiry)
+    for _ in range(3):
+        store.send(OWNER, worker, TEAM, reply("progress"))
+    assert store.drain(OWNER, worker, TEAM)[0].replied_at is None
+    answer = inquiry.model_copy(
+        update={
+            "message_id": uuid4().hex,
+            "recipient_agent_id": task.attempt.agent_id,
+            "controller_id": CONTROLLER,
+            "kind": "answer",
+            "in_reply_to": inquiry.message_id,
+        }
+    )
+    store.send(OWNER, BRAIN, TEAM, answer)
+    result = reply("result")
+    receipt = store.send(OWNER, worker, TEAM, result)
+    assert store.send(OWNER, worker, TEAM, result) == receipt
+    assert store.drain(OWNER, worker, TEAM)[0].replied_at is None
+    for kind in ("question", "progress", "result"):
+        store.send(OWNER, worker, TEAM, reply(kind))
+    assert (
+        store.native_message(
+            OWNER,
+            BRAIN,
+            TEAM,
+            Fence(controller_id=CONTROLLER, epoch=1),
+            sender_agent_id=task.attempt.agent_id,
+            message_id=result.message_id,
+        ).envelope_id
+        == receipt.envelope_id
+    )
+    with pytest.raises(OmnigentError):
+        store.native_message(
+            OWNER,
+            worker,
+            TEAM,
+            Fence(controller_id=CONTROLLER, epoch=1),
+            sender_agent_id=task.attempt.agent_id,
+            message_id=result.message_id,
+        )
+
+
+def test_native_origin_is_durable_and_part_of_idempotency(store, db_uri):
+    task = store.reserve(OWNER, BRAIN, TEAM, reservation())
+    message = question(task)
+    origin = NativeMessageOrigin(
+        thread_id=str(uuid4()),
+        message_id="native-query",
+        correlation_id="native-correlation",
+    )
+    receipt = store.send(OWNER, BRAIN, TEAM, message, native_origin=origin)
+    restarted = BgrStore(db_uri)
+    envelope = restarted.native_message(
+        OWNER,
+        BRAIN,
+        TEAM,
+        Fence(controller_id=CONTROLLER, epoch=1),
+        sender_agent_id=store.get_team(OWNER, BRAIN, TEAM).brain_agent_id,
+        message_id=message.message_id,
+    )
+    assert envelope.native_origin == origin
+    assert envelope.envelope_id == receipt.envelope_id
+    assert restarted.send(OWNER, BRAIN, TEAM, message, native_origin=origin) == receipt
+    for changed in (None, origin.model_copy(update={"message_id": "changed"})):
+        with pytest.raises(OmnigentError):
+            restarted.send(OWNER, BRAIN, TEAM, message, native_origin=changed)
+
+
+def test_native_brain_binding_has_no_fabricated_task_or_attempt_and_is_epoch_fenced(db_uri):
+    now = [1000.0]
+    store = BgrStore(db_uri, clock=lambda: now[0])
+    config = CONFIG.model_copy(
+        update={
+            "brain": PROFILE.model_copy(update={"harness": "codex-native"}),
+        }
+    )
+    store.create(OWNER, BRAIN, TeamCreate(team_id=TEAM, config=config))
+    store.acquire(OWNER, BRAIN, TEAM, LeaseRequest(controller_id=CONTROLLER, ttl_seconds=5))
+    fence = Fence(controller_id=CONTROLLER, epoch=1)
+    binding = NativeBrainBinding(team_id=TEAM, epoch=1, thread_id=str(uuid4()))
+    with pytest.raises(OmnigentError):
+        store.native_brain_binding(OWNER, BRAIN, TEAM, fence)
+    assert store.native_brain_binding(OWNER, BRAIN, TEAM, fence, binding=binding) == binding
+    assert store.native_brain_binding(OWNER, BRAIN, TEAM, fence) == binding
+    assert set(binding.model_dump()) == {"team_id", "epoch", "thread_id"}
+    with pytest.raises(OmnigentError):
+        store.native_brain_binding(
+            OWNER,
+            BRAIN,
+            TEAM,
+            fence,
+            binding=binding.model_copy(update={"thread_id": str(uuid4())}),
+        )
+    with pytest.raises(OmnigentError):
+        store.native_brain_binding("other", BRAIN, TEAM, fence)
+    now[0] += 6
+    store.acquire(OWNER, BRAIN, TEAM, LeaseRequest(controller_id=CONTROLLER))
+    for epoch in (1, 2):
+        with pytest.raises(OmnigentError):
+            store.native_brain_binding(
+                OWNER, BRAIN, TEAM, fence.model_copy(update={"epoch": epoch})
+            )
 
 
 @pytest.mark.parametrize("character", ["x", "\U00010000"], ids=["ascii", "multibyte"])
@@ -537,6 +663,93 @@ def test_status_reply_is_durable_correlated_and_not_an_assignment(store, db_uri)
         )
     with pytest.raises(OmnigentError):
         restarted.send(OWNER, BRAIN, TEAM, query.model_copy(update={"payload": {"scope": "now"}}))
+
+
+def test_task_anchor_survives_progress_clarification_and_result(store, db_uri):
+    task = store.reserve(OWNER, BRAIN, TEAM, reservation())
+    worker = task.attempt.session_id
+    brain = store.get_team(OWNER, BRAIN, TEAM).brain_agent_id
+    anchor = store.drain(OWNER, worker, TEAM)[0]
+    assert anchor.correlation_id == task.task_id
+    assert anchor.head_sha == SHA
+    restarted = BgrStore(db_uri)
+    for kind in ("progress", "question", "question", "progress", "result"):
+        callback = Send(
+            message_id=uuid4().hex,
+            recipient_agent_id=brain,
+            task_id=task.task_id,
+            attempt_id=task.attempt.attempt_id,
+            epoch=1,
+            kind=kind,
+            correlation_id=anchor.correlation_id,
+            in_reply_to=anchor.message_id,
+            head_sha=anchor.head_sha,
+            payload={"detail": kind},
+        )
+        receipt = restarted.send(OWNER, worker, TEAM, callback)
+        assert restarted.send(OWNER, worker, TEAM, callback) == receipt
+        if kind == "question":
+            answer = callback.model_copy(
+                update={
+                    "message_id": uuid4().hex,
+                    "recipient_agent_id": task.attempt.agent_id,
+                    "controller_id": CONTROLLER,
+                    "kind": "answer",
+                    "in_reply_to": callback.message_id,
+                }
+            )
+            restarted.send(OWNER, BRAIN, TEAM, answer)
+            with pytest.raises(OmnigentError, match="already has a reply"):
+                restarted.send(
+                    OWNER, BRAIN, TEAM, answer.model_copy(update={"message_id": uuid4().hex})
+                )
+    delivered = restarted.drain(OWNER, BRAIN, TEAM)
+    assert [item.kind for item in delivered] == [
+        "progress",
+        "question",
+        "question",
+        "progress",
+        "result",
+    ]
+    assert all(item.in_reply_to == anchor.message_id for item in delivered)
+    assert delivered[1].replied_at is not None
+    assert delivered[2].replied_at is not None
+    assert restarted.drain(OWNER, worker, TEAM)[0] == anchor
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"correlation_id": "1" * 32},
+        {"head_sha": "e" * 40},
+        {"in_reply_to": "2" * 32},
+        {"task_id": "3" * 32},
+        {"attempt_id": "4" * 32},
+        {"kind": "answer"},
+        {"kind": "status_reply"},
+    ],
+)
+def test_task_linked_callbacks_require_exact_assignment_and_anchor(store, mutation):
+    task = store.reserve(OWNER, BRAIN, TEAM, reservation())
+    brain = store.get_team(OWNER, BRAIN, TEAM).brain_agent_id
+    callback = Send.model_validate(
+        {
+            "message_id": uuid4().hex,
+            "recipient_agent_id": brain,
+            "task_id": task.task_id,
+            "attempt_id": task.attempt.attempt_id,
+            "epoch": 1,
+            "kind": "progress",
+            "correlation_id": task.task_id,
+            "in_reply_to": task.task_id,
+            "head_sha": SHA,
+            "payload": {"detail": "Working"},
+            **mutation,
+        }
+    )
+    with pytest.raises(OmnigentError):
+        store.send(OWNER, task.attempt.session_id, TEAM, callback)
+    assert store.drain(OWNER, BRAIN, TEAM) == []
 
 
 def test_concurrent_cap_and_idempotent_reservations(store, db_uri):

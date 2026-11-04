@@ -153,8 +153,10 @@ class Send(Record):
         if self.kind in ("answer", "status_reply"):
             if self.correlation_id is None or self.in_reply_to is None:
                 raise ValueError("replies require correlation_id and in_reply_to")
-        elif self.in_reply_to is not None:
+        elif self.in_reply_to is not None and self.kind not in ("question", "progress", "result"):
             raise ValueError("in_reply_to is only valid for a reply")
+        if self.in_reply_to is not None and self.correlation_id is None:
+            raise ValueError("anchored messages require correlation_id")
         if self.kind == "status_query":
             StatusScope.model_validate_json(json.dumps(self.payload))
         return self
@@ -258,6 +260,23 @@ class NativeAssignment(Record):
     binding: NativeBinding
 
 
+class NativeBrainBinding(Record):
+    team_id: Identifier
+    epoch: Annotated[int, Field(ge=1)]
+    thread_id: Annotated[
+        str, Field(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+    ]
+
+
+class NativeMessageOrigin(Record):
+    thread_id: Annotated[
+        str, Field(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+    ]
+    message_id: Annotated[str, Field(pattern=r"^[A-Za-z0-9_.:-]{1,128}$")]
+    correlation_id: Annotated[str, Field(pattern=r"^[A-Za-z0-9_.:-]{1,128}$")]
+    in_reply_to: Annotated[str, Field(pattern=r"^[A-Za-z0-9_.:-]{1,128}$")] | None = None
+
+
 class Envelope(Send):
     envelope_id: Identifier
     team_id: Identifier
@@ -265,6 +284,7 @@ class Envelope(Send):
     sender_session_id: Identifier
     sender_role: Role
     sender_name: str
+    native_origin: NativeMessageOrigin | None = None
     sequence: int
     created_at: float
     consumed_at: float | None = None

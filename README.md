@@ -412,7 +412,8 @@ to a reviewer from a different vendor than the one that wrote it. You merge.
 
 The separate [BGR controller foundation](docs/BGR_CONTROLLER.md) provides a durable,
 owner-authorized team/task ledger and mailbox, plus an opt-in codex-native
-status-protocol translator with explicit host/native identity mapping. The
+status/general-message translator with explicit host/native identity mapping,
+durable native message-ID translation and host source-record-before-delivery. The
 translator is not wired to runtime scheduling or callbacks. The independent-review
 core persists immutable assignments and sealed results, with a trusted, sanitized
 per-review publication outbox, host-only credential redaction and uncertain-write

@@ -108,6 +108,30 @@ merge or deploy. No separate schema PR has been opened.
 
 ## Authentication and existing session integration
 
+### Additive native general-message adapter
+
+The opt-in `BgrNativeMailbox` accepts already-bound private native connections;
+it does not create sessions, install callbacks, start turns or schedule workers.
+Host-created messages must exist in the SQL ledger before native source recording
+and destination delivery. Both operations are idempotent. Native `hostRecord`
+is required; native acceptance is never recorded as durable consumption. Pending
+host messages survive loss of native process-local mailbox metadata.
+
+Native arbitrary message IDs (including `clarify-contract-1`) retain their source
+identity and exact reply anchors through durable origin metadata. Task-linked
+questions, progress and results may share one task anchor; only answers and status
+replies settle a one-shot reply slot. Source thread, role, assignment, epoch,
+correlation and immutable head are checked before persistence and routing.
+
+Callback payloads are recursively sanitized with trusted-host private values
+before SQL persistence. Native `no_findings` and `incomplete` results are translated
+factually into validated sealed results without inventing coverage. Native result
+forwarding waits until all sibling jobs seal; questions remain live. The captured
+capability fixture keeps native durability, restart recovery and consumption
+receipts false. These adapter checks do not demonstrate isolated process startup,
+provider execution, a complete Brain-facing store projection barrier, controller
+lease recovery or automatic publication draining. Launch remains unavailable.
+
 Every endpoint uses the existing session-orchestration checks:
 
 - An authenticated owner, not an editor, reader, or administrator bypass.
@@ -372,7 +396,16 @@ brain_session_id=..., team_id=..., fence=Fence(...))` reads
 `hostDelivery:true`, `liveReattach:true`, a positive `maxQueriesPerAttempt <= 128`,
 and a nondeferred `bgr_report_status` function specification. Durable native
 mailbox, restart recovery, reviewer sandbox, cross-host delivery and task dispatch
-must all be false for this contract. Missing/old/unsupported capabilities fail
+must all be false for the legacy contract. The additive general-message contract
+is accepted explicitly too: all three status scopes, all eight message kinds,
+`generalMessaging`, `messageCallbacks`, `taskDispatch`, evidence limits and
+nondeferred `sendTool`/`replyTool` specifications must agree. Partial upgrades fail;
+`consumptionReceipts:false` remains false rather than becoming an inferred receipt.
+The legacy translator still starts only its status tool and does not enable
+general transport or reviewers merely because negotiation succeeded. Its modern
+schema regression is source-derived from
+[MultiDex 99ac0e1f5](https://github.com/ModelCloud/MultiDex/commit/99ac0e1f50e7a93f585ee7b86941375dc5b6c278),
+not a captured modern binary exchange. Missing/old/unsupported capabilities fail
 with `runner_capability_mismatch`. There is no model-family/profile fallback.
 
 `startup_options()` returns the negotiated `reportTool` unchanged in

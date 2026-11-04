@@ -7,9 +7,9 @@ import html
 import re
 from typing import Annotated, Literal, Self
 
-from pydantic import AfterValidator, Field, field_validator, model_validator
+from pydantic import AfterValidator, Field, JsonValue, field_validator, model_validator
 
-from omnigent.bgr import Commit, Fence, Identifier, Profile, Record
+from omnigent.bgr import Commit, Fence, Identifier, Label, Profile, Record
 from omnigent.process_logging import redact_log_text
 
 
@@ -51,6 +51,33 @@ class ReviewResult(Record):
     status: Literal["complete", "incomplete"]
     summary: Annotated[str, Field(min_length=1, max_length=2000)]
     findings: Annotated[list[ReviewFinding], Field(max_length=16)] = Field(default_factory=list)
+
+
+class _NativeReviewResult(Record):
+    outcome: Literal["no_findings", "incomplete"]
+    findings: Annotated[list[ReviewFinding], Field(max_length=16)]
+    coverageLimits: Annotated[list[Label], Field(max_length=16)]
+
+
+def normalize_native_review_result(payload: dict[str, JsonValue]) -> ReviewResult:
+    """Translate only documented native outcomes; never infer findings or completed coverage."""
+    if "outcome" not in payload:
+        return ReviewResult.model_validate(payload)
+    result = _NativeReviewResult.model_validate(payload)
+    if result.outcome == "no_findings" and result.findings:
+        raise ValueError("A no-findings result cannot contain findings")
+    summary = (
+        "Reviewer reported no findings."
+        if result.outcome == "no_findings"
+        else "Reviewer reported incomplete coverage."
+    )
+    if result.coverageLimits:
+        summary += " Coverage limits: " + "; ".join(result.coverageLimits)
+    return ReviewResult(
+        status="complete" if result.outcome == "no_findings" else "incomplete",
+        summary=summary,
+        findings=result.findings,
+    )
 
 
 class ReviewRoundCreate(Fence):
@@ -173,6 +200,25 @@ def sanitize_review_text(value: str, *, private_values: tuple[str, ...] = ()) ->
     value = re.sub(r"(?:https?|ssh)://[^\s<>]+", "[link withheld]", value)
     value = re.sub(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", "[email withheld]", value)
     return "".join(char for char in value if char in "\n\t" or ord(char) >= 32)
+
+
+def sanitize_review_payload(
+    value: JsonValue, *, private_values: tuple[str, ...] = ()
+) -> JsonValue:
+    if isinstance(value, str):
+        return sanitize_review_text(value, private_values=private_values)
+    if isinstance(value, list):
+        return [sanitize_review_payload(item, private_values=private_values) for item in value]
+    if isinstance(value, dict):
+        return {
+            sanitize_review_text(key, private_values=private_values): (
+                "[REDACTED]"
+                if sensitive_review_key(key)
+                else sanitize_review_payload(item, private_values=private_values)
+            )
+            for key, item in value.items()
+        }
+    return value
 
 
 def sanitize_review(result: ReviewResult, *, private_values: tuple[str, ...] = ()) -> ReviewResult:

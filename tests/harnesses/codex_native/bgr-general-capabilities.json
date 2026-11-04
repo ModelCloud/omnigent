@@ -1,0 +1,247 @@
+{
+  "consumptionReceipts": false,
+  "crossHostDelivery": false,
+  "durableMailbox": false,
+  "generalMessaging": true,
+  "hostDelivery": true,
+  "hostRecord": true,
+  "liveReattach": true,
+  "maxQueriesPerAttempt": 128,
+  "messageCallbacks": true,
+  "messageKinds": [
+    "task",
+    "question",
+    "answer",
+    "progress",
+    "result",
+    "cancel",
+    "status_query",
+    "status_reply"
+  ],
+  "replyTool": {
+    "description": "Reply to an accepted BGR message. Recipient, correlation and immutable anchor are derived natively from inReplyTo. Questions, progress and results can share a task anchor; continue the same assignment.",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "definitions": {
+        "BgrMessageKind": {
+          "enum": [
+            "task",
+            "question",
+            "answer",
+            "progress",
+            "status_query",
+            "status_reply",
+            "result",
+            "cancel"
+          ],
+          "type": "string"
+        }
+      },
+      "properties": {
+        "inReplyTo": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/BgrMessageKind"
+        },
+        "messageId": {
+          "type": "string"
+        },
+        "payload": true
+      },
+      "required": [
+        "inReplyTo",
+        "kind",
+        "messageId",
+        "payload"
+      ],
+      "title": "BgrReplyMessageArgs",
+      "type": "object"
+    },
+    "name": "bgr_reply_message",
+    "type": "function"
+  },
+  "reportTool": {
+    "description": "Answer a received BGR status_query at a safe boundary, then continue the same assignment. Use its messageId as inReplyTo. This is not task completion. Report only observed evidence and explicitly list coverage limits.",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "definitions": {
+        "BgrStatusReply": {
+          "additionalProperties": false,
+          "properties": {
+            "blockers": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "completed": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "coverageLimits": {
+              "description": "Must describe missing evidence; scoped history is not synthesized by the backend.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "currentAction": {
+              "type": "string"
+            },
+            "dirty": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "headSha": {
+              "description": "Worker-supplied evidence, not a backend attestation of repository state.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "pending": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "blockers",
+            "completed",
+            "coverageLimits",
+            "currentAction",
+            "pending"
+          ],
+          "type": "object"
+        }
+      },
+      "properties": {
+        "inReplyTo": {
+          "type": "string"
+        },
+        "messageId": {
+          "type": "string"
+        },
+        "payload": {
+          "$ref": "#/definitions/BgrStatusReply"
+        }
+      },
+      "required": [
+        "inReplyTo",
+        "messageId",
+        "payload"
+      ],
+      "title": "BgrReportStatusArgs",
+      "type": "object"
+    },
+    "name": "bgr_report_status",
+    "type": "function"
+  },
+  "restartRecovery": false,
+  "reviewSnapshotTool": {
+    "description": "Read the immutable review manifest/diff or changed source. No path returns the manifest and diff preview. Use path diff, base/<path>, or head/<path>; startLine is 1-based and maxLines is at most 200. No filesystem, shell, credentials, or sibling review access.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "maxLines": {
+          "maximum": 200,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "path": {
+          "type": "string"
+        },
+        "startLine": {
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "name": "bgr_read_review_snapshot",
+    "type": "function"
+  },
+  "reviewerSandbox": true,
+  "reviewerStart": true,
+  "roles": [
+    "brain",
+    "grunt",
+    "reviewer"
+  ],
+  "sendTool": {
+    "description": "Send a BGR message to a host-authorized peer. Source identity is derived natively. The host routes asynchronously; acceptance is not consumption. Continue the same assignment.",
+    "inputSchema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "definitions": {
+        "BgrMessageKind": {
+          "enum": [
+            "task",
+            "question",
+            "answer",
+            "progress",
+            "status_query",
+            "status_reply",
+            "result",
+            "cancel"
+          ],
+          "type": "string"
+        }
+      },
+      "properties": {
+        "correlationId": {
+          "type": "string"
+        },
+        "headSha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "inReplyTo": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/definitions/BgrMessageKind"
+        },
+        "messageId": {
+          "type": "string"
+        },
+        "payload": true,
+        "recipientAgentId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "correlationId",
+        "kind",
+        "messageId",
+        "payload",
+        "recipientAgentId"
+      ],
+      "title": "BgrSendMessageArgs",
+      "type": "object"
+    },
+    "name": "bgr_send_message",
+    "type": "function"
+  },
+  "statusEvidence": "model_self_summary_with_explicit_missing_evidence; no backend history attestation",
+  "statusScopes": [
+    "now",
+    "since_time",
+    "since_commit"
+  ],
+  "taskDispatch": true,
+  "version": 1
+}
