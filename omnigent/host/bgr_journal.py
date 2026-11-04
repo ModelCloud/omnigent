@@ -28,6 +28,7 @@ from omnigent.bgr_supervision import (
     supervision_digest,
 )
 from omnigent.host.bgr_cgroup import CgroupEmptyProof, _open_directory, _root_protected
+from omnigent.host.bgr_launch import StubLaunchPlan, UnitLaunch
 from omnigent.host.bgr_supervisor import SupervisorUnavailable
 
 _MAX_JOURNAL_BYTES = 1024 * 1024
@@ -53,6 +54,10 @@ class GenerationJournal(Record):
     sequence: Sequence = 1
     state: Literal["OPEN", "STOPPING", "CLOSED"] = "OPEN"
     domain: CgroupDomain | None = None
+    start_plan: StubLaunchPlan | None = None
+    unit_launch: UnitLaunch | None = None
+    release_committed: bool = False
+    launchers_quiesced: bool = False
     closed_admission_sequence: Sequence | None = None
     recovery_id: Identifier | None = None
     claims: Annotated[tuple[AdmissionClaim, ...], Field(min_length=1, max_length=1024)]
@@ -66,6 +71,35 @@ class GenerationJournal(Record):
     @model_validator(mode="after")
     def consistent_inventory(self) -> Self:
         root = self.claims[0]
+        plan = self.start_plan
+        launch = self.unit_launch
+        if plan is not None and (
+            plan.request.generation != self.generation
+            or plan.request.manifest_id != self.manifest_id
+            or plan.request.domain_id != self.domain_id
+            or plan.request.root_claim_id != root.claim_id
+            or plan.supervisor_incarnation != self.supervisor_incarnation
+            or supervision_digest(plan.request) != self.launch_sha256
+        ):
+            raise ValueError("Start plan changed the original admission")
+        if launch is not None and (
+            plan is None
+            or launch.profile_sha256 != plan.profile_sha256
+            or launch.barrier_id != plan.barrier_id
+            or launch.generation_id != self.generation.generation_id
+            or launch.launch_id != self.generation.launch_id
+            or launch.supervisor_incarnation != self.supervisor_incarnation
+            or self.domain is None
+            or launch.domain_sha256 != supervision_digest(self.domain)
+            or self.domain.path != f"/{launch.slice_unit}"
+        ):
+            raise ValueError("Unit launch does not match the retained generation slice")
+        if self.release_committed and (
+            launch is None or root.state not in ("SPAWNED_UNBOUND", "BOUND")
+        ):
+            raise ValueError("Release requires an immutable spawned unit mapping")
+        if self.launchers_quiesced and (plan is None or self.state == "OPEN"):
+            raise ValueError("Launcher quiescence requires closed start admissions")
         if (
             root.role != "runner"
             or root.admission_sequence != 1
@@ -242,6 +276,43 @@ class JournalTransaction:
         self._barrier_observed_monotonic = monotonic()
         return document
 
+    def map_unit(self, launch: UnitLaunch) -> None:
+        self._require_open()
+        launch = UnitLaunch.model_validate_json(launch.model_dump_json())
+        if self.document.claims[0].state != "SPAWNED_UNBOUND":
+            raise SupervisorUnavailable("Unit mapping requires a spawned root admission")
+        if self.document.unit_launch is not None:
+            raise SupervisorUnavailable("Unit invocation is already mapped")
+        self._save(unit_launch=launch, sequence=self.document.sequence + 1)
+
+    def plan_start(self, plan: StubLaunchPlan) -> None:
+        self._require_open()
+        if self.document.start_plan is not None or self.document.claims[0].state != "STARTING":
+            raise SupervisorUnavailable("Start is already planned or not starting")
+        self._save(start_plan=plan, sequence=self.document.sequence + 1)
+
+    def quiesce_launchers(self, plan: StubLaunchPlan) -> None:
+        self._require_active()
+        if (
+            self.document.state != "STOPPING"
+            or self.document.start_plan != plan
+            or plan.supervisor_incarnation != self.journal.incarnation
+        ):
+            raise SupervisorUnavailable("Launcher reconciliation is unavailable")
+        self._save(launchers_quiesced=True, sequence=self.document.sequence + 1)
+        self._barrier_observed_monotonic = monotonic()
+
+    def commit_release(self, launch: UnitLaunch) -> None:
+        """Persist intent before sending; delivery failure is execution-unknown."""
+        self._require_open()
+        if (
+            self.document.unit_launch != launch
+            or self.document.release_committed
+            or self.document.claims[0].state != "SPAWNED_UNBOUND"
+        ):
+            raise SupervisorUnavailable("Release mapping is stale or already committed")
+        self._save(release_committed=True, sequence=self.document.sequence + 1)
+
     def seal(
         self,
         request: SupervisorStopRequest,
@@ -263,6 +334,8 @@ class JournalTransaction:
             return document.receipt
         if document.supervisor_incarnation != self.journal.incarnation:
             raise SupervisorUnavailable("Historical domain requires supervisor reconciliation")
+        if document.start_plan is not None and not document.launchers_quiesced:
+            raise SupervisorUnavailable("External launchers have not been quiesced")
         if (
             proof.boot_id != document.generation.boot_id
             or proof.domain != document.domain

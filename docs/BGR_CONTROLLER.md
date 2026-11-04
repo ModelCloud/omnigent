@@ -777,7 +777,9 @@ revoked supervisor admission and requests its stop through the original host's
 authenticated supervisor channel, not the native runtime. Retries reuse the recovery
 ID as the stop request ID and require identical receipt evidence. An unsupported,
 unavailable or replaced host, malformed admission, or unverified stop returns HTTP 202
-with `stop_status:"unknown"`, `replacement_enabled:false` and recovery `stopping`.
+with `stop_status:"unknown"` and `replacement_enabled:false`. A new recovery remains
+`stopping`; a failed or conflicting retry after verified completion preserves the
+previous durable `stopped` result and its original evidence.
 A verified receipt covering the original Brain and every reserved/bound worker
 quarantines old inputs and transitions only to `stopped`, preserving the old epoch,
 controller and zero lease. No native/PID fallback, epoch advance, replacement launch
@@ -942,7 +944,7 @@ issue a new terminal receipt from matching path/inode values alone. Independent
 historical-domain reconciliation, including systemd invocation identity, is not
 implemented. Previously durable CLOSED receipts retain stable retry identity.
 
-No root broker/service or supervised start adapter is installed or enabled by
+No concrete manager adapter or root socket daemon is installed or enabled by
 these primitives. The public recovery endpoint can reconcile a trusted receipt
 to `stopped`, but cannot authorize replacement. Dedicated admission, scoped runtime
 transport, fresh-input replacement and production isolation acceptance remain
@@ -984,4 +986,48 @@ replacement. No production supervisor or start service is installed by this test
 .venv/bin/python -m pytest tests/server/test_bgr_generation_auth.py \
   tests/stores/test_bgr_recovery.py tests/server/integration/test_bgr.py \
   tests/server/integration/test_runner_tunnel_route.py --reruns 0
+```
+
+### Disabled fixed-profile start foundation
+
+The host-local `StubSupervisorBroker` is an in-process administrator API for a
+harmless fixed workload, **not a working production launcher**. No concrete
+`AdminManager`, socket daemon, runner start frame, systemd integration or native
+runtime profile is supplied. Its default missing manager fails before launch;
+ordinary host launch and fresh recovery replacement remain disabled for
+supervised generations.
+
+- Administrator-protected profiles select fixed gate/workload paths, a private
+  image and a non-root worker identity distinct from the host daemon. Start
+  requests cannot carry argv, environment or arbitrary unit properties.
+- The root admission and immutable start plan are durable before any manager
+  request. A separately retained generation slice is pinned before the gate can
+  exist. The root becomes `SPAWNED_UNBOUND` before a possibly queued service start,
+  so uncertain delivery is never relabeled as cancellation before execution.
+- The observed unit/InvocationID, domain digest, supervisor incarnation and
+  one-shot barrier mapping are immutable. Release intent is fsynced before opening
+  or sending through the gate channel. An uncertain write or send never permits a
+  retry release.
+- The gate requires an exact bounded Unix packet release from a root peer and
+  checks worker UID/GID/groups, `NoNewPrivs`, zero capabilities, null standard
+  streams and no extra inherited descriptors. Only the fixed stub is executed,
+  with an empty environment.
+- Stop closes admissions, requires the trusted manager to invalidate release and
+  cancel/drain/reconcile every possibly queued start, then durably records
+  quiescence. A fresh kernel proof must follow that completed write. The original
+  pinned domain handle remains live until a durable CLOSED receipt; losing it
+  yields UNKNOWN, not a reopened-path substitute. Old CLOSED receipts retry
+  unchanged without a manager, but unfinished old incarnations remain UNKNOWN.
+
+The `AdminManager` contract still requires independently verified effective
+filesystem/namespace/egress/IPC/credential isolation, identity exclusivity and
+manager-job continuity. Profile properties alone do not establish any of those
+guarantees. The tests use an injected manager/pinned domain, real journal
+files/fsync/locks and Unix packet sockets; peer/privilege checks are injected and
+the final fixed `execve` is spied, not executed. This is coordinator ordering/fault
+coverage, not privileged isolation or native-runtime acceptance.
+
+```bash
+.venv/bin/python -m pytest tests/host/test_bgr_{broker,journal,supervisor,cgroup}.py \
+  --reruns 0 -q
 ```
