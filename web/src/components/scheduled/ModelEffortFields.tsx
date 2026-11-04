@@ -40,7 +40,7 @@ import {
 import { NativeModelSelectors } from "@/components/NativeModelSelectors";
 import { CLAUDE_NATIVE_MODELS } from "@/lib/claudeNativeModels";
 import { CLAUDE_NATIVE_PERMISSION_MODES } from "@/lib/claudePermissionMode";
-import { findNativeModelOption } from "@/lib/codexNativeModels";
+import { compatibleModelEffort, hasGroupedModelOptions } from "@/lib/modelSelection";
 import { useHostModelOptions } from "@/hooks/useHosts";
 
 /** Sentinel Select value for "no permission override" (use the agent default).
@@ -106,23 +106,14 @@ export function ModelEffortFields({
   // picker can't express: dependent Model → Provider → Speed → Reasoning
   // selectors (the same component the interactive picker uses) drive one
   // model-override id, with liveness dots and speed bolts on the options.
-  const codexGrouped =
-    harness === "codex-native" && (hostModelOptions?.some((row) => row.modelFamily) ?? false);
+  const codexGrouped = harness === "codex-native" && hasGroupedModelOptions(hostModelOptions ?? []);
   const handleCodexModelChange = (id: string) => {
     onModelChange(id);
     // An effort that the newly resolved row doesn't advertise can't be sent
     // with it — drop it back to the agent default rather than save a pair the
     // harness would reject.
-    const row =
-      findNativeModelOption(hostModelOptions ?? [], id) ??
-      // "" picks "Default": the launch resolves to the catalog's own default.
-      (id === "" ? (hostModelOptions ?? []).find((option) => option.isDefault) : null);
-    if (
-      effort !== "" &&
-      !(row?.supportedReasoningEfforts ?? []).some((e) => e.reasoningEffort === effort)
-    ) {
-      onEffortChange("");
-    }
+    const nextEffort = compatibleModelEffort(hostModelOptions ?? [], id, effort || null) ?? "";
+    if (nextEffort !== effort) onEffortChange(nextEffort);
   };
   if (codexGrouped) {
     return (
