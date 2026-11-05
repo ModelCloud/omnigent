@@ -1,11 +1,17 @@
 # BGR: brain, grunts, and reviewers
 
-Status: **design with a staged ledger implementation**. The full execution mode
-below remains proposed. The implemented, owner-authorized SQL ledger and mailbox
-APIs are documented in [BGR controller foundation](BGR_CONTROLLER.md). They do not
-launch workers, enforce runtime roles, deliver safe-boundary callbacks, or provide
-independent review. BGR is selectable for browser-local configuration only;
-execution remains unavailable.
+Status: **experimental runnable implementation, scoped to same-live recovery**.
+BGR is selectable alongside Polly on a capability-verified MultiDex host, with
+bounded Grunts and fresh independent Reviewers. The implemented contract and
+evidence limits are documented in [BGR implementation](BGR_CONTROLLER.md).
+
+This document also retains the broader target architecture. The current release
+does **not** include automatic process-loss replacement, a production trusted
+supervisor/start adapter or contained scoped-runtime transport. Native restart
+recovery/consumption receipts remain unsupported. Only the exact already-live
+native binding may be reattached; missing or changed generations fail closed.
+Those explicit exclusions must not be mistaken for promised release features,
+and runnable code must not be mistaken for proof of autonomous review quality.
 
 Companion: [MultiDex execution contract](https://github.com/ModelCloud/MultiDex/blob/design/brain-executor-reviewer-contract/docs/brain-executor-reviewer-design.md).
 
@@ -463,6 +469,12 @@ and reviewer isolation across the supported provider/harness combinations.
 These are proposed tests, not executed behavior.
 
 ## Resumption after individual or collective failure
+
+**Release boundary:** only exact same-live reattachment is included now.
+The replacement-attempt, reconstructed-Brain, collective-loss and retry controls
+below describe future target behavior, not enabled release paths. A missing or
+changed native identity remains blocked; no new physical Brain, worker or replay
+of the initial task is authorized to make recovery appear successful.
 
 Recovery is a BGR requirement, not a promise to checkpoint every agent's
 conversation or internal reasoning. Persist a compact **team recovery ledger**

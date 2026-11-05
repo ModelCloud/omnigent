@@ -190,11 +190,17 @@ class BgrNativeMailbox:
             raise native_contract_error() from None
         wire = notification.envelope
         target, _ = self.identity(wire.recipient_identity.attempt_id)
-        if (
-            notification.thread_id != source.thread_id
-            or wire.identity != source.identity
-            or wire.recipient_identity != target
-        ):
+        if notification.thread_id != source.thread_id:
+            raise native_contract_error()
+        body, origin = self._body(source, wire, target)
+        return self.store.send(
+            self.user_id, source.identity.session_id, self.team_id, body, native_origin=origin
+        )
+
+    def _body(
+        self, source: NativeBgrConnection, wire: NativeEnvelope, target: NativeIdentity
+    ) -> tuple[Send, NativeMessageOrigin]:
+        if wire.identity != source.identity or wire.recipient_identity != target:
             raise native_contract_error()
         worker = source.identity if source.identity.role != "brain" else target
         if worker.attempt_id is None or worker.task_id is None:
@@ -237,21 +243,25 @@ class BgrNativeMailbox:
             )
         except ValidationError:
             raise native_contract_error() from None
-        return self.store.send(
-            self.user_id, source.identity.session_id, self.team_id, body, native_origin=origin
-        )
+        return body, origin
 
     def wire(
         self, envelope: Envelope, source: NativeBgrConnection, target: NativeBgrConnection
     ) -> NativeEnvelope:
         self._connection(source)
         self._connection(target)
-        worker = source.identity if source.identity.role != "brain" else target.identity
+        return self._wire(envelope, source, target.identity)
+
+    def _wire(
+        self, envelope: Envelope, source: NativeBgrConnection, target: NativeIdentity
+    ) -> NativeEnvelope:
+        """Encode durable evidence without granting the recipient execution authority."""
+        worker = source.identity if source.identity.role != "brain" else target
         if (
             envelope.sender_agent_id != source.identity.agent_id
             or envelope.sender_session_id != source.identity.session_id
             or envelope.sender_role != source.identity.role
-            or envelope.recipient_agent_id != target.identity.agent_id
+            or envelope.recipient_agent_id != target.agent_id
             or envelope.team_id != self.team_id
             or envelope.epoch != self.fence.epoch
             or envelope.attempt_id != worker.attempt_id
@@ -265,7 +275,7 @@ class BgrNativeMailbox:
             raise native_contract_error()
         reply_to = envelope.in_reply_to
         if reply_to is not None:
-            anchor = self._message(target.identity.agent_id, reply_to)
+            anchor = self._message(target.agent_id, reply_to)
             if anchor.native_origin is not None:
                 reply_to = anchor.native_origin.message_id
         return NativeEnvelope.model_validate(
@@ -274,7 +284,7 @@ class BgrNativeMailbox:
                 "senderAgentId": envelope.sender_agent_id,
                 "recipientAgentId": envelope.recipient_agent_id,
                 "identity": source.identity,
-                "recipientIdentity": target.identity,
+                "recipientIdentity": target,
                 "kind": envelope.kind,
                 "correlationId": origin.correlation_id if origin else envelope.correlation_id,
                 "inReplyTo": reply_to,
@@ -316,11 +326,85 @@ class BgrNativeMailbox:
         self._connection(target)
         return await target.deliver(wire)
 
+    def _recorded(self, source: NativeBgrConnection, reply: NativeEnvelope) -> Envelope | None:
+        """Recognize exact durable records before resolving a possibly retired recipient."""
+        envelope = None
+        if re.fullmatch(r"[0-9a-f]{32}", reply.message_id):
+            try:
+                candidate = self._message(source.identity.agent_id, reply.message_id)
+            except OmnigentError:
+                pass
+            else:
+                if candidate.native_origin is None:
+                    envelope = candidate
+        if envelope is None:
+            try:
+                envelope = self._message(
+                    source.identity.agent_id,
+                    _host_message_id(
+                        self.team_id, source.identity.agent_id, self.fence.epoch, reply.message_id
+                    ),
+                )
+            except OmnigentError:
+                return None
+            if envelope.native_origin is None:
+                raise native_contract_error()
+        recipient = self.store.native_message_recipient(
+            self.user_id,
+            self.brain_session_id,
+            self.team_id,
+            self.fence,
+            sender_agent_id=source.identity.agent_id,
+            message_id=envelope.message_id,
+        )
+        target = NativeIdentity.model_validate(
+            {
+                "teamId": recipient.team_id,
+                "agentId": recipient.agent_id,
+                "sessionId": recipient.session_id,
+                "role": recipient.role,
+                "epoch": envelope.epoch,
+                "taskId": None if recipient.role == "brain" else envelope.task_id,
+                "attemptId": None if recipient.role == "brain" else envelope.attempt_id,
+            }
+        )
+        normalized = reply.model_copy(
+            update={
+                "payload": self._payload(source, reply.kind, reply.payload, self._private_values())
+            }
+        )
+        if self._wire(envelope, source, target) != normalized:
+            raise native_contract_error()
+        if envelope.native_origin is not None:
+            body, origin = self._body(source, reply, target)
+            if envelope.native_origin != origin or any(
+                getattr(envelope, key) != getattr(body, key) for key in Send.model_fields
+            ):
+                raise native_contract_error()
+        elif envelope.controller_id != (
+            self.fence.controller_id if source.identity.role == "brain" else None
+        ):
+            raise native_contract_error()
+        return envelope
+
     async def reconcile(self, source: NativeBgrConnection) -> list[Receipt]:
         """Re-ingest live native outbox evidence after connection loss, not process loss."""
         self._connection(source)
         snapshot = await source.inspect()
-        return [
-            self.receive(source, {"threadId": source.thread_id, "envelope": reply.wire()})
-            for reply in snapshot.replies
-        ]
+        receipts = []
+        for reply in snapshot.replies:
+            self._connection(source)
+            recorded = self._recorded(source, reply)
+            if recorded is None:
+                receipts.append(
+                    self.receive(source, {"threadId": source.thread_id, "envelope": reply.wire()})
+                )
+            elif recorded.native_origin is not None and recorded.consumed_at is None:
+                receipts.append(
+                    Receipt(
+                        envelope_id=recorded.envelope_id,
+                        message_id=recorded.message_id,
+                        sequence=recorded.sequence,
+                    )
+                )
+        return receipts

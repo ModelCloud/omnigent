@@ -11,7 +11,15 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from omnigent.bgr import Fence, LeaseRequest, NativeBinding, NativeBrainBinding, TeamCreate
+from omnigent.bgr import (
+    Ack,
+    Fence,
+    LeaseRequest,
+    NativeBinding,
+    NativeBrainBinding,
+    TaskClose,
+    TeamCreate,
+)
 from omnigent.bgr_review import normalize_native_review_result
 from omnigent.errors import OmnigentError
 from omnigent.harnesses.codex_native.bgr import NativeCapabilities
@@ -220,6 +228,180 @@ async def test_durable_record_then_delivery_retry_and_arbitrary_native_question_
     assert len(await restarted.reconcile(target)) == 4
 
 
+@pytest.mark.parametrize("terminal", [False, True])
+async def test_reconcile_skips_recorded_host_tasks_even_for_retired_recipients(route, terminal):
+    mailbox, task, brain, worker = route
+    anchor = mailbox.store.drain(OWNER, task.attempt.session_id, TEAM)[0]
+    await mailbox.forward(brain.connection, worker.connection, anchor.message_id)
+    if terminal:
+        mailbox.store.close(
+            OWNER,
+            BRAIN,
+            TEAM,
+            TaskClose(
+                **FENCE.model_dump(),
+                attempt_id=task.attempt.attempt_id,
+                outcome="completed",
+                stop_confirmed=True,
+            ),
+        )
+    before = copy.deepcopy(worker.pending)
+    calls = len(brain.calls)
+    assert await mailbox.reconcile(brain.connection) == []
+    assert await mailbox.reconcile(brain.connection) == []
+    assert [method for method, _ in brain.calls[calls:]] == ["bgr/thread/inspect"] * 2
+    assert worker.pending == before
+    envelopes = mailbox.store.drain(OWNER, task.attempt.session_id, TEAM)
+    assert [envelope.message_id for envelope in envelopes] == [anchor.message_id]
+    assert envelopes[0].consumed_at is None
+    assert mailbox.store.drain(OWNER, BRAIN, TEAM) == []
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("payload", {"summary": "Changed host task"}),
+        ("kind", "progress"),
+        ("correlationId", "changed-anchor"),
+        ("headSha", "f" * 40),
+        ("inReplyTo", "invented-parent"),
+        ("recipientIdentity.sessionId", "f" * 32),
+        ("recipientIdentity.agentId", "f" * 32),
+        ("recipientIdentity.taskId", "f" * 32),
+        ("recipientIdentity.attemptId", "f" * 32),
+        ("recipientIdentity.role", "reviewer"),
+    ],
+)
+async def test_reconcile_rejects_changed_recorded_host_anchor_without_import(route, field, value):
+    mailbox, task, brain, worker = route
+    anchor = mailbox.store.drain(OWNER, task.attempt.session_id, TEAM)[0]
+    await mailbox.forward(brain.connection, worker.connection, anchor.message_id)
+    wire = brain.outgoing[anchor.message_id]
+    if field.startswith("recipientIdentity."):
+        wire["recipientIdentity"][field.split(".")[1]] = value
+        if field.endswith(".agentId"):
+            wire["recipientAgentId"] = value
+    else:
+        wire[field] = value
+    with pytest.raises((OmnigentError, ValueError)):
+        await mailbox.reconcile(brain.connection)
+    assert mailbox.store.drain(OWNER, BRAIN, TEAM) == []
+    envelopes = mailbox.store.drain(OWNER, task.attempt.session_id, TEAM)
+    assert [envelope.message_id for envelope in envelopes] == [anchor.message_id]
+    assert len(worker.pending) == 1
+
+
+@pytest.mark.parametrize("message_id", ["missed-native-result", "f" * 32])
+async def test_reconcile_imports_retained_native_reply_exactly_once(route, db_uri, message_id):
+    mailbox, task, brain, worker = route
+    anchor = mailbox.store.drain(OWNER, task.attempt.session_id, TEAM)[0]
+    await mailbox.forward(brain.connection, worker.connection, anchor.message_id)
+    worker.emit(
+        brain.connection,
+        anchor,
+        message_id,
+        "result",
+        payload={"summary": f"Completed work; redact {PRIVATE}"},
+    )
+    restored = BgrNativeMailbox(
+        BgrReviewStore(db_uri),
+        OWNER,
+        BRAIN,
+        TEAM,
+        FENCE,
+        root="/trusted",
+        private_values=lambda: (PRIVATE,),
+    )
+    assert restored.store.drain(OWNER, BRAIN, TEAM) == []
+    calls = len(worker.calls)
+    receipts = await restored.reconcile(worker.connection)
+    assert len(receipts) == 1
+    assert await restored.reconcile(worker.connection) == receipts
+    assert [method for method, _ in worker.calls[calls:]] == ["bgr/thread/inspect"] * 2
+    envelopes = restored.store.drain(OWNER, BRAIN, TEAM)
+    assert len(envelopes) == 1 and envelopes[0].native_origin.message_id == message_id
+    assert envelopes[0].consumed_at is None
+    assert PRIVATE not in envelopes[0].model_dump_json()
+    assert brain.pending == {}
+    worker.outgoing[message_id]["payload"] = {"summary": "Changed retained result"}
+    with pytest.raises(OmnigentError):
+        await restored.reconcile(worker.connection)
+    assert restored.store.drain(OWNER, BRAIN, TEAM) == envelopes
+    restored.store.ack(
+        OWNER, BRAIN, TEAM, Ack(epoch=FENCE.epoch, envelope_id=receipts[0].envelope_id)
+    )
+    worker.outgoing[message_id]["payload"] = {"summary": f"Completed work; redact {PRIVATE}"}
+    assert await restored.reconcile(worker.connection) == []
+
+
+async def test_reconcile_preserves_native_receipt_for_a_retired_recipient(route):
+    mailbox, task, brain, worker = route
+    anchor = mailbox.store.drain(OWNER, task.attempt.session_id, TEAM)[0]
+    await mailbox.forward(brain.connection, worker.connection, anchor.message_id)
+    question = worker.emit(brain.connection, anchor, "clarify-before-close", "question")
+    question_receipt = mailbox.receive(worker.connection, question)
+    await mailbox.forward(worker.connection, brain.connection, question_receipt.message_id)
+    answer = brain.emit(
+        worker.connection, anchor, "answer-before-close", "answer", reply_to="clarify-before-close"
+    )
+    answer_receipt = mailbox.receive(brain.connection, answer)
+    mailbox.store.close(
+        OWNER,
+        BRAIN,
+        TEAM,
+        TaskClose(
+            **FENCE.model_dump(),
+            attempt_id=task.attempt.attempt_id,
+            outcome="completed",
+            stop_confirmed=True,
+        ),
+    )
+    assert await mailbox.reconcile(brain.connection) == [answer_receipt]
+    assert await mailbox.reconcile(brain.connection) == [answer_receipt]
+    assert worker.pending.keys() == {anchor.message_id}
+    assert mailbox.store.drain(OWNER, task.attempt.session_id, TEAM)[-1].consumed_at is None
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("correlation_id", "f" * 32),
+        ("controller_id", "f" * 32),
+        ("native_origin.in_reply_to", "different-native-parent"),
+    ],
+)
+async def test_reconcile_validates_canonical_fields_of_recorded_native_evidence(
+    route, monkeypatch, field, value
+):
+    mailbox, task, brain, worker = route
+    anchor = mailbox.store.drain(OWNER, task.attempt.session_id, TEAM)[0]
+    emitted = worker.emit(brain.connection, anchor, "persisted-native-result", "result")
+    receipt = mailbox.receive(worker.connection, emitted)
+    original = mailbox._message
+
+    def damaged(sender_agent_id, message_id):
+        envelope = original(sender_agent_id, message_id)
+        if message_id == receipt.message_id:
+            if field.startswith("native_origin."):
+                return envelope.model_copy(
+                    update={
+                        "native_origin": envelope.native_origin.model_copy(
+                            update={field.split(".")[1]: value}
+                        )
+                    }
+                )
+            return envelope.model_copy(update={field: value})
+        return envelope
+
+    monkeypatch.setattr(mailbox, "_message", damaged)
+    with pytest.raises(OmnigentError):
+        await mailbox.reconcile(worker.connection)
+    envelopes = mailbox.store.drain(OWNER, BRAIN, TEAM)
+    assert len(envelopes) == 1 and envelopes[0].message_id == receipt.message_id
+    assert envelopes[0].consumed_at is None
+    assert brain.pending == {}
+
+
 @pytest.mark.parametrize(
     "mutation",
     [
@@ -368,6 +550,7 @@ async def test_reviewer_callbacks_sanitized_before_sealing_and_sibling_barrier(r
         PRIVATE
         not in mailbox.store.get_review_round(OWNER, BRAIN, TEAM, round.round_id).model_dump_json()
     )
+    assert early_receipt in await mailbox.reconcile(first.connection)
     calls = len(brain.calls)
     assert (
         await mailbox.forward(first.connection, brain.connection, early_receipt.message_id) is None
@@ -384,7 +567,10 @@ async def test_reviewer_callbacks_sanitized_before_sealing_and_sibling_barrier(r
             "coverageLimits": ["Could not verify runtime"],
         },
     )
-    late_receipt = mailbox.receive(second.connection, late)
+    late_receipts = await mailbox.reconcile(second.connection)
+    assert len(late_receipts) == 1
+    late_receipt = late_receipts[0]
+    assert mailbox.receive(second.connection, late) == late_receipt
     assert await mailbox.forward(first.connection, brain.connection, early_receipt.message_id)
     assert await mailbox.forward(second.connection, brain.connection, late_receipt.message_id)
     assert brain.pending["reviewer-A-result"]["payload"]["result"]["status"] == "complete"

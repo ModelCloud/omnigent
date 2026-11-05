@@ -11,7 +11,7 @@ from pydantic import JsonValue, TypeAdapter
 
 from omnigent.bgr import (
     Fence,
-    LeaseRequest,
+    NativeAssignment,
     NativeBinding,
     NativeBrainBinding,
     TaskClose,
@@ -19,12 +19,16 @@ from omnigent.bgr import (
     Workspace,
 )
 from omnigent.bgr_control import BgrControl
-from omnigent.bgr_review import ReviewRoundCreate
+from omnigent.bgr_review import ReviewRound, ReviewRoundCreate, independent_review_contract
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.harnesses.codex_native.app_server import CodexMessage, CodexParams, CodexRequestFn
 from omnigent.harnesses.codex_native.bgr import NativeCapabilities
 from omnigent.harnesses.codex_native.bgr_lifecycle import NativeReviewOptions
-from omnigent.harnesses.codex_native.bgr_messages import NativeBgrConnection, NativeIdentity
+from omnigent.harnesses.codex_native.bgr_messages import (
+    NativeBgrConnection,
+    NativeIdentity,
+    native_contract_error,
+)
 from omnigent.runner.bgr_mailbox import BgrNativeMailbox
 from omnigent.runner.bgr_reviewer import BgrReviewerRunner
 from omnigent.stores.bgr_control_store import BgrControlActions
@@ -125,6 +129,10 @@ class BgrController:
             )
 
     async def renew_lease(self) -> None:
+        async with self._actions_lock, self._callbacks_lock:
+            await self._renew_lease()
+
+    async def _renew_lease(self) -> None:
         team = self.store.get_team(self.user_id, self.brain_session_id, self.team_id)
         recovering = bool(
             team.runtime_recoveries and team.runtime_recoveries[-1].state == "binding"
@@ -137,22 +145,148 @@ class BgrController:
                 self.user_id, self.brain_session_id, self.team_id, self.fence, binding=binding
             )
             return
+        _, binding = self.store.live_controller_target(self.user_id, self.brain_session_id)
+        await self.runtime.verify_generation(binding)
         await self.brain.inspect()
-        self.authorize(self.user_id, self.brain_session_id)
-        team = self.store.acquire(
-            self.user_id,
-            self.brain_session_id,
-            self.team_id,
-            LeaseRequest(controller_id=self.fence.controller_id, ttl_seconds=300),
-        )
-        if team.epoch != self.fence.epoch:
-            raise OmnigentError("Brain lease epoch changed", code=ErrorCode.CONFLICT)
+        await self.restore_connections(binding)
 
     def _register(self, connection: NativeBgrConnection) -> None:
         previous = self.connections.get(connection.identity.session_id)
         if previous is not None and previous != connection:
             raise OmnigentError("Native role already registered", code=ErrorCode.CONFLICT)
         self.connections[connection.identity.session_id] = connection
+
+    def _review_assignment(
+        self, assignment: NativeAssignment, binding: NativeBrainBinding
+    ) -> ReviewRound:
+        attempt = assignment.attempt
+        assert attempt.review_round_id is not None
+        round = self.store.get_review_round(
+            self.user_id, self.brain_session_id, self.team_id, attempt.review_round_id
+        )
+        job = next((job for job in round.jobs if job.attempt_id == attempt.attempt_id), None)
+        anchor = self.store.native_message(
+            self.user_id,
+            self.brain_session_id,
+            self.team_id,
+            self.fence,
+            sender_agent_id=self.brain.identity.agent_id,
+            message_id=attempt.task_id,
+            live_binding=binding,
+        )
+        if (
+            round.team_id != self.team_id
+            or round.epoch != self.fence.epoch
+            or job is None
+            or job.state not in {"running", "sealed"}
+            or job.agent_id != attempt.agent_id
+            or job.session_id != attempt.session_id
+            or job.task_id != attempt.task_id
+            or job.profile != attempt.profile
+            or job.native_thread_id != assignment.binding.thread_id
+            or job.snapshot_root != attempt.workspace.worktree
+            or round.repository != attempt.workspace.repository
+            or round.base_sha != attempt.workspace.base_sha
+            or anchor.head_sha != round.head_sha
+            or anchor.kind != "task"
+            or anchor.attempt_id != attempt.attempt_id
+            or anchor.recipient_agent_id != attempt.agent_id
+            or anchor.payload
+            != {
+                "round_id": round.round_id,
+                "review_id": job.review_id,
+                "contract": independent_review_contract(round, job).model_dump(mode="json"),
+            }
+        ):
+            raise native_contract_error()
+        return round
+
+    async def restore_connections(self, binding: NativeBrainBinding) -> None:
+        """Inspect surviving roles without rebinding, dispatching, or replaying their mail."""
+        assignments = self.store.native_assignments(
+            self.user_id, self.brain_session_id, self.team_id, self.fence, live_binding=binding
+        )
+        connections = {self.brain_session_id: self.brain}
+        rounds = {}
+        for assignment in assignments:
+            attempt = assignment.attempt
+            if attempt.workspace.host_id != binding.host_id:
+                raise native_contract_error()
+            identity = NativeIdentity.model_validate(
+                {
+                    "teamId": self.team_id,
+                    "agentId": attempt.agent_id,
+                    "sessionId": attempt.session_id,
+                    "taskId": attempt.task_id,
+                    "attemptId": attempt.attempt_id,
+                    "epoch": self.fence.epoch,
+                    "role": "reviewer" if attempt.review_round_id is not None else "grunt",
+                }
+            )
+            thread_id = assignment.binding.thread_id
+            if identity.session_id in connections:
+                raise native_contract_error()
+            request = self.runtime.request(identity.session_id)
+            capabilities = NativeCapabilities.model_validate(
+                (await request("bgr/capabilities/read", {})).get("result")
+            )
+            if not (capabilities.general_messaging and capabilities.host_record):
+                raise native_contract_error()
+            connection = NativeBgrConnection(thread_id, identity, request, capabilities)
+            snapshot = await connection.inspect()
+            for message in [*snapshot.pending, *snapshot.replies]:
+                if (message.identity, message.recipient_identity) not in {
+                    (self.brain.identity, identity),
+                    (identity, self.brain.identity),
+                }:
+                    raise native_contract_error()
+            if identity.role == "reviewer":
+                if not (
+                    capabilities.reviewer_start and capabilities.reviewer_snapshot_no_lazy_fetch
+                ):
+                    raise native_contract_error()
+                round = self._review_assignment(assignment, binding)
+                if any(
+                    message.head_sha != round.head_sha
+                    for message in [*snapshot.pending, *snapshot.replies]
+                ):
+                    raise native_contract_error()
+                metadata = (
+                    await request("thread/read", {"threadId": thread_id, "includeTurns": False})
+                ).get("result")
+                thread = metadata.get("thread") if isinstance(metadata, dict) else None
+                if (
+                    not isinstance(thread, dict)
+                    or thread.get("id") != thread_id
+                    or thread.get("cwd") != attempt.workspace.worktree
+                ):
+                    raise native_contract_error()
+                rounds[attempt.attempt_id] = round
+            connections[identity.session_id] = connection
+        await self.runtime.verify_generation(binding)
+        await self.brain.inspect()
+        current = self.store.native_assignments(
+            self.user_id, self.brain_session_id, self.team_id, self.fence, live_binding=binding
+        )
+        if [(item.attempt, item.binding) for item in current] != [
+            (item.attempt, item.binding) for item in assignments
+        ]:
+            raise native_contract_error()
+        if any(
+            self._review_assignment(item, binding) != rounds[item.attempt.attempt_id]
+            for item in current
+            if item.attempt.review_round_id is not None
+        ):
+            raise native_contract_error()
+        self.store.resume_verified_live_controller(
+            self.user_id,
+            self.brain_session_id,
+            self.team_id,
+            self.fence,
+            binding=binding,
+            assignments=assignments,
+        )
+        self.connections = connections
 
     def authorize(self, user_id: str, source_session_id: str) -> None:
         if source_session_id != self.brain_session_id or user_id != self.user_id:
@@ -207,6 +341,27 @@ class BgrController:
         if command.action == "start_review":
             return await self._start_review(command)
         if command.action == "status":
+            async with self._callbacks_lock:
+                pending = []
+                for source in self.connections.values():
+                    for receipt in await self.mailbox.reconcile(source):
+                        pending.append((source, receipt.message_id))
+                recipients = {
+                    connection.identity.agent_id: connection
+                    for connection in self.connections.values()
+                }
+                for source, message_id in pending:
+                    envelope = self.store.native_message(
+                        self.user_id,
+                        self.brain_session_id,
+                        self.team_id,
+                        self.fence,
+                        sender_agent_id=source.identity.agent_id,
+                        message_id=message_id,
+                    )
+                    target = recipients.get(envelope.recipient_agent_id)
+                    if target is not None:
+                        await self.mailbox.forward(source, target, message_id)
             if command.round_id is not None:
                 return self.store.review_status(
                     self.user_id, self.brain_session_id, self.team_id, command.round_id
@@ -475,35 +630,49 @@ class BgrControllers:
         team_id: str,
         fence: Fence,
         runtime: BgrHostRuntime,
+        existing_only: bool = False,
     ) -> BgrController:
         async with self._attach_lock:
             old = self._controllers.get(brain_session_id)
             if old is not None:
+                if old.user_id != user_id:
+                    raise OmnigentError("Foreign Brain owner", code=ErrorCode.FORBIDDEN)
                 if old.team_id != team_id or old.fence != fence:
+                    self.remove(brain_session_id, old.fence)
                     raise OmnigentError("Controller fence conflict", code=ErrorCode.CONFLICT)
-                team = self.store.get_team(user_id, brain_session_id, team_id)
-                recovering = bool(
-                    team.runtime_recoveries and team.runtime_recoveries[-1].state == "binding"
-                )
-                if recovering:
-                    session, _, binding = self.store.runtime_recovery_target(user_id, team_id)
-                    if session != brain_session_id:
-                        raise OmnigentError("Foreign Brain recovery", code=ErrorCode.FORBIDDEN)
-                else:
-                    old.authorize(user_id, brain_session_id)
-                    binding = self.store.native_brain_binding(
-                        user_id, brain_session_id, team_id, fence
+                try:
+                    team = self.store.get_team(user_id, brain_session_id, team_id)
+                    recovering = bool(
+                        team.runtime_recoveries and team.runtime_recoveries[-1].state == "binding"
                     )
-                await runtime.verify_generation(binding)
-                await old.brain.inspect()
-                if recovering:
-                    self.store.resume_live_runtime_recovery(
-                        user_id, brain_session_id, team_id, fence, binding=binding
-                    )
-                    if old._heartbeat is None or old._heartbeat.done():
-                        old._heartbeat = asyncio.create_task(
-                            old.maintain_lease(), name=f"bgr-controller-lease-{team_id}"
+                    if recovering:
+                        if existing_only:
+                            raise native_contract_error()
+                        session, _, binding = self.store.runtime_recovery_target(user_id, team_id)
+                        if session != brain_session_id:
+                            raise OmnigentError("Foreign Brain recovery", code=ErrorCode.FORBIDDEN)
+                    else:
+                        current, binding = self.store.live_controller_target(
+                            user_id, brain_session_id
                         )
+                        if current.team_id != team_id:
+                            raise native_contract_error()
+                    async with old._actions_lock, old._callbacks_lock:
+                        await runtime.verify_generation(binding)
+                        await old.brain.inspect()
+                        if not recovering:
+                            await old.restore_connections(binding)
+                        else:
+                            self.store.resume_live_runtime_recovery(
+                                user_id, brain_session_id, team_id, fence, binding=binding
+                            )
+                except BaseException:
+                    self.remove(brain_session_id, fence)
+                    raise
+                if old._heartbeat is None or old._heartbeat.done():
+                    old._heartbeat = asyncio.create_task(
+                        old.maintain_lease(), name=f"bgr-controller-lease-{team_id}"
+                    )
                 return old
             team = self.store.get_team(user_id, brain_session_id, team_id)
             metadata = await runtime.call("brain", {})
@@ -526,13 +695,21 @@ class BgrControllers:
             recovering = bool(
                 team.runtime_recoveries and team.runtime_recoveries[-1].state == "binding"
             )
+            bind_brain = False
             if recovering:
+                if existing_only:
+                    raise native_contract_error()
                 session, _, persisted = self.store.runtime_recovery_target(user_id, team_id)
                 if session != brain_session_id or persisted != binding:
                     raise OmnigentError("Native owner generation changed", code=ErrorCode.CONFLICT)
             else:
-                self.store.native_brain_binding(
-                    user_id, brain_session_id, team_id, fence, binding=binding
+                bind_brain = self.store.reserve_native_brain_binding(
+                    user_id,
+                    brain_session_id,
+                    team_id,
+                    fence,
+                    binding=binding,
+                    existing_only=existing_only,
                 )
             identity = NativeIdentity.model_validate(
                 {
@@ -543,7 +720,7 @@ class BgrControllers:
                     "role": "brain",
                 }
             )
-            if not recovering:
+            if bind_brain:
                 await request(
                     "bgr/thread/bind", {"threadId": thread_id, "identity": identity.wire()}
                 )
@@ -563,6 +740,12 @@ class BgrControllers:
                 runtime=runtime,
                 create_role_session=self.create_role_session,
             )
+            current = self.store.get_team(user_id, brain_session_id, team_id)
+            if (
+                not current.runtime_recoveries
+                or current.runtime_recoveries[-1].state == "attached"
+            ):
+                await controller.restore_connections(binding)
             self._controllers[brain_session_id] = controller
             controller._heartbeat = asyncio.create_task(
                 controller.maintain_lease(), name=f"bgr-controller-lease-{team_id}"

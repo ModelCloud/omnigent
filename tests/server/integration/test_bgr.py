@@ -11,7 +11,14 @@ import httpx
 import pytest
 from starlette.requests import Request
 
-from omnigent.bgr import Fence, LaunchRequest, LeaseRequest, NativeBrainBinding, TeamCreate
+from omnigent.bgr import (
+    Fence,
+    LaunchRequest,
+    LeaseRequest,
+    NativeBinding,
+    NativeBrainBinding,
+    TeamCreate,
+)
 from omnigent.bgr_supervision import (
     ClosedGenerationManifest,
     GenerationStopReceipt,
@@ -19,12 +26,15 @@ from omnigent.bgr_supervision import (
     supervision_digest,
 )
 from omnigent.errors import OmnigentError
+from omnigent.harnesses.codex_native.bgr import NativeCapabilities
+from omnigent.harnesses.codex_native.bgr_messages import NativeBgrConnection
 from omnigent.host.frames import (
     CAP_BGR_SUPERVISOR_STOP,
     HostHelloFrame,
     HostStopBgrGenerationFrame,
     decode_host_frame,
 )
+from omnigent.runner.bgr_mailbox import BgrNativeMailbox
 from omnigent.runner.bgr_runtime import load_bgr_team_config
 from omnigent.runner.identity import (
     ORCHESTRATION_SOURCE_HEADER,
@@ -46,6 +56,7 @@ from omnigent.stores.conversation_store import CREATED_BY_SESSION_LABEL_KEY
 from omnigent.stores.conversation_store.sqlalchemy_store import SqlAlchemyConversationStore
 from omnigent.stores.file_store.sqlalchemy_store import SqlAlchemyFileStore
 from omnigent.stores.permission_store.sqlalchemy_store import SqlAlchemyPermissionStore
+from tests.harnesses.codex_native.test_bgr_messages import CAPTURED, NativeProcess
 from tests.host.test_bgr_supervisor import request_stop as request_stop
 from tests.server.test_bgr_generation_auth import accounts_provider as accounts_provider
 from tests.server.test_host_registry import FakeWebSocket
@@ -229,9 +240,13 @@ async def test_generation_http_foundation_uses_real_ledger_without_launch_enable
         ).status_code >= 400
 
 
-async def test_http_control_and_callback_fail_closed_before_brain_attach(bgr_environment):
+async def test_http_control_and_callback_fail_closed_before_brain_attach(
+    bgr_environment, monkeypatch
+):
     application, brain, worker, _, _ = bgr_environment
     app = application()
+    runner_client = AsyncMock(side_effect=AssertionError("Missing binding must never attach"))
+    monkeypatch.setattr("omnigent.server.routes.sessions._get_runner_client", runner_client)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -267,6 +282,189 @@ async def test_http_control_and_callback_fail_closed_before_brain_attach(bgr_env
         )
         assert response.status_code == 403
     await app.state.bgr_controllers.close()
+    runner_client.assert_not_awaited()
+
+
+@pytest.mark.parametrize("entry", ["control", "callback"])
+@pytest.mark.parametrize("cached", [False, True])
+@pytest.mark.parametrize("expired", [False, True])
+async def test_http_same_live_entry_restores_without_thread_ready_or_startup_replay(
+    bgr_environment, monkeypatch, entry, cached, expired
+):
+    application, brain, worker, _, now = bgr_environment
+    initial = application()
+    store = initial.state.bgr_controllers.store
+    child = worker()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=initial), base_url="http://test"
+    ) as client:
+        team, fence = await create_team(client, brain)
+        task = (
+            await client.post(
+                f"{PREFIX}/teams/{team['team_id']}/tasks",
+                headers=headers(brain),
+                json=task_request(child, fence),
+            )
+        ).json()
+    team_id, fence = team["team_id"], Fence.model_validate(fence)
+    binding = NativeBrainBinding(
+        team_id=team_id,
+        epoch=fence.epoch,
+        thread_id=str(uuid4()),
+        runtime_id=uuid4().hex,
+        host_id=HOST,
+    )
+    store.native_brain_binding("alice", brain, team_id, fence, binding=binding)
+    store.bind_native(
+        "alice",
+        brain,
+        team_id,
+        fence,
+        NativeBinding(
+            team_id=team_id,
+            epoch=fence.epoch,
+            attempt_id=task["attempt"]["attempt_id"],
+            thread_id=str(uuid4()),
+        ),
+    )
+    mailbox = BgrNativeMailbox(store, "alice", brain, team_id, fence, root="/work")
+    processes = {}
+    for attempt in (None, task["attempt"]["attempt_id"]):
+        identity, thread_id = mailbox.identity(attempt)
+        native = NativeProcess()
+        native.connection = NativeBgrConnection(
+            thread_id, identity, native.request, NativeCapabilities.model_validate(CAPTURED)
+        )
+        processes[identity.session_id] = native
+    anchor = store.drain("alice", child, team_id)[0]
+    await mailbox.forward(
+        processes[brain].connection, processes[child].connection, anchor.message_id
+    )
+    operations = []
+
+    async def runtime_response(request):
+        body = json.loads(request.content)
+        operation, parameters = body["operation"], body["parameters"]
+        operations.append((operation, parameters))
+        if operation == "brain":
+            return httpx.Response(
+                200,
+                json={
+                    "thread_id": binding.thread_id,
+                    "runtime_id": binding.runtime_id,
+                    "host_id": HOST,
+                },
+            )
+        assert operation == "rpc"
+        method = parameters["method"]
+        if method == "bgr/capabilities/read":
+            return httpx.Response(200, json={"result": CAPTURED})
+        result = await processes[parameters["session_id"]].request(method, parameters["params"])
+        return httpx.Response(200, json=result)
+
+    app = initial if cached else application()
+    startup = AsyncMock()
+    monkeypatch.setattr(app.state.startup_inputs, "session_ready", startup)
+    mark_running = Mock(side_effect=AssertionError("Lazy restore must not mark launch running"))
+    monkeypatch.setattr(app.state.bgr_controllers.store, "mark_launch_running", mark_running)
+    from omnigent.server.routes.bgr_control import _host_runtime
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(runtime_response), base_url="http://runner"
+    ) as runtime_client:
+        monkeypatch.setattr(
+            "omnigent.server.routes.sessions._get_runner_client",
+            AsyncMock(return_value=runtime_client),
+        )
+        if cached:
+            await app.state.bgr_controllers.attach(
+                user_id="alice",
+                brain_session_id=brain,
+                team_id=team_id,
+                fence=fence,
+                runtime=_host_runtime(runtime_client, brain),
+                existing_only=True,
+            )
+        else:
+            with pytest.raises(OmnigentError):
+                app.state.bgr_controllers.get(brain)
+        previous = store.get_team("alice", brain, team_id)
+        if expired:
+            now[0] = previous.lease_expires_at + 1
+        operations.clear()
+        callback = processes[child].emit(
+            processes[brain].connection, anchor, "surviving-callback", "result"
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            if entry == "control":
+                response = await client.post(
+                    f"{PREFIX}/control",
+                    headers=headers(brain),
+                    json={"action": "status", "action_id": uuid4().hex},
+                )
+            else:
+                response = await client.post(
+                    f"{PREFIX}/teams/{team_id}/native-callback",
+                    headers=headers(brain),
+                    json={
+                        "session_id": child,
+                        "thread_id": processes[child].connection.thread_id,
+                        "method": "bgr/message/emitted",
+                        "params": callback,
+                    },
+                )
+            assert response.status_code == 200, response.text
+            if entry == "control":
+                response = await client.post(
+                    f"{PREFIX}/control",
+                    headers=headers(brain),
+                    json={"action": "status", "action_id": uuid4().hex},
+                )
+                assert response.status_code == 200, response.text
+        restored = app.state.bgr_controllers.get(brain)
+        assert set(restored.connections) == {brain, child}
+        after = store.get_team("alice", brain, team_id)
+        assert after.epoch == previous.epoch and after.controller_id == previous.controller_id
+        assert after.lease_expires_at >= previous.lease_expires_at
+        assert list(processes[child].pending) == [anchor.message_id]
+        assert not any(operation not in {"brain", "rpc"} for operation, _ in operations)
+        assert not any(
+            parameters.get("method") in {"bgr/thread/bind", "bgr/message/record"}
+            for _, parameters in operations
+        )
+        startup.assert_not_awaited()
+        mark_running.assert_not_called()
+        assert len(store.drain("alice", brain, team_id)) == 1
+        assert store.drain("alice", brain, team_id)[0].consumed_at is None
+        assert len(processes[brain].pending) == 1
+        assert list(processes[brain].outgoing) == [anchor.message_id]
+        from omnigent.db import current_workspace_id
+        from omnigent.db.bgr_models import SqlBgrNativeBinding
+
+        with store._sessions("remove_durable_brain_while_controller_is_cached") as db:
+            db.delete(
+                db.get(SqlBgrNativeBinding, (current_workspace_id(), team["brain_agent_id"]))
+            )
+        operations.clear()
+        heartbeat = restored._heartbeat
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                f"{PREFIX}/control",
+                headers=headers(brain),
+                json={"action": "status", "action_id": uuid4().hex},
+            )
+        assert response.status_code == 409, response.text
+        with pytest.raises(OmnigentError):
+            app.state.bgr_controllers.get(brain)
+        assert heartbeat is not None and heartbeat.cancelling()
+        assert operations == []
+        assert store.get_team("alice", brain, team_id).lease_expires_at == after.lease_expires_at
+        await app.state.bgr_controllers.close()
+    await initial.state.bgr_controllers.close()
 
 
 @pytest.mark.parametrize("rejected_at", [None, "thread", "launch"])

@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from omnigent.bgr import (
     Ack,
+    Agent,
     Checkpoint,
     ConfigUpdate,
     Contract,
@@ -28,9 +29,11 @@ from omnigent.bgr import (
     TeamCreate,
     Workspace,
 )
-from omnigent.db import workspace_scope
-from omnigent.db.bgr_models import SqlBgrEnvelope, SqlBgrTeam
+from omnigent.db import current_workspace_id, workspace_scope
+from omnigent.db.account_authority import account_authority_scope
+from omnigent.db.bgr_models import SqlBgrAgent, SqlBgrEnvelope, SqlBgrNativeBinding, SqlBgrTeam
 from omnigent.db.compression import encode
+from omnigent.db.db_models import SqlUser
 from omnigent.db.utils import get_or_create_engine
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.stores import bgr_store
@@ -51,6 +54,136 @@ def store(db_uri):
     store.create(OWNER, BRAIN, TeamCreate(team_id=TEAM, config=CONFIG))
     store.acquire(OWNER, BRAIN, TEAM, LeaseRequest(controller_id=CONTROLLER))
     return store
+
+
+@pytest.fixture
+def native_store(db_uri):
+    store = BgrStore(db_uri)
+    profile = PROFILE.model_copy(update={"harness": "codex-native"})
+    config = CONFIG.model_copy(update={"brain": profile, "grunt": profile, "reviewers": [profile]})
+    store.create(OWNER, BRAIN, TeamCreate(team_id=TEAM, config=config))
+    store.acquire(OWNER, BRAIN, TEAM, LeaseRequest(controller_id=CONTROLLER))
+    return store
+
+
+@pytest.mark.parametrize("fault", [None, "terminal", "missing", "team", "session"])
+def test_native_anchor_recipient_is_exact_historical_identity_without_execution_authority(
+    store, fault
+):
+    task = store.reserve(OWNER, BRAIN, TEAM, reservation())
+    fence = Fence(controller_id=CONTROLLER, epoch=1)
+    anchor = store.drain(OWNER, task.attempt.session_id, TEAM)[0]
+    if fault == "terminal":
+        store.close(
+            OWNER,
+            BRAIN,
+            TEAM,
+            TaskClose(
+                **fence.model_dump(),
+                attempt_id=task.attempt.attempt_id,
+                outcome="completed",
+                stop_confirmed=True,
+            ),
+        )
+    elif fault:
+        with store._sessions("damage_historical_anchor_recipient") as db:
+            row = db.get(SqlBgrAgent, (current_workspace_id(), task.attempt.agent_id))
+            if fault == "missing":
+                db.delete(row)
+            elif fault == "team":
+                row.team_id = uuid4().hex
+            else:
+                row.document = (
+                    Agent.model_validate_json(row.document)
+                    .model_copy(update={"session_id": uuid4().hex})
+                    .model_dump_json()
+                )
+    if fault in {"missing", "team", "session"}:
+        with pytest.raises(OmnigentError):
+            store.native_message_recipient(
+                OWNER,
+                BRAIN,
+                TEAM,
+                fence,
+                sender_agent_id=anchor.sender_agent_id,
+                message_id=anchor.message_id,
+            )
+    else:
+        agent = store.native_message_recipient(
+            OWNER,
+            BRAIN,
+            TEAM,
+            fence,
+            sender_agent_id=anchor.sender_agent_id,
+            message_id=anchor.message_id,
+        )
+        assert (
+            agent.agent_id == task.attempt.agent_id and agent.session_id == task.attempt.session_id
+        )
+        assert agent.role == "grunt"
+        assert store.drain(OWNER, task.attempt.session_id, TEAM)[0].consumed_at is None
+
+
+@pytest.mark.parametrize("fault", ["overflow", "orphan", "foreign"])
+def test_current_native_inventory_is_bounded_and_rejects_corrupt_bindings(
+    native_store, monkeypatch, fault
+):
+    from omnigent.bgr import NativeBinding
+
+    store = native_store
+    task = store.reserve(OWNER, BRAIN, TEAM, reservation())
+    fence = Fence(controller_id=CONTROLLER, epoch=1)
+    store.bind_native(
+        OWNER,
+        BRAIN,
+        TEAM,
+        fence,
+        NativeBinding(
+            team_id=TEAM, epoch=1, attempt_id=task.attempt.attempt_id, thread_id=str(uuid4())
+        ),
+    )
+    if fault == "overflow":
+        monkeypatch.setattr(bgr_store, "MAX_TASKS", 0)
+    else:
+        with store._sessions("damage_current_native_inventory") as db:
+            row = db.get(SqlBgrNativeBinding, (current_workspace_id(), task.attempt.attempt_id))
+            if fault == "foreign":
+                row.team_id = uuid4().hex
+            else:
+                row.id = uuid4().hex
+    with pytest.raises(OmnigentError):
+        store.native_assignments(OWNER, BRAIN, TEAM, fence)
+    if fault == "foreign":
+        with pytest.raises(OmnigentError):
+            store.native_assignment(OWNER, BRAIN, TEAM, task.attempt.attempt_id, fence)
+
+
+def test_verified_live_renewal_rechecks_captured_account_generation_at_commit(native_store):
+    store = native_store
+    fence = Fence(controller_id=CONTROLLER, epoch=1)
+    binding = NativeBrainBinding(
+        team_id=TEAM, epoch=1, runtime_id=uuid4().hex, host_id=HOST, thread_id=str(uuid4())
+    )
+    store.native_brain_binding(OWNER, BRAIN, TEAM, fence, binding=binding)
+    before = store.get_team(OWNER, BRAIN, TEAM)
+    with store._sessions("register_same_live_account") as db:
+        db.add(SqlUser(workspace_id=current_workspace_id(), id=OWNER, account_generation="a" * 32))
+    with account_authority_scope(OWNER, "a" * 32):
+        team, proof = store.live_controller_target(OWNER, BRAIN)
+        assert team.controller_id == fence.controller_id and proof == binding
+        assignments = store.native_assignments(OWNER, BRAIN, TEAM, fence, live_binding=binding)
+        with store._sessions("revoke_account_after_native_inspection") as db:
+            db.get(SqlUser, (current_workspace_id(), OWNER)).account_generation = "b" * 32
+        with pytest.raises(OmnigentError):
+            store.resume_verified_live_controller(
+                OWNER, BRAIN, TEAM, fence, binding=binding, assignments=assignments
+            )
+    after = store.get_team(OWNER, BRAIN, TEAM)
+    assert (after.epoch, after.controller_id, after.lease_expires_at) == (
+        before.epoch,
+        before.controller_id,
+        before.lease_expires_at,
+    )
 
 
 def reservation(**overrides):

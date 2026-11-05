@@ -665,7 +665,14 @@ class BgrStore:
         )
         if row is None:
             raise _forbidden()
-        return Agent.model_validate_json(row.document)
+        agent = Agent.model_validate_json(row.document)
+        if (
+            agent.team_id != team_id
+            or agent.agent_id != row.id
+            or agent.session_id != row.session_id
+        ):
+            raise _conflict("BGR agent identity changed")
+        return agent
 
     @staticmethod
     def _attempt(db: Session, team_id: str, attempt_id: str) -> SqlBgrAttempt:
@@ -738,6 +745,108 @@ class BgrStore:
             elif binding.epoch != row.epoch:
                 raise _conflict("Recovery requires the recorded native runtime generation")
             return agent.session_id, team, binding
+
+    def live_controller_target(
+        self, user_id: str, session_id: str
+    ) -> tuple[Team, NativeBrainBinding]:
+        """Read an existing owned generation, including after its lease expires."""
+        with self._sessions("resolve_same_live_controller") as db:
+            row = db.scalar(
+                select(SqlBgrTeam).where(
+                    SqlBgrTeam.workspace_id == current_workspace_id(),
+                    SqlBgrTeam.owner_id == user_id,
+                    SqlBgrTeam.brain_session_id == session_id,
+                )
+            )
+            if row is None or row.controller_id is None:
+                raise _conflict("No durable native controller is available")
+            fence = Fence(controller_id=row.controller_id, epoch=row.epoch)
+            binding = self._live_controller_binding(db, row, session_id, fence)
+            return _team(row), binding
+
+    def _live_controller_binding(
+        self, db: Session, row: SqlBgrTeam, session_id: str, fence: Fence
+    ) -> NativeBrainBinding:
+        self._brain(row, session_id)
+        team = _team(row)
+        if (
+            row.epoch != fence.epoch
+            or row.controller_id != fence.controller_id
+            or team.team_id != row.id
+            or team.owner_id != row.owner_id
+            or team.brain_session_id != session_id
+            or (team.runtime_recoveries and team.runtime_recoveries[-1].state != "attached")
+            or any(recovery.supervised for recovery in team.runtime_recoveries)
+        ):
+            raise _conflict("Same-live controller authority changed")
+        agent = self._agent(db, row.id, session_id)
+        mapping = db.get(SqlBgrNativeBinding, (current_workspace_id(), team.brain_agent_id))
+        if (
+            agent.agent_id != team.brain_agent_id
+            or agent.team_id != row.id
+            or agent.session_id != session_id
+            or agent.role != "brain"
+            or mapping is None
+        ):
+            raise _conflict("Same-live recovery requires an existing native Brain binding")
+        binding = NativeBrainBinding.model_validate_json(mapping.document)
+        if (
+            binding.team_id != row.id
+            or binding.epoch != fence.epoch
+            or binding.runtime_id is None
+            or binding.host_id is None
+            or mapping.team_id != row.id
+            or UUID(mapping.thread_id) != UUID(binding.thread_id)
+        ):
+            raise _conflict("Same-live native Brain identity changed")
+        launch = db.get(SqlBgrLaunch, (current_workspace_id(), row.id))
+        if launch is not None:
+            try:
+                intent = self._supervised_intent(launch.document)
+            except ValueError:
+                raise _conflict("Same-live launch metadata is invalid") from None
+            if (
+                launch.owner_id != row.owner_id
+                or intent.team_id != row.id
+                or intent.brain_session_id != session_id
+                or intent.host_id != binding.host_id
+                or intent.controller_id != fence.controller_id
+                or intent.state == "blocked"
+                or intent.supervised_generations
+            ):
+                raise _conflict("Same-live launch authority is unavailable")
+        return binding
+
+    def resume_verified_live_controller(
+        self,
+        user_id: str,
+        session_id: str,
+        team_id: str,
+        fence: Fence,
+        *,
+        binding: NativeBrainBinding,
+        assignments: list[NativeAssignment],
+    ) -> Team:
+        """Trusted native inspection may renew only the unchanged controller and inventory."""
+
+        def apply(db: Session) -> Team:
+            require_active_account(db, user_id)
+            row = self._owned(db, team_id, user_id)
+            if self._live_controller_binding(db, row, session_id, fence) != binding:
+                raise _conflict("Same-live native generation changed")
+            current = self._native_assignments(
+                db, row, user_id, session_id, team_id, fence, binding
+            )
+            if [(item.attempt, item.binding) for item in current] != [
+                (item.attempt, item.binding) for item in assignments
+            ]:
+                raise _conflict("Same-live native inventory changed during inspection")
+            row.lease_expires_at_us = max(
+                row.lease_expires_at_us, self._now_us() + 300 * _MICROSECONDS
+            )
+            return _team(row)
+
+        return self._write("renew_verified_same_live_controller", apply)
 
     def begin_runtime_recovery(
         self,
@@ -1549,32 +1658,85 @@ class BgrStore:
             return read(db)
 
     def native_assignments(
-        self, user_id: str, session_id: str, team_id: str, fence: Fence
+        self,
+        user_id: str,
+        session_id: str,
+        team_id: str,
+        fence: Fence,
+        *,
+        live_binding: NativeBrainBinding | None = None,
     ) -> list[NativeAssignment]:
         with self._sessions("read_current_native_role_bindings") as db:
-            team = self._owned(db, team_id, user_id)
+            team = self._owned(db, team_id, user_id, lock=live_binding is None)
+            return self._native_assignments(
+                db, team, user_id, session_id, team_id, fence, live_binding
+            )
+
+    def _native_assignments(
+        self,
+        db: Session,
+        team: SqlBgrTeam,
+        user_id: str,
+        session_id: str,
+        team_id: str,
+        fence: Fence,
+        live_binding: NativeBrainBinding | None,
+    ) -> list[NativeAssignment]:
+        if live_binding is None:
             self._fence(team, session_id, fence)
-            bindings = db.scalars(
-                select(SqlBgrNativeBinding).where(
+        elif self._live_controller_binding(db, team, session_id, fence) != live_binding:
+            raise _conflict("Same-live native generation changed")
+        bindings = list(
+            db.execute(
+                select(SqlBgrNativeBinding, SqlBgrAttempt)
+                .outerjoin(
+                    SqlBgrAttempt,
+                    (SqlBgrAttempt.workspace_id == SqlBgrNativeBinding.workspace_id)
+                    & (SqlBgrAttempt.id == SqlBgrNativeBinding.id),
+                )
+                .where(
                     SqlBgrNativeBinding.workspace_id == current_workspace_id(),
-                    SqlBgrNativeBinding.team_id == team_id,
+                    (SqlBgrNativeBinding.team_id == team_id) | (SqlBgrAttempt.team_id == team_id),
                     SqlBgrNativeBinding.id != _team(team).brain_agent_id,
                 )
+                .order_by(SqlBgrNativeBinding.id)
+                .limit(MAX_TASKS + 1)
             )
-            current = []
-            for binding_row in bindings:
-                binding = NativeBinding.model_validate_json(binding_row.document)
-                if binding.epoch != fence.epoch:
-                    continue
-                row = self._attempt(db, team_id, binding.attempt_id)
-                attempt = Attempt.model_validate_json(row.document)
-                if attempt.state == "reserved" and attempt.epoch == fence.epoch:
-                    current.append(
-                        self._native_assignment(
-                            db, user_id, session_id, team_id, attempt.attempt_id, fence
-                        )
+        )
+        if len(bindings) > MAX_TASKS:
+            raise _conflict("Native assignment retention limit exceeded")
+        current = []
+        for binding_row, row in bindings:
+            binding = NativeBinding.model_validate_json(binding_row.document)
+            if (
+                row is None
+                or binding_row.team_id != team_id
+                or binding.team_id != team_id
+                or binding.attempt_id != binding_row.id
+                or UUID(binding.thread_id) != UUID(binding_row.thread_id)
+            ):
+                raise _conflict("Native binding has no exact durable assignment")
+            attempt = Attempt.model_validate_json(row.document)
+            if (
+                attempt.attempt_id != row.id
+                or attempt.team_id != team_id
+                or row.team_id != team_id
+                or attempt.task_id != row.task_id
+            ):
+                raise _conflict("Native assignment identity changed")
+            if attempt.state == "reserved" and attempt.epoch == fence.epoch:
+                current.append(
+                    self._native_assignment(
+                        db,
+                        user_id,
+                        session_id,
+                        team_id,
+                        attempt.attempt_id,
+                        fence,
+                        live_binding=live_binding,
                     )
-            return current
+                )
+        return current
 
     def _native_assignment(
         self,
@@ -1585,9 +1747,14 @@ class BgrStore:
         attempt_id: str,
         fence: Fence,
         binding: NativeBinding | None = None,
+        *,
+        live_binding: NativeBrainBinding | None = None,
     ) -> NativeAssignment:
-        team = self._owned(db, team_id, user_id)
-        self._fence(team, session_id, fence)
+        team = self._owned(db, team_id, user_id, lock=live_binding is None)
+        if live_binding is None:
+            self._fence(team, session_id, fence)
+        elif self._live_controller_binding(db, team, session_id, fence) != live_binding:
+            raise _conflict("Same-live native generation changed")
         row = self._attempt(db, team_id, attempt_id)
         attempt = Attempt.model_validate_json(row.document)
         if attempt.state != "reserved" or attempt.epoch != fence.epoch:
@@ -1620,6 +1787,23 @@ class BgrStore:
             binding = NativeBinding.model_validate_json(existing.document)
         if binding.epoch != fence.epoch:
             raise _conflict("Native binding belongs to an older epoch; replacement is unsupported")
+        if existing is not None and (
+            existing.team_id != team_id or UUID(existing.thread_id) != UUID(binding.thread_id)
+        ):
+            raise _conflict("Native binding columns do not match its immutable identity")
+        agent = self._agent(db, team_id, attempt.session_id)
+        if (
+            attempt.team_id != team_id
+            or attempt.attempt_id != attempt_id
+            or binding.team_id != team_id
+            or binding.attempt_id != attempt_id
+            or agent.team_id != team_id
+            or agent.agent_id != attempt.agent_id
+            or agent.session_id != attempt.session_id
+            or agent.profile != attempt.profile
+            or agent.role != ("reviewer" if attempt.review_round_id is not None else "grunt")
+        ):
+            raise _conflict("Native role does not match its durable assignment")
         return NativeAssignment(team=_team(team), attempt=attempt, binding=binding)
 
     def bind_native(
@@ -1718,19 +1902,68 @@ class BgrStore:
         binding: NativeBrainBinding | None = None,
     ) -> NativeBrainBinding:
         """Reserve or read the Brain mapping without inventing a worker assignment."""
+        return self._native_brain_binding(user_id, session_id, team_id, fence, binding=binding)[0]
 
-        def apply(db: Session) -> NativeBrainBinding:
+    def reserve_native_brain_binding(
+        self,
+        user_id: str,
+        session_id: str,
+        team_id: str,
+        fence: Fence,
+        *,
+        binding: NativeBrainBinding,
+        existing_only: bool = False,
+    ) -> bool:
+        """Return whether this transaction reserved a new native identity to bind."""
+        return self._native_brain_binding(
+            user_id,
+            session_id,
+            team_id,
+            fence,
+            binding=binding,
+            inspect_existing=True,
+            existing_only=existing_only,
+        )[1]
+
+    def _native_brain_binding(
+        self,
+        user_id: str,
+        session_id: str,
+        team_id: str,
+        fence: Fence,
+        *,
+        binding: NativeBrainBinding | None,
+        inspect_existing: bool = False,
+        existing_only: bool = False,
+    ) -> tuple[NativeBrainBinding, bool]:
+        def apply(db: Session) -> tuple[NativeBrainBinding, bool]:
             team = self._owned(db, team_id, user_id)
+            state = _team(team)
+            if inspect_existing and (
+                not state.runtime_recoveries or state.runtime_recoveries[-1].state == "attached"
+            ):
+                existing = db.get(
+                    SqlBgrNativeBinding, (current_workspace_id(), state.brain_agent_id)
+                )
+                if existing is not None:
+                    if self._live_controller_binding(db, team, session_id, fence) != binding:
+                        raise _conflict("Native Brain already has another immutable binding")
+                    assert binding is not None
+                    return binding, False
+            if existing_only:
+                raise _conflict("Same-live attach requires an existing native Brain binding")
             self._fence(team, session_id, fence, allow_recovery=binding is not None)
             if _team(team).config.brain.harness != "codex-native":
                 raise _conflict("Native Brain requires an explicit codex-native profile")
             brain_agent_id = _team(team).brain_agent_id
             key = (current_workspace_id(), brain_agent_id)
             existing = db.get(SqlBgrNativeBinding, key)
+            reserved = False
             if binding is not None:
                 if binding.team_id != team_id or binding.epoch != fence.epoch:
                     raise _conflict("Native Brain binding does not match the team epoch")
                 if existing is None:
+                    reserved = True
                     db.add(
                         SqlBgrNativeBinding(
                             workspace_id=current_workspace_id(),
@@ -1758,6 +1991,7 @@ class BgrStore:
                         raise _conflict("Brain already has another immutable native binding")
                     existing.thread_id = binding.thread_id
                     existing.document = binding.model_dump_json()
+                    reserved = True
                     team.document = (
                         _team(team)
                         .model_copy(
@@ -1776,8 +2010,8 @@ class BgrStore:
                 binding_value = NativeBrainBinding.model_validate_json(existing.document)
                 if binding_value.epoch != fence.epoch:
                     raise _conflict("Brain native binding requires a proven epoch transition")
-                return binding_value
-            return binding
+                return binding_value, False
+            return binding, reserved
 
         return self._write("reserve_or_read_native_brain_mapping", apply)
 
@@ -1790,28 +2024,85 @@ class BgrStore:
         *,
         sender_agent_id: str,
         message_id: str,
+        live_binding: NativeBrainBinding | None = None,
     ) -> Envelope:
         """Read an exact durable source anchor under the live Brain controller fence."""
 
         def read(db: Session) -> Envelope:
-            team = self._owned(db, team_id, user_id)
-            self._fence(team, session_id, fence)
-            row = db.scalar(
-                select(SqlBgrEnvelope).where(
-                    SqlBgrEnvelope.workspace_id == current_workspace_id(),
-                    SqlBgrEnvelope.team_id == team_id,
-                    SqlBgrEnvelope.sender_agent_id == sender_agent_id,
-                    SqlBgrEnvelope.message_id == message_id,
-                )
+            return self._native_message(
+                db, user_id, session_id, team_id, fence, sender_agent_id, message_id, live_binding
             )
-            if row is None:
-                raise _conflict("Native message has no durable source anchor")
-            envelope = _envelope(row)
-            if envelope.epoch != fence.epoch or envelope.discard is not None:
-                raise _conflict("Native source anchor is stale or discarded")
-            return envelope
 
         return self._write("read_exact_native_source_anchor", read)
+
+    def _native_message(
+        self,
+        db: Session,
+        user_id: str,
+        session_id: str,
+        team_id: str,
+        fence: Fence,
+        sender_agent_id: str,
+        message_id: str,
+        live_binding: NativeBrainBinding | None = None,
+    ) -> Envelope:
+        team = self._owned(db, team_id, user_id, lock=live_binding is None)
+        if live_binding is None:
+            self._fence(team, session_id, fence)
+        elif self._live_controller_binding(db, team, session_id, fence) != live_binding:
+            raise _conflict("Same-live native generation changed")
+        row = db.scalar(
+            select(SqlBgrEnvelope).where(
+                SqlBgrEnvelope.workspace_id == current_workspace_id(),
+                SqlBgrEnvelope.team_id == team_id,
+                SqlBgrEnvelope.sender_agent_id == sender_agent_id,
+                SqlBgrEnvelope.message_id == message_id,
+            )
+        )
+        if row is None:
+            raise _conflict("Native message has no durable source anchor")
+        envelope = _envelope(row)
+        if (
+            envelope.team_id != team_id
+            or envelope.sender_agent_id != sender_agent_id
+            or envelope.message_id != message_id
+            or envelope.recipient_agent_id != row.recipient_agent_id
+            or envelope.epoch != fence.epoch
+            or envelope.discard is not None
+        ):
+            raise _conflict("Native source anchor is stale or discarded")
+        return envelope
+
+    def native_message_recipient(
+        self,
+        user_id: str,
+        session_id: str,
+        team_id: str,
+        fence: Fence,
+        *,
+        sender_agent_id: str,
+        message_id: str,
+    ) -> Agent:
+        """Read historical recipient identity, never authority to revive its attempt."""
+
+        def read(db: Session) -> Agent:
+            envelope = self._native_message(
+                db, user_id, session_id, team_id, fence, sender_agent_id, message_id
+            )
+            row = db.get(SqlBgrAgent, (current_workspace_id(), envelope.recipient_agent_id))
+            if row is None:
+                raise _conflict("Native anchor recipient is missing")
+            agent = Agent.model_validate_json(row.document)
+            if (
+                row.team_id != team_id
+                or agent.team_id != team_id
+                or agent.agent_id != row.id
+                or agent.session_id != row.session_id
+            ):
+                raise _conflict("Native anchor recipient identity changed")
+            return agent
+
+        return self._write("read_historical_native_anchor_recipient", read)
 
     def checkpoint(self, user_id: str, session_id: str, team_id: str, body: Checkpoint) -> Attempt:
         def apply(db: Session) -> Attempt:

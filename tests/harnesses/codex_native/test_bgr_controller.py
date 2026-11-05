@@ -5,8 +5,17 @@ from uuid import uuid4
 
 import pytest
 
+from omnigent.bgr import Attempt, LaunchIntent, TaskClose, Team
 from omnigent.bgr_control import BgrControl
-from omnigent.bgr_review import ReviewEvaluation
+from omnigent.bgr_review import ReviewEvaluation, ReviewRound
+from omnigent.db import current_workspace_id
+from omnigent.db.bgr_models import (
+    SqlBgrAttempt,
+    SqlBgrLaunch,
+    SqlBgrNativeBinding,
+    SqlBgrReviewRound,
+    SqlBgrTeam,
+)
 from omnigent.errors import OmnigentError
 from omnigent.harnesses.codex_native.bgr import NativeCapabilities
 from omnigent.harnesses.codex_native.bgr_messages import (
@@ -20,14 +29,15 @@ from tests.harnesses.codex_native.test_bgr_messages import NativeProcess
 from tests.harnesses.codex_native.test_bgr_messages import route as route
 from tests.stores.test_bgr_recovery import recovery_store as recovery_store
 from tests.stores.test_bgr_recovery import replacement_recovery as replacement_recovery
+from tests.stores.test_bgr_recovery import supervised_admission as supervised_admission
 from tests.stores.test_bgr_review_store import message as review_message
-from tests.stores.test_bgr_store import BRAIN, CONTRACT, HOST, OWNER, SHA, TEAM
+from tests.stores.test_bgr_store import BRAIN, CONTRACT, HOST, OWNER, SHA, TEAM, reservation
 
 
 @pytest.fixture
 async def controller(route):
-    mailbox, _, brain, _ = route
-    processes = {BRAIN: brain}
+    mailbox, task, brain, worker = route
+    processes = {BRAIN: brain, task.attempt.session_id: worker}
     calls = []
     role_sessions = AsyncMock()
     runtime_id = mailbox.store.native_brain_binding(OWNER, BRAIN, TEAM, mailbox.fence).runtime_id
@@ -146,6 +156,561 @@ async def test_same_live_attach_inspects_owner_and_rejects_changed_generation(co
             fence=current.fence,
             runtime=BgrHostRuntime(BRAIN, changed),
         )
+
+
+@pytest.mark.parametrize("cached", [False, True])
+@pytest.mark.parametrize("expired", [False, True])
+async def test_same_live_restore_preserves_grunt_mail_peers_and_adjudication(
+    controller, monkeypatch, cached, expired
+):
+    current, processes, calls, role_sessions = controller
+    worker = next(
+        process for process in processes.values() if process.connection.identity.role == "grunt"
+    )
+    identity = worker.connection.identity
+    anchor = current.store.drain(OWNER, identity.session_id, TEAM)[0]
+    await current.mailbox.forward(
+        current.brain, current.connections[identity.session_id], anchor.message_id
+    )
+    previous_lease = current.store.get_team(OWNER, BRAIN, TEAM).lease_expires_at
+    if expired:
+        monkeypatch.setattr(current.store, "_clock", lambda: previous_lease + 1)
+    registry = BgrControllers(current.store, role_sessions)
+    if cached:
+        registry._controllers[BRAIN] = current
+    calls.clear()
+    try:
+        restored = await registry.attach(
+            user_id=OWNER,
+            brain_session_id=BRAIN,
+            team_id=TEAM,
+            fence=current.fence,
+            runtime=current.runtime,
+            existing_only=True,
+        )
+        assert set(restored.connections) == set(processes)
+        assert restored.fence == current.fence
+        assert all(operation in {"brain", "rpc"} for operation, _ in calls)
+        assert {params["method"] for operation, params in calls if operation == "rpc"} <= {
+            "bgr/capabilities/read",
+            "bgr/thread/inspect",
+        }
+        role_sessions.assert_not_awaited()
+        assert list(worker.pending) == [anchor.message_id]
+        callback = worker.emit(restored.brain, anchor, "surviving-question", "question")
+        await restored.native_callback(
+            session_id=identity.session_id,
+            thread_id=worker.connection.thread_id,
+            method="bgr/message/emitted",
+            params=callback,
+        )
+        question = restored.store.drain(OWNER, BRAIN, TEAM)[0]
+        assert question.consumed_at is None
+        reply = processes[BRAIN].emit(
+            restored.connections[identity.session_id],
+            NativeEnvelope.model_validate(callback["envelope"]),
+            "surviving-answer",
+            "answer",
+        )
+        await restored.native_callback(
+            session_id=BRAIN,
+            thread_id=restored.brain.thread_id,
+            method="bgr/message/emitted",
+            params=reply,
+        )
+        assert len(worker.pending) == 2
+        assert all(
+            item.consumed_at is None
+            for item in restored.store.drain(OWNER, identity.session_id, TEAM)
+        )
+        await restored.execute(
+            OWNER,
+            BRAIN,
+            BgrControl(
+                action="create_grunt", action_id=uuid4().hex, contract=CONTRACT, base_sha=SHA
+            ),
+        )
+        peers = [
+            parameters
+            for method, parameters in processes[BRAIN].calls
+            if method == "bgr/thread/peers"
+        ][-1]["peers"]
+        assert identity.wire() in peers and len(peers) == 2
+        stopped = await restored.execute(
+            OWNER,
+            BRAIN,
+            BgrControl(
+                action="adjudicate",
+                action_id=uuid4().hex,
+                attempt_id=identity.attempt_id,
+                outcome="completed",
+            ),
+        )
+        assert stopped["attempt"]["state"] == "completed"
+        assert identity.session_id not in restored.connections
+        after = restored.store.get_team(OWNER, BRAIN, TEAM)
+        assert after.epoch == current.fence.epoch and after.lease_expires_at > previous_lease
+        with pytest.raises(OmnigentError):
+            await restored.native_callback(
+                session_id=identity.session_id,
+                thread_id=worker.connection.thread_id,
+                method="bgr/message/emitted",
+                params=callback,
+            )
+    finally:
+        await registry.close()
+
+
+@pytest.mark.parametrize("cached", [False, True])
+@pytest.mark.parametrize("expired", [False, True])
+@pytest.mark.parametrize(
+    "loss", ["runtime", "brain_identity", "worker_identity", "brain_cancelled", "worker_cancelled"]
+)
+async def test_same_live_restore_rejects_lost_native_state_without_lease_or_rebind(
+    controller, monkeypatch, cached, expired, loss
+):
+    current, _processes, calls, role_sessions = controller
+    previous = current.store.get_team(OWNER, BRAIN, TEAM)
+    if expired:
+        monkeypatch.setattr(current.store, "_clock", lambda: previous.lease_expires_at + 1)
+    original_call = current.runtime.call
+
+    async def damaged(operation, parameters):
+        result = await original_call(operation, parameters)
+        if operation == "brain" and loss == "runtime":
+            result["runtime_id"] = uuid4().hex
+        if operation == "rpc" and parameters["method"] == "bgr/thread/inspect":
+            if loss.startswith("brain_") == (parameters["session_id"] == BRAIN):
+                snapshot = result["result"]["snapshot"]
+                if loss.endswith("cancelled"):
+                    snapshot["cancelled"] = True
+                elif loss.endswith("identity"):
+                    snapshot["identity"]["agentId"] = uuid4().hex
+        return result
+
+    monkeypatch.setattr(current.runtime, "call", damaged)
+    registry = BgrControllers(current.store, role_sessions)
+    if cached:
+        registry._controllers[BRAIN] = current
+    calls.clear()
+    try:
+        with pytest.raises(OmnigentError):
+            await registry.attach(
+                user_id=OWNER,
+                brain_session_id=BRAIN,
+                team_id=TEAM,
+                fence=current.fence,
+                runtime=current.runtime,
+                existing_only=True,
+            )
+        with pytest.raises(OmnigentError):
+            registry.get(BRAIN)
+        after = current.store.get_team(OWNER, BRAIN, TEAM)
+        assert (after.epoch, after.controller_id, after.lease_expires_at) == (
+            previous.epoch,
+            previous.controller_id,
+            previous.lease_expires_at,
+        )
+        assert all(operation in {"brain", "rpc"} for operation, _ in calls)
+        assert {params["method"] for operation, params in calls if operation == "rpc"} <= {
+            "bgr/capabilities/read",
+            "bgr/thread/inspect",
+        }
+    finally:
+        await registry.close()
+
+
+@pytest.mark.parametrize("mutation", ["attempt", "controller", "recovery"])
+async def test_same_live_renewal_rechecks_inventory_and_fence_after_native_awaits(
+    controller, monkeypatch, mutation
+):
+    current, processes, _, role_sessions = controller
+    previous = current.store.get_team(OWNER, BRAIN, TEAM)
+    monkeypatch.setattr(current.store, "_clock", lambda: previous.lease_expires_at + 1)
+    original_call = current.runtime.call
+    changed = False
+
+    async def concurrent_change(operation, parameters):
+        nonlocal changed
+        result = await original_call(operation, parameters)
+        if (
+            not changed
+            and operation == "rpc"
+            and parameters["session_id"] != BRAIN
+            and parameters["method"] == "bgr/thread/inspect"
+        ):
+            changed = True
+            if mutation == "recovery":
+                _, binding = current.store.live_controller_target(OWNER, BRAIN)
+                current.store.begin_runtime_recovery(
+                    OWNER,
+                    BRAIN,
+                    TEAM,
+                    current.fence,
+                    recovery_id=uuid4().hex,
+                    runtime_id=binding.runtime_id,
+                    replacement_controller_id=uuid4().hex,
+                )
+            else:
+                with current.store._sessions("change_authority_during_native_inspection") as db:
+                    if mutation == "controller":
+                        db.get(
+                            SqlBgrTeam, (current_workspace_id(), TEAM)
+                        ).controller_id = uuid4().hex
+                    else:
+                        identity = processes[parameters["session_id"]].connection.identity
+                        row = db.get(SqlBgrAttempt, (current_workspace_id(), identity.attempt_id))
+                        row.document = (
+                            Attempt.model_validate_json(row.document)
+                            .model_copy(update={"state": "completed"})
+                            .model_dump_json()
+                        )
+                        row.active_writer_key = None
+        return result
+
+    monkeypatch.setattr(current.runtime, "call", concurrent_change)
+    registry = BgrControllers(current.store, role_sessions)
+    try:
+        with pytest.raises(OmnigentError):
+            await registry.attach(
+                user_id=OWNER,
+                brain_session_id=BRAIN,
+                team_id=TEAM,
+                fence=current.fence,
+                runtime=current.runtime,
+                existing_only=True,
+            )
+        assert changed
+        with pytest.raises(OmnigentError):
+            registry.get(BRAIN)
+        after = current.store.get_team(OWNER, BRAIN, TEAM)
+        assert (
+            after.epoch == previous.epoch and after.lease_expires_at <= previous.lease_expires_at
+        )
+    finally:
+        await registry.close()
+
+
+@pytest.mark.parametrize("callback_before_restart", [True, False])
+async def test_cold_restore_keeps_sealed_reviewer_for_sibling_barrier(
+    controller, callback_before_restart
+):
+    current, processes, calls, role_sessions = controller
+    created = await current.execute(
+        OWNER,
+        BRAIN,
+        BgrControl(
+            action="start_review",
+            action_id=uuid4().hex,
+            repository="ModelCloud/omnigent",
+            pr_number=1,
+            base_sha=SHA,
+            head_sha="e" * 40,
+        ),
+    )
+    round = current.store.get_review_round(OWNER, BRAIN, TEAM, created["round_id"])
+    first, second = round.jobs
+    source = processes[first.session_id]
+    first_anchor = NativeEnvelope.model_validate(next(iter(source.pending.values())))
+    first_callback = source.emit(
+        current.brain,
+        first_anchor,
+        "sealed-before-disconnect",
+        "result",
+        payload={"outcome": "no_findings", "findings": [], "coverageLimits": []},
+    )
+    if callback_before_restart:
+        await current.native_callback(
+            session_id=first.session_id,
+            thread_id=source.connection.thread_id,
+            method="bgr/message/emitted",
+            params=first_callback,
+        )
+    else:
+        source = processes[second.session_id]
+        source.emit(
+            current.brain,
+            NativeEnvelope.model_validate(next(iter(source.pending.values()))),
+            "second-result-without-callback",
+            "result",
+            payload={"outcome": "no_findings", "findings": [], "coverageLimits": []},
+        )
+    assert not processes[BRAIN].pending
+    registry = BgrControllers(current.store, role_sessions)
+    calls.clear()
+    try:
+        restored = await registry.attach(
+            user_id=OWNER,
+            brain_session_id=BRAIN,
+            team_id=TEAM,
+            fence=current.fence,
+            runtime=current.runtime,
+            existing_only=True,
+        )
+        assert {first.session_id, second.session_id} <= restored.connections.keys()
+        assert all(operation in {"brain", "rpc"} for operation, _ in calls)
+        assert {params["method"] for operation, params in calls if operation == "rpc"} <= {
+            "bgr/capabilities/read",
+            "bgr/thread/inspect",
+            "thread/read",
+        }
+        status = await restored.execute(
+            OWNER,
+            BRAIN,
+            BgrControl(action="status", action_id=uuid4().hex, round_id=round.round_id),
+        )
+        if not callback_before_restart:
+            assert status["results_ready"] is True
+            assert len(processes[BRAIN].pending) == 2
+            assert len(restored.store.drain(OWNER, BRAIN, TEAM)) == 2
+            assert all(
+                item.consumed_at is None for item in restored.store.drain(OWNER, BRAIN, TEAM)
+            )
+            return
+        assert status["results_ready"] is False and all(
+            job["result"] is None for job in status["jobs"]
+        )
+        assert not processes[BRAIN].pending
+        source = processes[second.session_id]
+        anchor = NativeEnvelope.model_validate(next(iter(source.pending.values())))
+        callback = source.emit(
+            restored.brain,
+            anchor,
+            "sealed-after-reconnect",
+            "result",
+            payload={"outcome": "incomplete", "findings": [], "coverageLimits": ["transport gap"]},
+        )
+        await restored.native_callback(
+            session_id=second.session_id,
+            thread_id=source.connection.thread_id,
+            method="bgr/message/emitted",
+            params=callback,
+        )
+        status = await restored.execute(
+            OWNER,
+            BRAIN,
+            BgrControl(action="status", action_id=uuid4().hex, round_id=round.round_id),
+        )
+        assert status["results_ready"] is True
+        assert len(processes[BRAIN].pending) == 2
+        assert all(item.consumed_at is None for item in restored.store.drain(OWNER, BRAIN, TEAM))
+    finally:
+        await registry.close()
+
+
+async def test_cold_restore_does_not_revive_terminal_or_launch_planned_roles(controller):
+    current, processes, calls, role_sessions = controller
+    worker = next(
+        process for process in processes.values() if process.connection.identity.role == "grunt"
+    )
+    identity = worker.connection.identity
+    anchor = current.store.drain(OWNER, identity.session_id, TEAM)[0]
+    await current.mailbox.forward(
+        current.brain, current.connections[identity.session_id], anchor.message_id
+    )
+    current.store.close(
+        OWNER,
+        BRAIN,
+        TEAM,
+        TaskClose(
+            **current.fence.model_dump(),
+            attempt_id=identity.attempt_id,
+            outcome="completed",
+            stop_confirmed=True,
+        ),
+    )
+    planned = current.store.reserve(OWNER, BRAIN, TEAM, reservation())
+    registry = BgrControllers(current.store, role_sessions)
+    calls.clear()
+    try:
+        restored = await registry.attach(
+            user_id=OWNER,
+            brain_session_id=BRAIN,
+            team_id=TEAM,
+            fence=current.fence,
+            runtime=current.runtime,
+            existing_only=True,
+        )
+        assert set(restored.connections) == {BRAIN}
+        await restored.execute(OWNER, BRAIN, BgrControl(action="status", action_id=uuid4().hex))
+        assert planned.attempt.session_id not in processes
+        assert all(operation in {"brain", "rpc"} for operation, _ in calls)
+        assert all(parameters.get("session_id", BRAIN) == BRAIN for _, parameters in calls)
+        assert not any(
+            parameters.get("method") in {"bgr/thread/bind", "bgr/message/deliver"}
+            for _, parameters in calls
+        )
+        role_sessions.assert_not_awaited()
+    finally:
+        await registry.close()
+
+
+@pytest.mark.parametrize("loss", ["snapshot", "profile", "head"])
+async def test_cold_reviewer_restore_rejects_changed_immutable_metadata(
+    controller, monkeypatch, loss
+):
+    current, _processes, calls, role_sessions = controller
+    created = await current.execute(
+        OWNER,
+        BRAIN,
+        BgrControl(
+            action="start_review",
+            action_id=uuid4().hex,
+            repository="ModelCloud/omnigent",
+            pr_number=1,
+            base_sha=SHA,
+            head_sha="e" * 40,
+        ),
+    )
+    round = current.store.get_review_round(OWNER, BRAIN, TEAM, created["round_id"])
+    job = round.jobs[0]
+    previous = current.store.get_team(OWNER, BRAIN, TEAM)
+    monkeypatch.setattr(current.store, "_clock", lambda: previous.lease_expires_at + 1)
+    original_call = current.runtime.call
+
+    async def changed(operation, parameters):
+        result = await original_call(operation, parameters)
+        if (
+            operation == "rpc"
+            and parameters["session_id"] == job.session_id
+            and parameters["method"] == "thread/read"
+        ):
+            if loss == "snapshot":
+                result["result"]["thread"]["cwd"] = "/foreign/snapshot"
+            else:
+                with current.store._sessions("change_reviewer_metadata_during_inspection") as db:
+                    if loss == "profile":
+                        row = db.get(SqlBgrAttempt, (current_workspace_id(), job.attempt_id))
+                        attempt = Attempt.model_validate_json(row.document)
+                        row.document = attempt.model_copy(
+                            update={
+                                "profile": attempt.profile.model_copy(
+                                    update={"model": "foreign-model"}
+                                )
+                            }
+                        ).model_dump_json()
+                    else:
+                        row = db.get(SqlBgrReviewRound, (current_workspace_id(), round.round_id))
+                        row.document = (
+                            ReviewRound.model_validate_json(row.document)
+                            .model_copy(update={"head_sha": "f" * 40})
+                            .model_dump_json()
+                        )
+        return result
+
+    monkeypatch.setattr(current.runtime, "call", changed)
+    registry = BgrControllers(current.store, role_sessions)
+    calls.clear()
+    try:
+        with pytest.raises(OmnigentError):
+            await registry.attach(
+                user_id=OWNER,
+                brain_session_id=BRAIN,
+                team_id=TEAM,
+                fence=current.fence,
+                runtime=current.runtime,
+                existing_only=True,
+            )
+        assert (
+            current.store.get_team(OWNER, BRAIN, TEAM).lease_expires_at
+            == previous.lease_expires_at
+        )
+        with pytest.raises(OmnigentError):
+            registry.get(BRAIN)
+        assert not any(operation != "brain" and operation != "rpc" for operation, _ in calls)
+        assert not any(
+            parameters.get("method") in {"bgr/thread/bind", "bgr/message/deliver"}
+            for _, parameters in calls
+        )
+    finally:
+        await registry.close()
+
+
+async def test_first_brain_reservation_binds_once_but_existing_only_attach_never_does(controller):
+    current, processes, calls, role_sessions = controller
+    team = current.store.get_team(OWNER, BRAIN, TEAM)
+    worker = next(
+        process for process in processes.values() if process.connection.identity.role == "grunt"
+    )
+    with current.store._sessions("prepare_initial_unbound_native_team") as db:
+        for binding_id in (team.brain_agent_id, worker.connection.identity.attempt_id):
+            db.delete(db.get(SqlBgrNativeBinding, (current_workspace_id(), binding_id)))
+    registry = BgrControllers(current.store, role_sessions)
+    calls.clear()
+    try:
+        await registry.attach(
+            user_id=OWNER,
+            brain_session_id=BRAIN,
+            team_id=TEAM,
+            fence=current.fence,
+            runtime=current.runtime,
+        )
+        assert sum(parameters.get("method") == "bgr/thread/bind" for _, parameters in calls) == 1
+        registry.remove(BRAIN, current.fence)
+        calls.clear()
+        restored = await registry.attach(
+            user_id=OWNER,
+            brain_session_id=BRAIN,
+            team_id=TEAM,
+            fence=current.fence,
+            runtime=current.runtime,
+            existing_only=True,
+        )
+        assert set(restored.connections) == {BRAIN}
+        assert not any(parameters.get("method") == "bgr/thread/bind" for _, parameters in calls)
+    finally:
+        await registry.close()
+
+
+@pytest.mark.parametrize("denial", ["blocked", "failed", "supervised_history", "retained_marker"])
+def test_same_live_target_denies_launch_markers_even_without_supervision_history(
+    recovery_store, supervised_admission, denial
+):
+    store, intent, binding, fence = recovery_store
+    if denial == "supervised_history":
+        store.reserve_supervised_generation(OWNER, supervised_admission.generation)
+    elif denial == "retained_marker":
+        store.begin_runtime_recovery(
+            OWNER,
+            intent.brain_session_id,
+            TEAM,
+            fence,
+            recovery_id=uuid4().hex,
+            runtime_id=binding.runtime_id,
+            replacement_controller_id=uuid4().hex,
+        )
+        with store._sessions("retain_supervised_denial_without_launch_history") as db:
+            row = db.get(SqlBgrTeam, (current_workspace_id(), TEAM))
+            team = Team.model_validate_json(row.document)
+            row.document = team.model_copy(
+                update={
+                    "runtime_recoveries": [
+                        team.runtime_recoveries[-1].model_copy(
+                            update={"supervised": True, "state": "attached"}
+                        )
+                    ]
+                }
+            ).model_dump_json()
+            db.delete(db.get(SqlBgrLaunch, (current_workspace_id(), TEAM)))
+    else:
+        with store._sessions("block_existing_launch_without_recovery_transition") as db:
+            row = db.get(SqlBgrLaunch, (current_workspace_id(), TEAM))
+            row.document = (
+                LaunchIntent.model_validate_json(row.document)
+                .model_copy(update={"state": denial})
+                .model_dump_json()
+            )
+    before = store.get_team(OWNER, intent.brain_session_id, TEAM)
+    with pytest.raises(OmnigentError):
+        store.live_controller_target(OWNER, intent.brain_session_id)
+    with pytest.raises(OmnigentError):
+        store.resume_verified_live_controller(
+            OWNER, intent.brain_session_id, TEAM, fence, binding=binding, assignments=[]
+        )
+    assert (
+        store.get_team(OWNER, intent.brain_session_id, TEAM).lease_expires_at
+        == before.lease_expires_at
+    )
 
 
 async def test_retire_revoked_controller_is_exact_fenced_and_idempotent(controller):
@@ -429,7 +994,11 @@ async def test_review_factory_starts_two_independent_roles_and_projects_barrier(
                     params=callbacks[1],
                 )
             assert job["session_id"] not in current.connections
-        assert set(current.connections) == {BRAIN}
+        assert set(current.connections) == {
+            session
+            for session, process in processes.items()
+            if process.connection.identity.role != "reviewer"
+        }
 
 
 async def test_publish_uncertain_retries_are_read_only_reconciliation_with_same_action(controller):

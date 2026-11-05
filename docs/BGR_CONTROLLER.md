@@ -1,9 +1,49 @@
-# BGR controller foundation (protocol version 1)
+# BGR implementation (protocol version 1)
 
-This is a durable control-plane foundation, **not a working BGR execution mode**.
-The [full design](BRAIN_EXECUTOR_REVIEWER_DESIGN.md) remains the target. No Polly
-behavior, seeded agent, or runtime prompt changes are included. New Chat has a
-configuration-only BGR entry; it is not a runnable catalog agent.
+BGR is an experimental, runnable New Chat mode on a capability-verified MultiDex
+host. Omnigent owns the durable scheduler/control plane; MultiDex executes native
+roles and messages, not a second scheduler. Existing Polly behavior is unchanged.
+The [full design](BRAIN_EXECUTOR_REVIEWER_DESIGN.md) also describes future work;
+it is not the current release-completeness checklist.
+
+## Current release scope: same-live recovery only
+
+The release is scoped to launch, bounded Grunt execution, fresh independent
+Reviewers, durable review/publication controls, and **reattachment to the exact
+already-live native binding** after controller/server reconstruction. The host,
+runtime and thread must still match the durable identity; a missing or changed
+native generation is not recoverable by inference.
+
+| Boundary | Current behavior |
+| --- | --- |
+| Launch | New Chat BGR uses owner-authorized host preflight/catalog validation; this runtime requires MultiDex (`codex-native`) for every role. Unsupported/offline hosts fail closed. |
+| Role lifecycle | One Brain, dynamically bounded Grunts, fresh isolated Reviewers, durable assignments/attempts and correlated messages. Native acceptance is not consumption. |
+| Same-live recovery | Inspect and reattach only the exact surviving native identity; never create a replacement or replay the initial task to make recovery appear successful. |
+| Review/publication | Seal independent evidence, record the Brain's evidence-bound decision, preview and approve each sanitized publication body; ambiguous forge writes require reconciliation. |
+| Process loss | Fence old authority. The owner stop/quarantine endpoint can reconcile trusted stop evidence, but never enables replacement or resumes revoked work. |
+| Deferred | Production supervisor/systemd start integration, contained scoped-runtime transport and fresh physical Brain replacement are outside this release. Automatic replacement and native `restartRecovery` remain disabled. |
+
+The real browser/native no-findings campaign used scripted provider responses
+and reached publication previews. It does not prove autonomous review quality,
+findings/revise or incomplete/rereview model judgment, actual external publication,
+native consumption receipts, or process-loss replacement. Unit/transport checks
+and those real-campaign boundaries must remain distinguished.
+
+The first authenticated Brain control call or worker callback after server
+reconstruction can lazily reattach from existing durable records; no synthetic
+`runtime/thread-ready` callback or startup-input replay is required. Every active
+bound role is inspected before the controller/heartbeat is installed. Unknown,
+cancelled or changed native state fails closed rather than being rebound.
+Expired leases may be renewed only under the unchanged controller/epoch after
+account, binding and bounded inventory revalidation. Supervised history and
+blocked launch/recovery markers do not gain authority through this path.
+
+An authenticated `status` call reconciles retained same-live native outboxes.
+It imports all retained results before forwarding, preserving the sibling review
+barrier. Already-durable host task anchors are validated and skipped, including
+closed recipients; native-origin retries preserve their receipt identity.
+Explicitly consumed records are not redelivered, and native acceptance never
+marks consumption. Reattachment itself does not reconcile or deliver mail.
 
 The lease heartbeat uses the same exact live host/native identity checks and
 binding-only renewal while final attachment is pending; it does not treat a
@@ -60,7 +100,7 @@ publication tests. In an authorized no-publish runtime, inspect tool history for
 Findings/incomplete must choose the corresponding follow-up action, not a blind
 success message. A stale hash or decision-free publish must fail before a POST.
 
-## New Chat configuration preview
+## New Chat configuration and launch
 
 On an ordinary host, open New Chat's harness/agent picker and choose **BGR →
 Configure draft** beside Polly. The responsive dialog has exactly one **Brain**
@@ -105,13 +145,16 @@ are discarded on explicit close. Storage read/write errors are visible and a
 failed write never claims success or overwrites the previous record. Do not put
 credentials in drafts; they do not sync between browsers or configure a host.
 
-**Launch BGR (unavailable)** stays disabled even for complete drafts, with missing
-worker lifecycle, role enforcement and reviewer isolation explained. While the
-dialog is open, the ordinary New Chat submit button, keyboard and form-submit
-paths cannot create a generic session. Closing returns to the previous normal
-agent and composer draft. No host/identity means no saved draft; offline hosts
-allow manual draft editing without catalog probes. Managed sandboxes and
-deployment-curated agent menus do not expose the BGR preview. This does not add
+**Launch BGR** is gated by the live host capability/isolated-reviewer probe, a
+complete draft, workspace and initial task. The server validates every selected
+role profile against the host catalog before launch. Unsupported or offline
+hosts remain visibly blocked; saving a draft alone never starts a session. The
+UI uses `GET /v1/hosts/{host_id}/bgr/capabilities` and
+`POST /v1/hosts/{host_id}/bgr/launch`, with a stable team retry key. While the
+dialog is open, ordinary New Chat submit paths cannot create a generic session.
+Closing returns to the previous normal agent and composer draft. No host/identity
+means no saved draft; offline hosts allow manual editing without catalog probes.
+Managed sandboxes and deployment-curated agent menus do not expose BGR. This does not add
 BGR to fork, schedule or project-default catalog pickers.
 
 The normal server constructs `BgrStore` from its application database URI and
@@ -185,7 +228,9 @@ forwarding waits until all sibling jobs seal; questions remain live. The capture
 capability fixture keeps native durability, restart recovery and consumption
 receipts false. These adapter checks do not demonstrate isolated process startup,
 provider execution, a complete Brain-facing store projection barrier, controller
-lease recovery or automatic publication draining. Launch remains unavailable.
+lease recovery or automatic publication draining by themselves. The separate
+host launch and controller/runtime integration supplies executable lifecycle;
+the ledger router is deliberately not a launcher.
 
 Every endpoint uses the existing session-orchestration checks:
 
@@ -204,10 +249,9 @@ match the worker's persisted session metadata. Senders are derived from the
 authenticated session and cannot be supplied in an envelope request.
 
 Reservations protect **ledger writers only**: they are not OS locks, host-side
-symlink resolution, or execution fences. Existing session execution, actual
-process stop, runner enforcement and safe-boundary transport are not controlled
-by these APIs yet. Do not use them as evidence that an arbitrary worker is safe
-to execute a BGR role.
+symlink resolution, or process-stop attestations. The controller/native adapter
+owns execution, stop confirmation and safe-boundary transport; these ledger APIs
+alone are not evidence that an arbitrary worker is safe to execute a BGR role.
 
 ## HTTP surface
 
@@ -231,12 +275,17 @@ validation. Resource conflicts return 409; ownership failures return 403.
 | `GET /teams/{team_id}/mailbox?limit=50` | Recipient-only ordered pending envelopes (neither consumed nor explicitly discarded); limit 1–100, no destructive dequeue |
 | `POST /teams/{team_id}/mailbox/ack` | Recipient explicitly records consumption of an envelope in its live epoch |
 | `POST /teams/{team_id}/mailbox/discard` | Recipient atomically discards 1–100 explicitly identified stale envelopes, with durable reconciliation evidence; never successful consumption |
-| `POST /teams/{team_id}/launch` | Always refuses (503 `runner_capability_mismatch`); execution/isolation are not implemented |
+| `POST /teams/{team_id}/launch` | Legacy ledger-only endpoint always refuses (503 `runner_capability_mismatch`); use the owner-authorized host launch path above |
+
+The ledger `/capabilities` response describes this router alone, not host runtime
+readiness. New Chat must use the host capability endpoint above.
 
 Brain mutations carry `controller_id` and `epoch`; worker messages/checkpoints
 and acknowledgements carry `epoch`. Worker sends omit `controller_id`. A live
 lease rejects a competing controller. Expiration increments the epoch on the
-next acquisition, even for the same controller. Old-epoch mutations fail closed.
+next accepted generic acquisition, even for the same controller. A native-bound
+team cannot use generic acquisition as a recovery shortcut: verified same-live
+renewal retains the existing controller/epoch instead. Old-epoch mutations fail closed.
 Read-only mailbox retrieval remains available for reconciliation after expiry.
 Reattachment changes the attempt's epoch, not its task, session, profile,
 workspace, checkpoint or historical envelopes. Old envelopes remain visible as
@@ -246,11 +295,12 @@ proceeding, not blindly execute or redeliver them. Nothing clears them implicitl
 
 Profiles preserve provider, model, optional variant/speed/reasoning and optional
 harness, without guessing defaults or model-family substitutions. One or two
-reviewer profiles are required, but no reviewer session/channel can be used yet.
+reviewer profiles are required; only the trusted isolated-start path can activate
+a reviewer session/channel.
 The [Brain-to-Reviewer instruction contract](BRAIN_EXECUTOR_REVIEWER_DESIGN.md#required-brain-to-reviewer-instructions)
 requires a new, sanitized PR discussion comment for each review, through a
 trusted publisher without giving reviewers publication credentials. That prompt
-dispatch and publishing lifecycle are not implemented by this ledger.
+dispatch and publishing lifecycle live in the controller/runtime, not this ledger.
 Profile values are ledger snapshots, **not validated backend capabilities**.
 The active brain profile is pinned; configuration updates apply to future grunt
 assignments only. Lowering the cap never kills or discards existing reservations.
@@ -678,10 +728,11 @@ approval. This core does not yet automatically stage or drain jobs on completion
 or restart; it must not be described as automatic per-review posting.
 
 The additional review-round migration remains independently executable and
-caps actual stored document bytes at 16,383. These core components are not yet
-wired to launch, native reviewer startup or publication scheduling. Existing
-capability responses therefore remain disabled. Unit tests use trusted-adapter
-fixtures and a fake forge, not model-generated reviews or external comments:
+caps actual stored document bytes at 16,383. The integrated controller/runtime
+wires these records to native reviewer startup and explicit publication actions;
+the standalone ledger router still cannot launch or advertise runtime readiness.
+Unit tests use trusted-adapter fixtures and a fake forge, not model-generated
+reviews or external comments:
 
 ```bash
 .venv/bin/python -m pytest -q tests/stores/test_bgr_review_store.py \
@@ -705,15 +756,17 @@ worker request boundary; a local fake WebSocket server additionally exercises
 the existing JSON-RPC client's response multiplexing out of order. They prove
 translation and fencing, not actual MultiDex execution or cross-provider turns.
 
-Before enabling BGR execution or registering a working launcher, implement and
-verify host capability negotiation, applied profile/catalog validation,
-runtime-enforced role/tool/git restrictions, safe-boundary delivery with actual
-callbacks, stop confirmation from a trusted host, independent fresh reviewer
-contexts with sealed findings, and publication scheduling. This stage can
-reattach surviving reservations but cannot replace a lost brain or allocate a
-fresh attempt under an existing task; automatic recovery and attempt history
-require a subsequent schema/API extension. Archiving/compacting bounded retention
-and actual host-path canonicalization also remain explicit follow-ups.
+The integrated launch/controller/native paths implement host capability
+negotiation, profile/catalog validation, role restrictions, safe-boundary
+callbacks, explicit child-stop confirmation, fresh reviewer contexts and
+publication controls. Their presence does not turn native acceptance into
+consumption or prove autonomous model behavior.
+
+The release supports exact same-live reattachment, not automatic replacement of
+a lost Brain or worker. Production process-loss startup/containment and fresh
+replacement remain deferred, not incomplete requirements for this narrowed
+release. Archiving/compacting bounded retention and actual host-path
+canonicalization also remain explicit follow-ups.
 
 ## Process-loss fencing primitives (replacement disabled)
 
@@ -796,6 +849,13 @@ denial through the real HTTP/store boundary:
 
 The durable store APIs are:
 
+- `live_controller_target(user, brain)` and
+  `resume_verified_live_controller(user, brain, team, fence, *, binding, assignments)`:
+  internal same-live inspection/renewal seams. Resolve existing identity without
+  extending authority, inspect the native roles, then atomically recheck the
+  account/current fence, exact binding and bounded active inventory before
+  extending the same lease. No missing binding, supervision history, blocked
+  launch or unfinished recovery may be converted into a new launch.
 - `runtime_recovery_target(user, team)`: owner-only durable Brain/native identity;
   intentionally does not require a live lease or live controller object.
   In `ready`, it resolves the exact stopped Brain mapping against the completed

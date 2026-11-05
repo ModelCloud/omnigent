@@ -16,7 +16,7 @@ from omnigent.bgr_supervision import (
 )
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.server.auth import LEVEL_OWNER, AuthProvider
-from omnigent.server.bgr_controller import BgrControllers, BgrHostRuntime
+from omnigent.server.bgr_controller import BgrController, BgrControllers, BgrHostRuntime
 from omnigent.server.bgr_generation_auth import generation_actor
 from omnigent.server.routes._auth_helpers import require_access, require_user
 from omnigent.server.routes.bgr_publications import create_bgr_publication_router
@@ -66,10 +66,47 @@ def create_bgr_control_router(
         assert user is not None
         return user, session.id
 
+    async def attached(
+        request: Request, user: str, session: str, team_id: str | None = None
+    ) -> BgrController:
+        try:
+            team, _ = controllers.store.live_controller_target(user, session)
+        except (OmnigentError, ValueError):
+            try:
+                cached = controllers.get(session)
+            except OmnigentError:
+                pass
+            else:
+                if cached.user_id == user:
+                    controllers.remove(session, cached.fence)
+            raise
+        if team_id is not None and team.team_id != team_id:
+            raise OmnigentError("Foreign controller callback", code=ErrorCode.FORBIDDEN)
+        try:
+            controller = controllers.get(session)
+            controller.authorize(user, session)
+            return controller
+        except OmnigentError:
+            pass
+        from omnigent.server.routes.sessions import _get_runner_client
+
+        client = await _get_runner_client(session, request.app.state.runner_router)
+        if client is None or team.controller_id is None:
+            raise OmnigentError("Brain runner is unavailable", code=ErrorCode.CONFLICT)
+        return await controllers.attach(
+            user_id=user,
+            brain_session_id=session,
+            team_id=team.team_id,
+            fence=Fence(controller_id=team.controller_id, epoch=team.epoch),
+            runtime=_host_runtime(client, session),
+            existing_only=True,
+        )
+
     @router.post("/control")
     async def control(request: Request, body: BgrControl) -> dict[str, JsonValue]:
         user, session = source(request)
-        return await controllers.get(session).execute(user, session, body)
+        controller = await attached(request, user, session)
+        return await controller.execute(user, session, body)
 
     @router.post("/teams/{team_id}/recover", status_code=202)
     async def recover(
@@ -182,7 +219,7 @@ def create_bgr_control_router(
             if startup is not None:
                 await startup.session_ready(request.app, session)
             return {"accepted": True, "consumption_receipt": False}
-        controller = controllers.get(session)
+        controller = await attached(request, user, session, team_id)
         controller.authorize(user, session)
         if controller.team_id != team_id:
             raise OmnigentError("Foreign controller callback", code=ErrorCode.FORBIDDEN)
