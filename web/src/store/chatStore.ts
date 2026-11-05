@@ -3271,30 +3271,49 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
     // turns; switchTo or tab unload is the only thing that tears it
     // down.
     const pendingBeforeStop = state.pendingUserMessages;
-    void interruptSession(sessionId).then((response) => {
-      const discarded = response.discardedInputs;
-      if (!discarded?.length) return;
-      const text = discarded.map((item) => item.content
-        .filter((part): part is Extract<MessageContentBlock, { type: "input_text" }> => part.type === "input_text")
-        .map((part) => part.text).join("")).filter(Boolean).join("\n\n");
-      const files = discarded.flatMap((item) => pendingBeforeStop.find((message) =>
-        (message.pendingId ?? message.tempId) === item.pendingId
-      )?.files ?? []);
-      if (!text && files.length === 0) return;
-      if (get().conversationId === sessionId && setterForState(sessionId)?.failedSendDraft === null) {
-        setterFor(sessionId)({ failedSendDraft: { text, files, conversationId: sessionId, recovered: true } });
-      } else {
-        const existing = getSessionDraft(sessionId);
-        setSessionDraft(sessionId, {
-          text: [existing?.text, text].filter(Boolean).join("\n\n"),
-          files: [...(existing?.files ?? []), ...files],
-        });
-      }
-    }).catch(() => {
-      // Interrupt is best-effort. A network failure here means the
-      // user's cancel won't reach the server, but the local UI already
-      // reflects the user's stop request below.
-    });
+    void interruptSession(sessionId)
+      .then((response) => {
+        const discarded = response.discardedInputs;
+        if (!discarded?.length) return;
+        const text = discarded
+          .map((item) =>
+            item.content
+              .filter(
+                (part): part is Extract<MessageContentBlock, { type: "input_text" }> =>
+                  part.type === "input_text",
+              )
+              .map((part) => part.text)
+              .join(""),
+          )
+          .filter(Boolean)
+          .join("\n\n");
+        const files = discarded.flatMap(
+          (item) =>
+            pendingBeforeStop.find(
+              (message) => (message.pendingId ?? message.tempId) === item.pendingId,
+            )?.initialDraft?.files ?? [],
+        );
+        if (!text && files.length === 0) return;
+        if (
+          get().conversationId === sessionId &&
+          setterForState(sessionId)?.failedSendDraft === null
+        ) {
+          setterFor(sessionId)({
+            failedSendDraft: { text, files, conversationId: sessionId, recovered: true },
+          });
+        } else {
+          const existing = getSessionDraft(sessionId);
+          setSessionDraft(sessionId, {
+            text: [existing?.text, text].filter(Boolean).join("\n\n"),
+            files: [...(existing?.files ?? []), ...files],
+          });
+        }
+      })
+      .catch(() => {
+        // Interrupt is best-effort. A network failure here means the
+        // user's cancel won't reach the server, but the local UI already
+        // reflects the user's stop request below.
+      });
     setActive((s) => {
       if (s.conversationId !== sessionId) return {};
       const patch: Partial<ChatState> = {

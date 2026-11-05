@@ -566,17 +566,19 @@ class ManagedStartupInputs:
                     session_id, [pending_inputs.make_pending_id(session_id, item.id)]
                 )
             elif await asyncio.to_thread(
-                    self.conversations.transition_pending_input,
-                    session_id,
-                    item.id,
-                    expected=item.status,
-                    status=None,
-                ):
-                discarded.append({
-                    "pending_id": pending_inputs.make_pending_id(session_id, item.id),
-                    "content": input_content(item),
-                    **({"initial": True} if item.id == initial_input_id(session_id) else {}),
-                })
+                self.conversations.transition_pending_input,
+                session_id,
+                item.id,
+                expected=item.status,
+                status=None,
+            ):
+                discarded.append(
+                    {
+                        "pending_id": pending_inputs.make_pending_id(session_id, item.id),
+                        "content": input_content(item),
+                        **({"initial": True} if item.id == initial_input_id(session_id) else {}),
+                    }
+                )
         return discarded
 
     async def _report_failure(self, session_id: str, failure_id: str, message: str) -> None:
