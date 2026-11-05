@@ -18,6 +18,7 @@ from typing import Literal, cast
 from websockets.exceptions import WebSocketException
 
 from omnigent.debug_logging import debug_event
+from omnigent.errors import OmnigentError
 from omnigent.harnesses.codex_native import side_chat
 from omnigent.harnesses.codex_native.app_server import (
     CodexAppServerClient,
@@ -124,7 +125,7 @@ _CODEX_COMPACTING_FAILURE = CodexStartupFailure(
     remediation="Wait for compaction to finish, then send your message again.",
 )
 _CODEX_DELIVERY_UNCONFIRMED_FAILURE = CodexStartupFailure(
-    message="Codex disconnected while submitting this message. It may already be running.",
+    message="Codex did not confirm this message. It may already be running.",
     code="codex_delivery_unconfirmed",
     title="Codex delivery is unconfirmed",
     remediation="Check the native terminal for the message before sending it again.",
@@ -432,16 +433,16 @@ async def _native_delivery_request_once(
         requested_native_turn_id=requested_turn_id,
     )
     try:
-        response = await asyncio.wait_for(
-            client.request(method, params),
-            timeout=_DELIVERY_RPC_TIMEOUT_SECONDS,
-        )
+        # Turn input is acknowledged before execution; shell RPCs may await completion.
+        timeout = _DELIVERY_RPC_TIMEOUT_SECONDS if method in {"turn/start", "turn/steer"} else None
+        async with asyncio.timeout(timeout):
+            response = await client.request(method, params)
     except BaseException as exc:
         outcome = "rpc_error"
         if isinstance(exc, asyncio.CancelledError):
             outcome = "cancelled"
-        elif isinstance(exc, asyncio.TimeoutError):
-            outcome = "rpc_timeout"
+        elif isinstance(exc, TimeoutError):
+            outcome = "timeout"
         elif isinstance(exc, CodexAppServerResponseError) and is_server_draining_error(exc):
             outcome = "rpc_rejected_draining"
         elif isinstance(exc, CodexAppServerResponseError) and is_compaction_steer_refusal(exc):
@@ -1227,6 +1228,13 @@ class CodexNativeExecutor(Executor):
         del tools, system_prompt
         settings_overrides = _model_effort_overrides(config)
         latest_user_content = _latest_user_content(messages)
+        try:
+            side_question = side_chat.side_chat_question_from_content(latest_user_content)
+        except OmnigentError as exc:
+            yield ExecutorError(
+                message=exc.message, code=exc.code, undelivered=True, preserve_session=True
+            )
+            return
         shell_command = _shell_command_from_content(latest_user_content)
         if shell_command is not None and not native_shell_command_is_authorized(shell_command):
             failure = _CODEX_SHELL_AUTHORIZATION_REQUIRED
@@ -1371,7 +1379,6 @@ class CodexNativeExecutor(Executor):
                 else:
                     try:
                         _require_codex_binding(self._bridge_dir, state)
-                        side_question = side_chat.side_chat_question(input_items)
                         if shell_command is not None:
                             await _run_codex_shell_command(
                                 client,
