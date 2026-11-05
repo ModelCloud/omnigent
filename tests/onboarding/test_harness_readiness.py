@@ -485,6 +485,10 @@ def test_configured_harness_map_covers_all_spellings(
         "codex",
         "codex-native",
         "native-codex",
+        # Fork-only MultiDex aliases; all canonicalize onto ``codex-native``.
+        "multidex",
+        "multidex-native",
+        "native-multidex",
         "openai-agents",
         "openai-agents-sdk",
         "open-responses",
