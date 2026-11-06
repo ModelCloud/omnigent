@@ -97,7 +97,10 @@ apply only to that side chat. See the [side-chat settings recipe](sessions.md).
 - `effort-terminal-mirror`: an effort change typed in the Codex terminal shows
   in the composer, and a composer pick is not reverted by later terminal turns.
 - `permission-mode`: the harness's native approval modes; the current mode is
-  marked and the choice persists.
+  marked and the choice persists. For Codex, New Chat offers Default (Codex's own
+  default or the user's Codex config), Ask for approval, Approve for me, Full
+  Access, Read Only, and Bypass approvals & sandbox; a running session offers
+  Ask for approval, Approve for me, and Full Access.
 - `permissions-command`: in Codex native sessions, `/permissions` opens the
   composer's approval-mode menu instead of Codex's own popup. Other sessions,
   including Claude Code (whose `/permissions` edits tool rules) and Devin, don't
@@ -190,8 +193,8 @@ apply only to that side chat. See the [side-chat settings recipe](sessions.md).
 - `focus-hotkey`: Ctrl+Shift+L focuses the in-session message box from anywhere
   in the session view (not on mobile).
 - `new-session-hotkey`: ⌘+Shift+O on macOS or Ctrl+Shift+O on Windows/Linux
-  opens and focuses the new-session composer in browsers. Native shells retain
-  ⌘/Ctrl+Alt+N. Embedded apps require focus inside the app.
+  opens and focuses the new-session composer in browsers. Native shells use
+  ⌘/Ctrl+N. Embedded apps require focus inside the app.
 - `queue-and-steer`: messages sent while the agent is busy wait in a queue and
   can be steered into the running turn. Side-chat composers queue and steer the
   same way, with their own queue strip.
@@ -304,6 +307,9 @@ apply only to that side chat. See the [side-chat settings recipe](sessions.md).
 
 **New-session composer** (landing page, or New session):
 
+- **Add nested agent** opens this composer scoped to the source session, with
+  that session's sandbox preselected. See [sibling entry points](sessions.md#how-to-get-to-it-user-pov).
+  If creation is rejected, the same composer restores the prompt and attachments.
 - Select **Codex → + → Plan** and confirm the **Plan mode** badge before sending.
 - Write a prompt or attach a file before choosing a working directory. Hover
   or focus disabled Start to see what is missing; click, tap, or press Enter to

@@ -28,6 +28,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { askUserQuestionPayloadOf } from "@/lib/askUserQuestion";
 import { userColor, userColorTint, userInitials } from "@/lib/userBadge";
 import {
   Message,
@@ -71,6 +72,7 @@ import {
 } from "@/lib/blocks";
 import { type Bubble, type RenderItem, bubblesEqual } from "@/lib/renderItems";
 import { getCurrentAuthorId } from "@/lib/identity";
+import { TERMINAL_PROMPT_BLOCKED_ON } from "@/lib/events";
 import { QueryClientContext } from "@tanstack/react-query";
 import { ApiError, continueFailedTurn, retrySession } from "@/lib/sessionsApi";
 import { useChatStore, withoutFailedInputs, type PendingUserMessage } from "@/store/chatStore";
@@ -231,6 +233,7 @@ export function buildPendingBubbles(
       itemId: p.tempId,
       pending: true,
       ...(p.sentMidTurn ? { awaitingAgent: true } : {}),
+      ...(p.stillSending && p.posted !== true ? { stillSending: true } : {}),
       content: p.content,
       ...(author !== null ? { createdBy: author } : {}),
       // Stamped once at send time; absent for snapshot-replayed entries,
@@ -381,6 +384,18 @@ export function collectPendingElicitations(bubbles: Bubble[]): ElicitationItem[]
   return pending;
 }
 
+// Keyboard input drives the newest pending AskUserQuestion. A newer one still
+// awaiting delivery holds the keys, so older questions stay inert.
+export function keyboardActiveQuestionId(pending: ElicitationItem[]): string | null {
+  for (let index = pending.length - 1; index >= 0; index -= 1) {
+    const item = pending[index]!;
+    if (askUserQuestionPayloadOf(item) === null) continue;
+    const awaitingDelivery = item.nativeDelivery && item.nativeDelivery.state !== "ready";
+    return awaitingDelivery ? null : item.elicitationId;
+  }
+  return null;
+}
+
 // Drop the pending elicitation cards from the transcript bubbles so they
 // don't render twice. Returns the input array unchanged when nothing is
 // pending, so the memo stays stable.
@@ -513,6 +528,11 @@ export function workingIndicatorLabel(
     if (blockedOn === "dialog open") {
       return "Waiting on a dialog in the terminal. Open the terminal tab to respond.";
     }
+    if (blockedOn === TERMINAL_PROMPT_BLOCKED_ON) {
+      // Inferred from the terminal's screen, so the hint stays tentative.
+      const hint = "Something in the agent's terminal may need your input.";
+      return terminalView ? `${hint} Open the Terminal view to check.` : hint;
+    }
     if (answerableInChat) return `Blocked on: ${blockedOn}`;
     const waiting =
       blockedOn === "permission prompt"
@@ -588,6 +608,55 @@ export function WorkingIndicator() {
         </MessageContent>
       </Message>
     </>
+  );
+}
+
+// Timed like the sidebar's "Show more" and the file tree's rows.
+const WORKING_ROW_CLOSE: KeyframeAnimationOptions = {
+  duration: 180,
+  easing: "cubic-bezier(0.4, 0, 0.2, 1)",
+  fill: "forwards",
+};
+
+/**
+ * The Working row, kept while it eases closed after the turn ends, so a
+ * transcript scrolled to its end doesn't drop by the row's height in one frame.
+ */
+export function WorkingIndicatorRow({ show }: { show: boolean }) {
+  const rowRef = useRef<HTMLDivElement>(null);
+  const [shown, setShown] = useState(show);
+  const [closing, setClosing] = useState(false);
+  if (shown !== show) {
+    setShown(show);
+    setClosing(!show);
+  }
+  useLayoutEffect(() => {
+    const row = rowRef.current;
+    if (!closing || !row) return;
+    if (
+      typeof row.animate !== "function" ||
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+    ) {
+      setClosing(false);
+      return;
+    }
+    // Close the column's gap above the row along with the row itself.
+    const gap = Number.parseFloat(getComputedStyle(row.parentElement ?? row).rowGap) || 0;
+    const animation = row.animate(
+      [
+        { height: `${row.offsetHeight}px`, marginTop: "0px", opacity: 1, overflow: "hidden" },
+        { height: "0px", marginTop: `${-gap}px`, opacity: 0, overflow: "hidden" },
+      ],
+      WORKING_ROW_CLOSE,
+    );
+    animation.onfinish = () => setClosing(false);
+    return () => animation.cancel();
+  }, [closing]);
+  if (!shown && !closing) return null;
+  return (
+    <div ref={rowRef} aria-hidden={closing || undefined}>
+      <WorkingIndicator />
+    </div>
   );
 }
 
@@ -1088,6 +1157,18 @@ function UserBubble({ bubble }: { bubble: Extract<Bubble, { kind: "user" }> }) {
                 )}
               </MessageContent>
             )}
+          </div>
+        </div>
+        {bubble.undelivered && (
+          <UndeliveredMessageNotice sessionId={sessionId} text={text} content={bubble.content} />
+        )}
+        {bubble.pending && bubble.stillSending && (
+          <div
+            className="flex items-center gap-1 pt-1 text-[11px] leading-4 text-muted-foreground"
+            data-testid="message-still-sending"
+          >
+            <Loader2Icon size={12} className="animate-spin" aria-hidden />
+            Still sending…
           </div>
         </div>
         {bubble.undelivered && (
@@ -2179,8 +2260,10 @@ export function ConversationScrollRefBridge({
     state: ConversationScroller["state"];
     stopScroll: () => void;
   };
-  useEffect(() => {
-    // Runs after commit, when StickToBottom has populated scrollRef.current.
+  // Before paint: the virtualized transcript renders no rows until it has the
+  // scroll element, so handing it over later paints a newly opened session blank.
+  // Render this after StickToBottom.Content so its scrollRef is attached by now.
+  useLayoutEffect(() => {
     const el = ctx.scrollRef?.current ?? null;
     onScroller(el ? { el, state: ctx.state, stopScroll: ctx.stopScroll } : null);
     return () => onScroller(null);

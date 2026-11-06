@@ -751,7 +751,7 @@ async def test_create_rejects_invalid_reasoning_effort(
     [(CLAUDE_NATIVE_AGENT_NAME, "acceptEdits")]
     + [
         (CODEX_NATIVE_AGENT_NAME, mode)
-        for mode in ("default", "full-access", "read-only", "bypass")
+        for mode in ("default", "ask-for-approval", "approve-for-me", "read-only")
     ],
 )
 async def test_create_persists_permission_mode(
@@ -772,7 +772,8 @@ async def test_create_persists_permission_mode(
     got = await auth_client.get(f"/v1/scheduled-tasks/{task_id}", headers=_headers())
     assert got.status_code == 200
     assert got.json()["permission_mode"] == mode
-    if mode == "full-access":
+    if mode == "default":
+        # Patch to a different allowed mode so the read-back proves the update was saved.
         changed = await auth_client.patch(
             f"/v1/scheduled-tasks/{task_id}",
             json={"permission_mode": "read-only"},
@@ -780,6 +781,44 @@ async def test_create_persists_permission_mode(
         )
         assert changed.status_code == 200, changed.text
         assert changed.json()["permission_mode"] == "read-only"
+        reread = await auth_client.get(f"/v1/scheduled-tasks/{task_id}", headers=_headers())
+        assert reread.json()["permission_mode"] == "read-only"
+
+
+@pytest.mark.parametrize(
+    ("agent_name", "mode"),
+    [
+        (CLAUDE_NATIVE_AGENT_NAME, "bypassPermissions"),
+        (CLAUDE_NATIVE_AGENT_NAME, "dontAsk"),
+        (CODEX_NATIVE_AGENT_NAME, "full-access"),
+        (CODEX_NATIVE_AGENT_NAME, "bypass"),
+    ],
+)
+async def test_save_rejects_unattended_disallowed_permission_mode(
+    auth_client: httpx.AsyncClient, db_uri: str, agent_name: str, mode: str
+) -> None:
+    """Create and update refuse modes that would run unattended without approval."""
+    _make_user(db_uri)
+    agent_id = builtin_agent_id(agent_name)
+    created = await auth_client.post(
+        "/v1/scheduled-tasks",
+        json=_create_body(agent_id=agent_id, permission_mode=mode),
+        headers=_headers(),
+    )
+    assert created.status_code == 400, created.text
+    assert "unattended" in created.text
+
+    ok = await auth_client.post(
+        "/v1/scheduled-tasks", json=_create_body(agent_id=agent_id), headers=_headers()
+    )
+    assert ok.status_code == 200, ok.text
+    patched = await auth_client.patch(
+        f"/v1/scheduled-tasks/{ok.json()['id']}",
+        json={"permission_mode": mode},
+        headers=_headers(),
+    )
+    assert patched.status_code == 400, patched.text
+    assert "unattended" in patched.text
 
 
 @pytest.mark.parametrize("operation", ["create", "update"])
@@ -1241,7 +1280,7 @@ async def test_update_agent_switch_clears_the_old_harnesss_settings(
         await auth_client.post(
             "/v1/scheduled-tasks",
             json=_create_body(
-                permission_mode="bypassPermissions",
+                permission_mode="acceptEdits",
                 model_override="databricks-claude-sonnet-4-6",
                 reasoning_effort="high",
             ),
@@ -1249,7 +1288,7 @@ async def test_update_agent_switch_clears_the_old_harnesss_settings(
         )
     ).json()
     task_id = created["id"]
-    assert created["permission_mode"] == "bypassPermissions"
+    assert created["permission_mode"] == "acceptEdits"
 
     patched = await auth_client.patch(
         f"/v1/scheduled-tasks/{task_id}",
@@ -1415,20 +1454,20 @@ async def test_update_clears_permission_mode_with_explicit_null(
     """PATCH ``permission_mode: null`` clears a previously-set mode end-to-end.
 
     The edit dialog resets the control to Default by sending an explicit null,
-    so a task launched with ``bypassPermissions`` must actually revert to the
-    agent default (not silently keep the dangerous mode). Asserts the PERSISTED
+    so a task launched with ``acceptEdits`` must actually revert to the
+    agent default (not silently keep the old mode). Asserts the PERSISTED
     value via a read-back, not just the response.
     """
     _make_user(db_uri)
     created = (
         await auth_client.post(
             "/v1/scheduled-tasks",
-            json=_create_body(permission_mode="bypassPermissions"),
+            json=_create_body(permission_mode="acceptEdits"),
             headers=_headers(),
         )
     ).json()
     task_id = created["id"]
-    assert created["permission_mode"] == "bypassPermissions"
+    assert created["permission_mode"] == "acceptEdits"
 
     patched = await auth_client.patch(
         f"/v1/scheduled-tasks/{task_id}",
@@ -1505,9 +1544,15 @@ async def test_update_rejects_invalid_reasoning_effort(
 
 
 @pytest.mark.parametrize("claimed", [False, True])
+@pytest.mark.parametrize("shared", [False, True])
 async def test_delete_removes_task(
-    auth_client: httpx.AsyncClient, db_uri: str, claimed: bool
+    auth_client: httpx.AsyncClient, db_uri: str, claimed: bool, shared: bool
 ) -> None:
+    from omnigent.db.db_models import current_workspace_id
+    from omnigent.server.scheduled.schedule import continued_sandbox_host_id
+    from omnigent.stores.conversation_store import SCHEDULED_TASK_ORIGIN_LABEL_KEY
+    from omnigent.stores.host_store import HostStore
+
     _make_user(db_uri)
     created = (
         await auth_client.post("/v1/scheduled-tasks", json=_create_body(), headers=_headers())
@@ -1532,8 +1577,39 @@ async def test_delete_removes_task(
             is not None
         )
 
+    hosts = HostStore(db_uri)
+    host_id = continued_sandbox_host_id(task_id, current_workspace_id())
+    hosts.register_managed_host(
+        host_id=host_id,
+        name="automation",
+        user_id="alice@example.com",
+        token="retained",
+        provider="modal",
+        sandbox_id="retained",
+        token_expires_at=2_000_000_000,
+    )
+    hosts.upsert_on_connect(host_id=host_id, name="automation", user_id="alice@example.com")
+    conversations = SqlAlchemyConversationStore(db_uri)
+    session = conversations.create_conversation(
+        host_id=host_id, workspace="/work", labels={SCHEDULED_TASK_ORIGIN_LABEL_KEY: task_id}
+    )
+    if shared:
+        peer = conversations.create_conversation(host_id=host_id, workspace="/work")
+        conversations.update_conversation(peer.id, archived=True)
+    assert await conversations.delete_conversation(session.id)
+    assert hosts.get_host(host_id).status == "online"
+
     deleted = await auth_client.delete(f"/v1/scheduled-tasks/{task_id}", headers=_headers())
     assert deleted.status_code == 200, deleted.text
+    retained_host = hosts.get_host(host_id, include_deleted=True)
+    assert retained_host is not None
+    assert (retained_host.deleted_at is None) is shared
+    if shared:
+        assert retained_host.status == "online"
+        assert conversations.get_conversation(peer.id).host_id == host_id
+    else:
+        assert retained_host.sandbox_id == "retained"
+        assert hosts.resolve_launch_token(host_id, "retained") is None
 
     got = await auth_client.get(f"/v1/scheduled-tasks/{task_id}", headers=_headers())
     assert got.status_code == 404
