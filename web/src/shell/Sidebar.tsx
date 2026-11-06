@@ -87,6 +87,7 @@ import {
   SquareCheckIcon,
   Trash2Icon,
   UserRoundIcon,
+  UsersIcon,
   WalletIcon,
   XIcon,
   type LucideIcon,

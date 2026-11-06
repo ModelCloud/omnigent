@@ -1170,9 +1170,6 @@ function UserBubble({ bubble }: { bubble: Extract<Bubble, { kind: "user" }> }) {
             <Loader2Icon size={12} className="animate-spin" aria-hidden />
             Still sending…
           </div>
-        </div>
-        {bubble.undelivered && (
-          <UndeliveredMessageNotice sessionId={sessionId} text={text} content={bubble.content} />
         )}
         {visibilityToggle}
         <div

@@ -2163,25 +2163,6 @@ function NewChatWorkspaceControls({
   );
 }
 
-function NewChatWorkspaceControls({
-  children,
-  disabled,
-}: {
-  children: ReactNode;
-  disabled: boolean;
-}) {
-  const isMobile = useIsMobileViewport();
-  if (!isMobile) return children;
-  return (
-    <fieldset
-      disabled={disabled}
-      className="new-chat-workspace-controls relative isolate z-30 min-w-0 max-w-full self-center rounded-[20px]"
-    >
-      <OmniGlassSurface borderRadius={20} className="-z-10" />
-      {children}
-    </fieldset>
-  );
-}
 
 export function NewChatLandingScreen() {
   const [params] = useSearchParams();
