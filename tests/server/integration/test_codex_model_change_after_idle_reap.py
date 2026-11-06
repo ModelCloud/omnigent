@@ -285,6 +285,14 @@ async def native_session(
     monkeypatch.setattr(native_runtime, "_AUTO_FORWARDER_TASKS", {})
     monkeypatch.setattr(native_cost_popup, "_tmux_last_client_input_at", lambda *_args: None)
     monkeypatch.setattr(native_cost_popup, "_tmux_window_activity_at", lambda *_args: None)
+    # Keep the picker hermetic: a real MultiDex install on the host would add
+    # its local-provider rows to every ``model/list`` assertion below.
+    from omnigent.harnesses.multidex_native import config as multidex_config
+
+    def _no_multidex_config(**_kwargs: Any) -> Any:
+        raise FileNotFoundError("no MultiDex config in tests")
+
+    monkeypatch.setattr(multidex_config, "load_multidex_config", _no_multidex_config)
     bridge_dir = bridge.bridge_dir_for_bridge_id(session_id)
     codex_home = bridge.codex_home_for_bridge_dir(bridge_dir)
     codex_home.mkdir(parents=True)
