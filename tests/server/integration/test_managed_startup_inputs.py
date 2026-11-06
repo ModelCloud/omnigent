@@ -748,6 +748,36 @@ async def test_accepts_followups_before_provisioning_and_delivers_in_order(
     assert env.conv_store.list_pending_inputs(session_id) == []
 
 
+async def test_interrupt_returns_exact_unsent_inputs_in_order(startup_env: _Env) -> None:
+    env = startup_env
+    session_id = await _create(env)
+    for text in ("Second input", "Third input"):
+        response = await env.client.post(
+            f"/v1/sessions/{session_id}/events",
+            json={
+                "type": "message",
+                "data": {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": text}],
+                    "stable_id": uuid4().hex,
+                },
+            },
+        )
+        assert response.status_code == 202
+    interrupted = await env.client.post(
+        f"/v1/sessions/{session_id}/events", json={"type": "interrupt", "data": {}}
+    )
+    assert interrupted.status_code == 202, interrupted.text
+    dropped = interrupted.json()["discarded_inputs"]
+    assert [entry["content"][0]["text"] for entry in dropped] == [
+        _TEXT,
+        "Second input",
+        "Third input",
+    ]
+    assert dropped[0]["initial"] is True
+    assert env.conv_store.list_pending_inputs(session_id) == []
+
+
 async def test_native_mirror_retry_does_not_consume_next_identical_input(
     startup_env: _Env, monkeypatch: pytest.MonkeyPatch
 ) -> None:

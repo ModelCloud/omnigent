@@ -385,6 +385,7 @@ export function beginLocalConversation(
   const bubble: PendingUserMessage = {
     tempId: pendingMsgTempId,
     content,
+    ...(files?.length ? { files } : {}),
     initialDraft: { text, files: files ?? [] },
     createdAtS: Math.floor(Date.now() / 1000),
     ...(selfAuthor !== null ? { author: selfAuthor } : {}),
@@ -585,6 +586,8 @@ export function removeLocalConversation(tempConvId: string): boolean {
 export interface PendingUserMessage {
   tempId: string;
   content: MessageContentBlock[];
+  /** Raw attachments retained for inputs interrupted before server delivery. */
+  files?: File[];
   /** Unsent draft awaiting session/model readiness, including unuploaded files. */
   initialDraft?: { text: string; files: File[] };
   /** Client epoch seconds stamped ONCE at send time — the optimistic
@@ -2767,6 +2770,7 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
               {
                 tempId,
                 content,
+                ...(files?.length ? { files } : {}),
                 ...(initialDraft ? { initialDraft } : {}),
                 createdAtS: Math.floor(Date.now() / 1000),
                 ...(selfAuthor !== null ? { author: selfAuthor } : {}),
@@ -3240,6 +3244,8 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
     const state = get();
     const sessionId = state.conversationId;
     if (!sessionId) return;
+    // Stop must not flush client-only follow-ups into the interrupted turn.
+    suspendQueuedMessages(sessionId);
     const initialDraft = state.pendingUserMessages.find((p) => p.initialDraft)?.initialDraft;
     if (initialDraft) {
       const draft = getSessionDraft(sessionId) ?? initialDraft;
@@ -3268,11 +3274,50 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
     // do NOT abort the local SSE stream — it remains open across
     // turns; switchTo or tab unload is the only thing that tears it
     // down.
-    void interruptSession(sessionId).catch(() => {
-      // Interrupt is best-effort. A network failure here means the
-      // user's cancel won't reach the server, but the local UI already
-      // reflects the user's stop request below.
-    });
+    const pendingBeforeStop = state.pendingUserMessages;
+    void interruptSession(sessionId)
+      .then((response) => {
+        const discarded = response.discardedInputs;
+        if (!discarded?.length) return;
+        const text = discarded
+          .map((item) =>
+            item.content
+              .filter(
+                (part): part is Extract<MessageContentBlock, { type: "input_text" }> =>
+                  part.type === "input_text",
+              )
+              .map((part) => part.text)
+              .join(""),
+          )
+          .filter(Boolean)
+          .join("\n\n");
+        const files = discarded.flatMap(
+          (item) =>
+            pendingBeforeStop.find(
+              (message) => (message.pendingId ?? message.tempId) === item.pendingId,
+            )?.files ?? [],
+        );
+        if (!text && files.length === 0) return;
+        if (
+          get().conversationId === sessionId &&
+          setterForState(sessionId)?.failedSendDraft === null
+        ) {
+          setterFor(sessionId)({
+            failedSendDraft: { text, files, conversationId: sessionId, recovered: true },
+          });
+        } else {
+          const existing = getSessionDraft(sessionId);
+          setSessionDraft(sessionId, {
+            text: [existing?.text, text].filter(Boolean).join("\n\n"),
+            files: [...(existing?.files ?? []), ...files],
+          });
+        }
+      })
+      .catch(() => {
+        // Interrupt is best-effort. A network failure here means the
+        // user's cancel won't reach the server, but the local UI already
+        // reflects the user's stop request below.
+      });
     setActive((s) => {
       if (s.conversationId !== sessionId) return {};
       const patch: Partial<ChatState> = {

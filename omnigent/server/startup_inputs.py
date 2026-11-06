@@ -665,11 +665,11 @@ class ManagedStartupInputs:
                 )
         return changed
 
-    async def cancel(self, session_id: str) -> None:
+    async def cancel(self, session_id: str) -> list[dict[str, Any]]:
         items = await asyncio.to_thread(self.conversations.list_pending_inputs, session_id)
         conv = await asyncio.to_thread(self.conversations.get_conversation, session_id)
         if not items and (conv is None or conv.labels.get(STARTUP_LABEL) != "pending"):
-            return
+            return []
         await asyncio.to_thread(
             self.conversations.set_labels, session_id, {STARTUP_LABEL: "cancelled"}
         )
@@ -678,19 +678,27 @@ class ManagedStartupInputs:
         if task is not None:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+        discarded: list[dict[str, Any]] = []
         for item in items:
             if item.status == "incomplete":
                 pending_inputs.mark_interrupted(
                     session_id, [pending_inputs.make_pending_id(session_id, item.id)]
                 )
-            else:
-                await asyncio.to_thread(
-                    self.conversations.transition_pending_input,
-                    session_id,
-                    item.id,
-                    expected=item.status,
-                    status=None,
+            elif await asyncio.to_thread(
+                self.conversations.transition_pending_input,
+                session_id,
+                item.id,
+                expected=item.status,
+                status=None,
+            ):
+                discarded.append(
+                    {
+                        "pending_id": pending_inputs.make_pending_id(session_id, item.id),
+                        "content": input_content(item),
+                        **({"initial": True} if item.id == initial_input_id(session_id) else {}),
+                    }
                 )
+        return discarded
 
     async def _report_failure(self, session_id: str, failure_id: str, message: str) -> None:
         """Record a startup failure in the transcript and the session's status."""

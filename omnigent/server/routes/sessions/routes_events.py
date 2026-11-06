@@ -928,7 +928,7 @@ def register_events_routes(
         request: Request,
         session_id: str,
         body: SessionEventInput | list[SessionEventInput],
-    ) -> dict[str, bool | str] | list[dict[str, bool | str]]:
+    ) -> dict[str, Any] | list[dict[str, Any]]:
         """
         Route entry for :func:`_post_event_impl`.
 
@@ -957,7 +957,7 @@ def register_events_routes(
                 # per-append overhead outlasts that. Each run of batchable entries is
                 # authorized once and appended in one store call; every other entry
                 # keeps the per-entry path, in order.
-                acks: list[dict[str, bool | str]] = []
+                acks: list[dict[str, Any]] = []
                 for batchable, run in itertools.groupby(body, key=_is_batchable_external_item):
                     if not batchable:
                         for event in run:
@@ -1084,7 +1084,7 @@ def register_events_routes(
         session_id: str,
         body: SessionEventInput,
         in_flight: contextlib.ExitStack | None = None,
-    ) -> dict[str, bool | str]:
+    ) -> dict[str, Any]:
         """
         Submit a session event (input message, tool output,
         approval, or interrupt).
@@ -1790,10 +1790,11 @@ def register_events_routes(
             await _require_access(
                 user_id, session_id, LEVEL_OWNER, permission_store, conversation_store
             )
+        discarded_inputs: list[dict[str, Any]] = []
         if body.type in (_INTERRUPT_TYPE, _STOP_SESSION_TYPE):
             startup = getattr(request.app.state, "startup_inputs", None)
             if startup is not None:
-                await startup.cancel(session_id)
+                discarded_inputs = await startup.cancel(session_id)
         stop_codex_side_chat = (
             body.type == _STOP_SESSION_TYPE
             and _is_codex_native_subagent(conv)
@@ -1888,6 +1889,8 @@ def register_events_routes(
                     session_id,
                     {CLOSED_LABEL_KEY: CLOSED_LABEL_VALUE},
                 )
+            if discarded_inputs and body.type == _INTERRUPT_TYPE:
+                return {"queued": False, "discarded_inputs": discarded_inputs}
             return {"queued": False}
         if body.type == _STOP_SESSION_TYPE:
             # Fence the cancelled turn, same as interrupt.
