@@ -58,6 +58,8 @@ from omnigent.host.frames import (
     HostPluginsResultFrame,
     HostProbeAccountsFrame,
     HostProbeAccountsResultFrame,
+    HostProbeBgrFrame,
+    HostProbeBgrResultFrame,
     HostRefreshHarnessesFrame,
     HostRefreshHarnessesResultFrame,
     HostRemoveWorktreeFrame,
@@ -85,6 +87,43 @@ from omnigent.host.frames import (
     parse_server_capabilities,
     workspace_missing_message,
 )
+
+
+@pytest.mark.parametrize(
+    "frame",
+    [
+        HostProbeBgrFrame("bgr-probe"),
+        HostProbeBgrResultFrame("bgr-probe", True, True, ["codex-native"]),
+        HostProbeBgrResultFrame("bgr-probe", False, False, [], "Update MultiDex"),
+    ],
+)
+def test_bgr_probe_frames_round_trip(frame) -> None:
+    assert decode_host_frame(encode_host_frame(frame)) == frame
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"launch_supported": "true"},
+        {"reviewer_isolation": 1},
+        {"supported_harnesses": ["codex-native", 2]},
+        {"reason": {"private": "data"}},
+    ],
+)
+def test_bgr_probe_rejects_malformed_capabilities(changes) -> None:
+    with pytest.raises(ValueError):
+        decode_host_frame(
+            json.dumps(
+                {
+                    "kind": "host.probe_bgr_result",
+                    "request_id": "probe",
+                    "launch_supported": True,
+                    "reviewer_isolation": True,
+                    "supported_harnesses": ["codex-native"],
+                    **changes,
+                }
+            )
+        )
 
 
 def test_import_local_frames_round_trip() -> None:

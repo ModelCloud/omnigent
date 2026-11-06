@@ -14,6 +14,39 @@ apply only to that side chat. See the [side-chat settings recipe](sessions.md).
 
 ## Sub-features
 
+- `bgr-configuration`: New Chat's ordinary-host agent picker offers **BGR →
+  Configure draft** beside Polly, not a runnable agent. The scrollable dialog
+  configures one brain, a 1–64 dynamic grunt cap/default profile and one or two
+  fresh-reviewer profiles. All six profile fields persist per
+  browser/server/user/project/host. Each role uses friendly harness names (MultiDex,
+  not `codex-native`) and one Harness → Model → Provider → Variant → Reasoning
+  flow. The opt-in native selector form handles singleton/ungrouped catalogs and
+  explicit fast-only variants without changing compact composer consumers.
+  Provider means “Service serving this model”; missing metadata is not invented.
+  Advanced manual overrides are collapsed by default. Unsupported or mismatched
+  saved values remain visibly unverified instead of claiming another active
+  catalog row. Saving incomplete drafts is allowed; storage and validation errors
+  never claim success. Reopen/reload restores saved values. Launch is explicitly
+  unavailable; no generic session is created. Closing restores the previous
+  normal agent/message. Sandbox and deployment-curated menus omit the preview.
+  No host or unresolved identity prevents saving. See
+  [the controller contract](../docs/BGR_CONTROLLER.md#new-chat-configuration-preview).
+  Component/flow coverage: `web/src/components/BgrConfigurationDialog.test.tsx`,
+  `web/src/lib/bgrDraft.test.ts`, and the BGR cases in
+  `web/src/shell/NewChatDialog.flow.test.tsx`. Browser verification is still
+  required for desktop/mobile layout, focus and nested dropdown behavior.
+
+  Manual journey: on an isolated server with a connected ordinary host, open
+  New Chat → agent picker → BGR. Confirm MultiDex labels on every role and
+  Advanced collapsed by default. Choose a model, provider and variant
+  (explicitly choose Fast when that is the only variant), then reasoning.
+  Open Advanced to edit a manual provider and confirm its unverified notice,
+  not another catalog row, is shown. Set 64 grunts and 2 reviewers,
+  save and reload; verify every field is retained. Switch hosts/users to verify
+  scope isolation. Make storage unavailable and verify a visible save error.
+  Confirm Launch BGR stays disabled, then go Back to New Chat and verify the
+  previous Polly/native agent and prompt can still launch normally.
+
 - `touch-targets`: native iOS/Android apps and browsers with a coarse primary
   pointer and no hover use at least 44 CSS-pixel composer controls and menu rows.
   The layout adapts at phone, tablet, and desktop widths; mouse browsers retain

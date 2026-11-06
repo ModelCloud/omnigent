@@ -410,6 +410,27 @@ She's the tech lead: she plans, delegates the work to coding sub-agents
 (Claude Code, Codex, or Pi) in parallel git worktrees, then routes each diff
 to a reviewer from a different vendor than the one that wrote it. You merge.
 
+The separate [BGR controller foundation](docs/BGR_CONTROLLER.md) includes a
+deny-by-default supervised-generation auth foundation (not launch enablement) and a durable,
+owner-authorized team/task ledger and mailbox, plus an opt-in codex-native
+status/general-message translator with explicit host/native identity mapping,
+durable native message-ID translation and host source-record-before-delivery. The
+translator is not wired to runtime scheduling or callbacks. The independent-review
+core persists immutable assignments and sealed results, with a trusted, sanitized
+per-review publication outbox, host-only credential redaction and uncertain-write
+reconciliation. Failed/cancelled reviewers can settle as explicit incomplete host
+evidence after confirmed stop. Publication authorization, automatic draining,
+native isolated startup and controller scheduling are not wired. New Chat offers
+**BGR → Configure draft** alongside Polly on an ordinary host: configure one
+brain, dynamic grunts and one or two reviewer profiles with a single
+Harness → Model → Provider → Variant → Reasoning flow. Harnesses use
+friendly names (for example, MultiDex); optional **Advanced manual overrides**
+preserve raw/unverified values without duplicate catalog pickers. Save a
+browser-local draft scoped to the server, user, project and host. This is
+**configuration-only**; launch remains unavailable until worker lifecycle, runtime role enforcement and
+independent reviewers are implemented. It never creates a generic session as a
+substitute. Polly and normal native launches are unchanged.
+
 **🟠🔵 Debby** is a brainstorming partner with two heads, one Claude and one GPT.
 Every question you ask goes to both heads, and she lays the two answers out
 side by side. Type `/debate` and the heads critique each other for a few

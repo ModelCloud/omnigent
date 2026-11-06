@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import json
 
+import pytest
 from websockets.asyncio.server import ServerConnection, serve
 
 from omnigent.harnesses.codex_native.app_server import CodexAppServerClient
@@ -22,11 +23,44 @@ async def _serve_probe_scenario(websocket: ServerConnection) -> None:
         method = message.get("method")
         if method == "initialize":
             await websocket.send(json.dumps({"id": message["id"], "result": {}}))
+        elif method == "probe/rpc":
+            await websocket.send(json.dumps({"id": message["id"], "result": {"ready": True}}))
         elif method == "probe/emit":
             await websocket.send(json.dumps({"method": "thread/event", "params": {}}))
         elif method == "probe/disconnect":
             await websocket.close()
             return
+
+
+async def test_notification_observer_does_not_steal_events_or_deadlock_rpc_reader():
+    async with serve(_serve_probe_scenario, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        client = CodexAppServerClient(ws_url=f"ws://127.0.0.1:{port}")
+        observed = asyncio.Event()
+        responses = []
+
+        async def callback(message):
+            assert message["method"] == "thread/event"
+            responses.append(await client.request("probe/rpc", {}))
+            observed.set()
+
+        remove = client.add_notification_observer("thread/event", callback)
+        with pytest.raises(ValueError, match="already owns"):
+            client.add_notification_observer("thread/event", callback)
+        await client.connect()
+        stream = client.iter_events()
+        try:
+            await client.notify("probe/emit")
+            event = await asyncio.wait_for(anext(stream), _SETTLE_DEADLINE)
+            assert event["method"] == "thread/event"
+            await asyncio.wait_for(observed.wait(), _SETTLE_DEADLINE)
+            assert responses == [{"id": 2, "result": {"ready": True}}]
+            remove()
+            client.add_notification_observer("thread/event", callback)
+        finally:
+            await stream.aclose()
+            await client.close()
+        assert not client._notification_observers
 
 
 async def test_concurrent_event_consumers_all_settle_on_disconnect() -> None:

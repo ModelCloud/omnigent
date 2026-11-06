@@ -6,7 +6,10 @@ from pathlib import Path
 import pytest
 
 from omnigent.harnesses.multidex_native.config import (
+    DEEPSEEK_SELECTOR_MODELS,
     MULTIDEX_BUILTIN_PROVIDER_OVERRIDE_FIELDS,
+    MultiDexConfig,
+    MultiDexModelRegistration,
     load_multidex_config,
     multidex_model_for_selection,
     multidex_provider_config_overrides,
@@ -15,6 +18,49 @@ from omnigent.harnesses.multidex_native.config import (
     multidex_runtime_provider_id,
     with_multidex_model_picker_row,
 )
+
+
+@pytest.mark.parametrize("provider", ["lab", "multidex", "openai", "gateway"])
+@pytest.mark.parametrize("model", ["vendor/model", *DEEPSEEK_SELECTOR_MODELS])
+def test_runtime_provider_ids_match_native_model_routing(provider: str, model: str) -> None:
+    runtime_id = multidex_runtime_provider_id(provider, model)
+    if model in DEEPSEEK_SELECTOR_MODELS:
+        assert runtime_id == DEEPSEEK_SELECTOR_MODELS[model][0]
+    else:
+        assert runtime_id.startswith("omnigent-provider-")
+        assert not runtime_id.startswith("omnigent-multidex-")
+        assert runtime_id == multidex_runtime_provider_id(provider, "another/model")
+        assert runtime_id != multidex_runtime_provider_id(f"{provider}-other", model)
+
+
+@pytest.mark.parametrize(
+    "model,expected_id",
+    [(model, route[0]) for model, route in DEEPSEEK_SELECTOR_MODELS.items()],
+)
+def test_canonical_models_materialize_the_native_alias_table(model, expected_id) -> None:
+    registration = MultiDexModelRegistration(
+        model=model,
+        provider="lab",
+        display_name=model,
+        base_url="https://models.example/v1",
+        provider_config={"experimental_bearer_token": "test-token"},
+    )
+    config = MultiDexConfig(
+        local_model=model,
+        provider="lab",
+        base_url=registration.base_url,
+        models=(registration,),
+    )
+    tables = tomllib.loads(multidex_provider_config_overrides(config)[0])["model_providers"]
+    assert set(tables) == {expected_id}
+    assert tables[expected_id]["base_url"] == registration.base_url
+    if expected_id in {"openrouter", "lithos"}:
+        assert set(tables[expected_id]) <= MULTIDEX_BUILTIN_PROVIDER_OVERRIDE_FIELDS
+        assert tables[expected_id]["auth"]["args"][-1] == "printf %s test-token"
+        assert multidex_provider_env_keys(config) == (f"{expected_id.upper()}_API_KEY",)
+    else:
+        assert tables[expected_id]["experimental_bearer_token"] == "test-token"
+        assert tables[expected_id]["supports_responses_continuation"] is True
 
 
 @pytest.mark.parametrize("explicit_fast", [False, True])
@@ -88,7 +134,7 @@ def test_openrouter_registration_keeps_native_routing_and_picker_metadata(
     models = tmp_path / "models.toml"
     models.write_text(f'[models."{model}"]\nprovider = "openrouter"\n', encoding="utf-8")
     registration = load_multidex_config(providers, models_path=models, require_token=False)
-    assert multidex_runtime_provider_id("openrouter") == "openrouter"
+    assert multidex_runtime_provider_id("openrouter", model) == "openrouter"
     provider_config = tomllib.loads(multidex_provider_config_overrides(registration)[0])[
         "model_providers"
     ]["openrouter"]
@@ -167,6 +213,9 @@ discover_capabilities = true
 [models."lab/coder-32b"]
 provider = "lab"
 display_name = "Lab Coder"
+
+[models."dsv/other"]
+provider = "dsv"
 """,
         encoding="utf-8",
     )
@@ -186,19 +235,29 @@ display_name = "Lab Coder"
 
     local_overrides = multidex_provider_config_overrides(registration)
     provider_config = tomllib.loads(local_overrides[0])["model_providers"]
-    dsv_runtime_id = multidex_runtime_provider_id("dsv")
-    assert dsv_runtime_id != "openai"
-    assert multidex_runtime_provider_id("multidex") == "multidex"
+    dsv_runtime_id = multidex_runtime_provider_id("dsv", "DS v4.1 Flash 1017")
+    assert dsv_runtime_id == "multidex"
+    assert multidex_runtime_provider_id("multidex", "DS v4.1 Flash 1017") == "multidex"
     assert provider_config[dsv_runtime_id]["base_url"] == "http://127.0.0.1:9000/v1"
     assert provider_config[dsv_runtime_id]["experimental_bearer_token"] == "dsv-test-token"
     assert "env_key" not in provider_config[dsv_runtime_id]
     assert provider_config[dsv_runtime_id]["requires_openai_auth"] is False
     assert "test-secret-value" not in repr(provider_config[dsv_runtime_id])
+    lab_runtime_id = multidex_runtime_provider_id("lab", "lab/coder-32b")
+    assert lab_runtime_id.startswith("omnigent-provider-")
+    assert provider_config[lab_runtime_id]["base_url"] == "https://models.example/v1"
+    dsv_generic_id = multidex_runtime_provider_id("dsv", "dsv/other")
+    assert dsv_generic_id != dsv_runtime_id
+    assert (
+        provider_config[dsv_generic_id]["base_url"] == provider_config[dsv_runtime_id]["base_url"]
+    )
+    assert provider_config[dsv_generic_id]["experimental_bearer_token"] == "dsv-test-token"
 
     rows = with_multidex_model_picker_row([], registration)
     assert [(row["id"], row["displayName"]) for row in rows] == [
         ("DS v4.1 Flash 1017", "DeepSeek v4.1 Flash"),
         ("lab/coder-32b", "Lab Coder"),
+        ("dsv/other", "dsv/other"),
     ]
     assert rows[0]["isDefault"] is True
     assert rows[0]["defaultReasoningEffort"] == "max"
@@ -277,7 +336,7 @@ base_url = "https://gateway.example/v1"
     assert argv_overrides == []
     resulting = tomllib.loads((codex_home / "config.toml").read_text())
     providers_after = resulting["model_providers"]
-    runtime_id = multidex_runtime_provider_id("openai")
+    runtime_id = multidex_runtime_provider_id("openai", "vendor/model")
     assert resulting["model_provider"] == "gateway"
     assert providers_after["openai"]["base_url"] == "https://api.openai.com/v1"
     assert providers_after["gateway"]["base_url"] == "https://gateway.example/v1"
@@ -380,7 +439,7 @@ requires_openai_auth = false
 
     provider_config = tomllib.loads(multidex_provider_config_overrides(registration)[0])[
         "model_providers"
-    ][multidex_runtime_provider_id("lab")]
+    ][multidex_runtime_provider_id("lab", "vendor/model")]
     assert provider_config["experimental_bearer_token"] == "config-token"
     assert "env_key" not in provider_config
 

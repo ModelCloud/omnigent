@@ -42,6 +42,7 @@ import {
   type ComposerConfigSection,
 } from "@/components/composer/ComposerConfigSections";
 import { NativeModelSelectors } from "@/components/NativeModelSelectors";
+import { BgrLaunchDialog } from "@/components/BgrLaunchDialog";
 import { compatibleModelEffort, hasGroupedModelOptions } from "@/lib/modelSelection";
 import { useComposerConfigCycleHotkeys } from "@/hooks/useComposerConfigCycleHotkeys";
 import { buildFusionSections } from "@/components/composer/fusionSections";
@@ -1213,6 +1214,7 @@ export function AgentHarnessPicker({
   pendingAgentId,
   onSelectPending,
   onCreateCustomAgent,
+  onConfigureBgr,
   sandboxSelected,
   allowCreateCustomAgent = true,
   onOpenChange,
@@ -1258,6 +1260,8 @@ export function AgentHarnessPicker({
   pendingAgentId: string;
   onSelectPending: () => void;
   onCreateCustomAgent: () => void;
+  /** Configuration-only entry; never selects a launchable catalog agent. */
+  onConfigureBgr?: () => void;
   sandboxSelected: boolean;
   /** Whether to offer the "Create custom agent" action. Defaults true; an
    *  embedder that only picks an existing agent (e.g. project settings) can
@@ -2013,15 +2017,30 @@ export function AgentHarnessPicker({
                 no bundle agents and no custom group, and a rule closing the
                 menu with nothing under it is the same leftover the Agents
                 header below avoids. */}
-              {(bundleEntries.length > 0 || hasCustomGroup) && <DropdownMenuSeparator />}
+              {(bundleEntries.length > 0 || hasCustomGroup || onConfigureBgr) && (
+                <DropdownMenuSeparator />
+              )}
             </>
           )}
           {/* Agents group — bundle agents inline; header only when the group
             has content, like "Harnesses" above. */}
-          {(bundleEntries.length > 0 || hasCustomGroup) && (
+          {(bundleEntries.length > 0 || hasCustomGroup || onConfigureBgr) && (
             <PickerSectionHeader>Agents</PickerSectionHeader>
           )}
           {bundleEntries.map(renderEntry)}
+          {onConfigureBgr && (
+            <DropdownMenuItem
+              data-testid="new-chat-landing-bgr"
+              onSelect={() => {
+                changeOpen(false);
+                onConfigureBgr();
+              }}
+              className="items-center"
+            >
+              <span className="min-w-0 flex-1">BGR</span>
+              <span className="text-xs text-muted-foreground">Configure draft</span>
+            </DropdownMenuItem>
+          )}
           {/* Existing custom agents fold into an "Other..." submenu (with
             the pending upload and the create action). With no custom agents the
             submenu would hold only "Create custom agent", so we surface that as
@@ -2327,6 +2346,7 @@ export function NewChatLandingScreen() {
   // form submit, handleCreate detects the pending bundle, builds the
   // tar.gz, and uses multipart POST instead of the normal JSON path.
   const [createAgentOpen, setCreateAgentOpen] = useState(false);
+  const [bgrOpen, setBgrOpen] = useState(false);
   const [pendingAgent, setPendingAgent] = useState<AgentBundleInput | null>(null);
   // Sentinel id for the pending custom agent in the picker dropdown.
   const PENDING_AGENT_ID = "__pending_custom_agent__";
@@ -5268,6 +5288,12 @@ export function NewChatLandingScreen() {
     field: "sandboxRepo" | "other";
     message: string | null;
   } | null => {
+    if (bgrOpen) {
+      return {
+        field: "other",
+        message: "Finish or close BGR configuration before sending a chat.",
+      };
+    }
     if (mcpAuthorizing || mcpSelectionError !== null) {
       return {
         field: "other",
@@ -5682,6 +5708,7 @@ export function NewChatLandingScreen() {
   }
 
   async function handleCreate() {
+    if (bgrOpen) return;
     // Mirror the Send button's disabled condition (canSubmit) so the Enter-key
     // and form-submit paths that call this directly can't create a session with
     // a blank message, host, agent, or workspace.
@@ -6845,6 +6872,31 @@ export function NewChatLandingScreen() {
       className="relative flex min-h-0 flex-1 items-stretch justify-center md:items-center md:pb-24"
       data-testid="new-chat-landing"
     >
+      {bgrOpen && (
+        <BgrLaunchDialog
+          key={`${pickerCacheKey}:${selectedHostId}`}
+          scope={pickerCacheKey}
+          host={selectedHost}
+          agents={agents ?? []}
+          harnessLabels={brainHarnessLabelsAll}
+          workspace={workspace}
+          initialPrompt={sanitizeInitialPrompt(message)}
+          projectId={selectedProject ? configProjectId : null}
+          onClose={() => setBgrOpen(false)}
+          onLaunched={({ brainSessionId }) => {
+            setSessionHost(brainSessionId, selectedHostId);
+            markSessionCreated(brainSessionId, "computer");
+            const returnToCanvas =
+              searchParams.has(CANVAS_QUERY_PARAM) && isFeatureEnabled(info, "canvas");
+            const canvasId = selectedProject
+              ? (configProjectId ?? `name:${selectedProject}`)
+              : MAIN_CANVAS_ID;
+            navigate(
+              returnToCanvas ? canvasLocation(canvasId, brainSessionId) : `/c/${brainSessionId}`,
+            );
+          }}
+        />
+      )}
       {/* Padding lives inside the 800px cap, so the composer surface reaches
           its shared 48rem column (800 − 32 = 768px) on desktop. px-4 (16px
           gutters) keeps the composer from feeling cramped against the
@@ -7399,6 +7451,11 @@ export function NewChatLandingScreen() {
                           }
                           onDismissCyclePreview={dismissPreview}
                           agentEntries={agentEntries}
+                          onConfigureBgr={
+                            !sandboxSelected && curation.restrictToAgentNames.size === 0
+                              ? () => setBgrOpen(true)
+                              : undefined
+                          }
                           harnessEntries={harnessEntries}
                           blockedReasons={sandboxSelected ? sandboxBlockedReasons : undefined}
                           onPrefetchEntries={prefetchSandboxPreviews}

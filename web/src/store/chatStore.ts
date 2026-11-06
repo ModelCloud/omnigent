@@ -391,6 +391,7 @@ export function beginLocalConversation(
   const bubble: PendingUserMessage = {
     tempId: pendingMsgTempId,
     content,
+    ...(files?.length ? { files } : {}),
     initialDraft: { text, files: files ?? [] },
     createdAtS: Math.floor(Date.now() / 1000),
     ...(selfAuthor !== null ? { author: selfAuthor } : {}),
@@ -591,6 +592,8 @@ export function removeLocalConversation(tempConvId: string): boolean {
 export interface PendingUserMessage {
   tempId: string;
   content: MessageContentBlock[];
+  /** Raw attachments retained for inputs interrupted before server delivery. */
+  files?: File[];
   /** Unsent draft awaiting session/model readiness, including unuploaded files. */
   initialDraft?: { text: string; files: File[] };
   /** Client epoch seconds stamped ONCE at send time — the optimistic
@@ -2791,6 +2794,7 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
               {
                 tempId,
                 content,
+                ...(files?.length ? { files } : {}),
                 ...(initialDraft ? { initialDraft } : {}),
                 createdAtS: Math.floor(Date.now() / 1000),
                 ...(selfAuthor !== null ? { author: selfAuthor } : {}),
@@ -3315,7 +3319,7 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
           (item) =>
             pendingBeforeStop.find(
               (message) => (message.pendingId ?? message.tempId) === item.pendingId,
-            )?.initialDraft?.files ?? [],
+            )?.files ?? [],
         );
         if (!text && files.length === 0) return;
         if (

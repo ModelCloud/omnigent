@@ -38,7 +38,19 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 
-import { authenticatedFetch } from "@/lib/identity";
+import { authenticatedFetch, getCurrentUserId } from "@/lib/identity";
+import { getBgrLaunchCapabilities, launchBgr } from "@/lib/bgrApi";
+import { bgrDraftStorageKey, emptyBgrDraft, writeBgrDraft } from "@/lib/bgrDraft";
+import { getNewChatPickerCacheKey } from "@/lib/newChatPickerCache";
+
+vi.mock("@/lib/bgrApi", () => ({
+  getBgrLaunchCapabilities: vi.fn().mockResolvedValue({
+    launch_supported: false,
+    supported_harnesses: [],
+    reviewer_isolation: false,
+  }),
+  launchBgr: vi.fn(),
+}));
 import { authorizeRegistryService, registryRequest } from "@/lib/mcpRegistry";
 import { readLastMcpServices, writeLastMcpServices } from "@/lib/mcpPreferences";
 
@@ -411,6 +423,13 @@ beforeEach(() => {
   pushMatchers.length = 0;
   announcePushedSession = null;
   vi.mocked(authenticatedFetch).mockReset();
+  vi.mocked(getCurrentUserId).mockReturnValue(null);
+  vi.mocked(getBgrLaunchCapabilities).mockResolvedValue({
+    launch_supported: false,
+    supported_harnesses: [],
+    reviewer_isolation: false,
+  });
+  vi.mocked(launchBgr).mockReset();
   vi.mocked(registryRequest).mockReset();
   vi.mocked(authorizeRegistryService).mockReset();
   // Clear the module-level landing draft so a base branch (or other field)
@@ -442,6 +461,129 @@ afterEach(() => {
 });
 
 describe("NewChatLandingScreen create flow", () => {
+  it("opens BGR beside Polly without selecting a generic agent or allowing any submit path", async () => {
+    setAgents([agent({ name: "polly", display_name: "Polly", builtin: true })]);
+    renderLanding();
+    await waitForWorkspaceSeed();
+    typeMessage("Keep my normal chat draft");
+    const input = screen.getByTestId("new-chat-landing-input");
+    const mainForm = input.closest("form")!;
+    const picker = screen.getByTestId("new-chat-landing-agent-select");
+    fireEvent.pointerDown(picker, { button: 0 });
+    expect(screen.getByTestId("new-chat-landing-agent-ag_hello")).toHaveTextContent("Polly");
+    fireEvent.click(screen.getByTestId("new-chat-landing-bgr"));
+    expect(screen.getByRole("dialog", { name: "BGR configuration" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Launch BGR" })).toBeDisabled();
+    expect(screen.getByTestId("new-chat-landing-submit")).toBeDisabled();
+    fireEvent.submit(mainForm);
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+    expect(authenticatedFetch).not.toHaveBeenCalled();
+    expect(beginLocalConversationMock).not.toHaveBeenCalled();
+    expect(navigateMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Back to New Chat" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(picker).toHaveTextContent("Polly");
+    expect(input).toHaveValue("Keep my normal chat draft");
+    expect(screen.getByTestId("new-chat-landing-submit")).toBeEnabled();
+  });
+
+  it("does not offer BGR configuration for a managed sandbox", async () => {
+    renderLanding([], { managed_sandboxes_enabled: true });
+    fireEvent.pointerDown(screen.getByTestId("new-chat-landing-host-chip"), { button: 0 });
+    fireEvent.click(screen.getByTestId("new-chat-landing-sandbox-option"));
+    fireEvent.pointerDown(screen.getByTestId("new-chat-landing-agent-select"), { button: 0 });
+    expect(screen.queryByTestId("new-chat-landing-bgr")).not.toBeInTheDocument();
+    expect(authenticatedFetch).not.toHaveBeenCalled();
+  });
+
+  it("does not bypass a deployment-curated agent menu with BGR configuration", () => {
+    setAgents([agent({ name: "polly", display_name: "Polly", builtin: true })]);
+    renderLanding([], {
+      picker: { restrictToAgentNames: new Set(["polly"]), defaultAgentName: "polly" },
+    });
+    fireEvent.pointerDown(screen.getByTestId("new-chat-landing-agent-select"), { button: 0 });
+    expect(screen.getByTestId("new-chat-landing-agent-ag_hello")).toBeInTheDocument();
+    expect(screen.queryByTestId("new-chat-landing-bgr")).not.toBeInTheDocument();
+    expect(authenticatedFetch).not.toHaveBeenCalled();
+  });
+
+  it("cannot configure or submit BGR without a connected host selection", () => {
+    setHosts([]);
+    renderLanding();
+    typeMessage("Do not invent a BGR host");
+    expect(screen.queryByTestId("new-chat-landing-bgr")).not.toBeInTheDocument();
+    expect(screen.getByTestId("new-chat-landing-submit")).toBeDisabled();
+    fireEvent.submit(screen.getByTestId("new-chat-landing-input").closest("form")!);
+    expect(authenticatedFetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { query: "", canvas: false },
+    { query: "canvas=main", canvas: true },
+  ])("routes only after a confirmed BGR launch ($query)", async ({ query, canvas }) => {
+    searchParams = new URLSearchParams(query);
+    vi.mocked(getCurrentUserId).mockReturnValue("bgr-owner");
+    setAgents([agent({ name: "codex-native-ui" })]);
+    const profile = {
+      harness: "codex-native",
+      model: "test-model",
+      provider: "test-provider",
+      variant: "",
+      speed: "",
+      reasoning: "",
+    };
+    const config = {
+      ...emptyBgrDraft(),
+      brain: profile,
+      grunt: profile,
+      reviewers: [profile, profile],
+    };
+    const scope = getNewChatPickerCacheKey("", "bgr-owner")!;
+    expect(writeBgrDraft(bgrDraftStorageKey(scope, "host_1"), config)).toBeNull();
+    vi.mocked(getBgrLaunchCapabilities).mockResolvedValue({
+      launch_supported: true,
+      supported_harnesses: ["codex-native"],
+      reviewer_isolation: true,
+    });
+    let confirmLaunch!: (result: Awaited<ReturnType<typeof launchBgr>>) => void;
+    vi.mocked(launchBgr).mockReturnValue(
+      new Promise((resolve) => {
+        confirmLaunch = resolve;
+      }),
+    );
+    renderLanding([], { features: { canvas: true } });
+    await waitForWorkspaceSeed();
+    typeMessage("Run a BGR team");
+    fireEvent.pointerDown(screen.getByTestId("new-chat-landing-agent-select"), { button: 0 });
+    fireEvent.click(screen.getByTestId("new-chat-landing-bgr"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Launch BGR" })).toBeEnabled());
+    fireEvent.pointerDown(screen.getByTestId("new-chat-landing-submit").parentElement!);
+    expect(await screen.findByTestId("new-chat-landing-submit-error-tooltip")).toHaveTextContent(
+      "Finish or close BGR configuration before sending a chat.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Launch BGR" }));
+    expect(launchBgr).toHaveBeenCalledWith(
+      "host_1",
+      expect.objectContaining({
+        teamId: expect.stringMatching(/^[0-9a-f]{32}$/),
+        agentId: "ag_hello",
+        workspace: SEEDED_WORKSPACE,
+        config,
+        initialPrompt: "Run a BGR team",
+        projectId: null,
+      }),
+    );
+    expect(authenticatedFetch).not.toHaveBeenCalled();
+    expect(beginLocalConversationMock).not.toHaveBeenCalled();
+    expect(navigateMock).not.toHaveBeenCalled();
+    await act(async () => confirmLaunch({ brainSessionId: "bgr-brain", state: "running" }));
+    expect(navigateMock).toHaveBeenCalledExactlyOnceWith(
+      canvas ? { pathname: "/canvas/c/bgr-brain", search: "" } : "/c/bgr-brain",
+    );
+    expect(setPendingInitialPromptMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     { query: "canvas=main", canvasId: "main", project: undefined },
     {

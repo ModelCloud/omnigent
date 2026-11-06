@@ -22,7 +22,7 @@ from fastapi.responses import JSONResponse
 from starlette.requests import HTTPConnection
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from omnigent.errors import OmnigentError
+from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.runner import create_runner_app
 from omnigent.runner.identity import RUNNER_TUNNEL_TOKEN_HEADER, token_bound_runner_id
 from omnigent.runner.transports.ws_tunnel.diagnostics import OutboundFrame, TunnelDiagnostics
@@ -43,9 +43,11 @@ from omnigent.runner.transports.ws_tunnel.serve import dispatch_via_asgi
 from omnigent.runner.transports.ws_tunnel.transport import WSTunnelTransport
 from omnigent.server import tunnel_handshake
 from omnigent.server.auth import RESERVED_USER_LOCAL, AuthProvider
+from omnigent.server.bgr_generation_auth import GenerationAuth, GenerationAuthorityMiddleware
 from omnigent.server.disconnect_evidence import DisconnectEvidence
 from omnigent.server.routes.runner_tunnel import create_runner_tunnel_router
 from tests.budgets import budget
+from tests.host.test_bgr_supervisor import request_stop as request_stop
 from tests.runner.helpers import NullServerClient
 
 pytestmark = pytest.mark.asyncio
@@ -2168,6 +2170,117 @@ async def _post_mint_token(
         return await client.post(f"/v1/runners/{runner_id}/token", headers=headers)
 
 
+@pytest.mark.parametrize("state", ["live", "revoked", "unsupported", "corrupt"])
+async def test_supervised_binding_never_mints_owner_token(request_stop, state):
+    token = "supervised-binding"
+    generation = request_stop.admission.generation.model_copy(
+        update={"runner_id": token_bound_runner_id(token)}
+    )
+
+    def validate(candidate):
+        if state == "revoked" or candidate != generation:
+            raise OmnigentError("revoked", code=ErrorCode.FORBIDDEN)
+        return "supervised-owner"
+
+    def resolve(runner):
+        if state == "corrupt":
+            raise ValueError("corrupt classification must never become owner authority")
+        return generation if runner == generation.runner_id else None
+
+    app = _mint_route_app(
+        auth_provider=_MintingAuthProvider(),
+        resolve_managed_runner_owner=lambda _: "ordinary-owner",
+    )
+    authority = GenerationAuth(
+        key=None if state == "unsupported" else b"s" * 32,
+        resolve=resolve,
+        validate=validate,
+        binding=lambda _: (generation.runner_id, generation.host_id),
+    )
+    app.state.bgr_generation_auth = authority
+    app.add_middleware(GenerationAuthorityMiddleware, authority=authority)
+    response = await _post_mint_token(app, generation.runner_id, token=token)
+    assert response.status_code == (200 if state == "live" else 403)
+    if state == "live":
+        assert response.json()["token"].startswith("bgr1.")
+        assert authority.decode(response.json()["token"]).generation == generation
+
+
+@pytest.mark.parametrize("bearer", [False, True])
+@pytest.mark.parametrize("fault", ["revoke", "rebind", "event", "proxy"])
+async def test_supervised_tunnel_reconnect_has_live_fencing_and_no_generic_frames(
+    request_stop, bearer, fault
+):
+    token = "supervised-binding"
+    generation = request_stop.admission.generation.model_copy(
+        update={"runner_id": token_bound_runner_id(token)}
+    )
+    state = {"live": True, "binding": True}
+
+    def validate(candidate):
+        if not state["live"] or candidate != generation:
+            raise OmnigentError("revoked", code=ErrorCode.FORBIDDEN)
+        return "supervised-owner"
+
+    authority = GenerationAuth(
+        key=b"s" * 32,
+        resolve=lambda runner: generation if runner == generation.runner_id else None,
+        validate=validate,
+        binding=lambda _: (generation.runner_id, generation.host_id) if state["binding"] else None,
+    )
+    route = _tunnel_route_app(auth_provider=_CredentialHeaderAuthProvider())
+    route.app.state.bgr_generation_auth = authority
+    route.app.add_middleware(GenerationAuthorityMiddleware, authority=authority)
+    headers = [(RUNNER_TUNNEL_TOKEN_HEADER.lower().encode(), token.encode())]
+    if bearer:
+        headers.extend(
+            [
+                (b"authorization", f"Bearer {authority.mint(generation)['token']}".encode()),
+                (b"x-test-user", b"ordinary-owner"),
+            ]
+        )
+    communicator = await _connect_route(
+        route.app,
+        f"/v1/runners/{generation.runner_id}/tunnel",
+        headers=headers,
+        client_host="203.0.113.42",
+    )
+    try:
+        await _send_hello(communicator, route.registry, runner_id=generation.runner_id)
+        assert route.registry.get(generation.runner_id).owner == "supervised-owner"
+        if fault == "revoke":
+            state["live"] = False
+        elif fault == "rebind":
+            state["binding"] = False
+        elif fault == "event":
+            await communicator.send_input(
+                {
+                    "type": "websocket.receive",
+                    "text": encode_frame(
+                        EventBatchFrame(
+                            id="forged",
+                            session_id="foreign-session",
+                            events=[{"type": "external_output_text_delta", "data": {}}],
+                        )
+                    ),
+                }
+            )
+        else:
+            await route.registry.send_text(
+                route.registry.get(generation.runner_id),
+                encode_frame(
+                    RequestFrame(id="proxy", method="GET", path="/agents", headers={}, body=None)
+                ),
+            )
+        closed = await communicator.receive_output(timeout=budget(3.0))
+        assert closed["type"] == "websocket.close" and closed["code"] == 4004
+        await communicator.wait(timeout=budget(1.0))
+        assert route.registry.get(generation.runner_id) is None
+    finally:
+        communicator.stop(exceptions=False)
+        await asyncio.gather(communicator.future, return_exceptions=True)
+
+
 async def test_mint_token_endpoint_returns_owner_bearer_for_valid_binding_token() -> None:
     """A valid binding token mints an owner bearer scoped to the launch owner.
 
@@ -2592,6 +2705,7 @@ class _FakeSenderWebSocket:
     ) -> None:
         from starlette.websockets import WebSocketState
 
+        self.scope = {"type": "websocket"}
         self._raises = raises
         self.application_state = (
             application_state if application_state is not None else WebSocketState.CONNECTED

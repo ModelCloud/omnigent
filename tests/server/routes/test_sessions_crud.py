@@ -776,6 +776,9 @@ async def test_patch_rejects_client_supplied_sandbox_labels(
         "omnigent.sandbox.agent",
         "omnigent.sandbox.repo",
         "omnigent.sandbox.future",
+        "omnigent.bgr.team_id",
+        "omnigent.bgr.host_id",
+        "omnigent.bgr.config",
     ):
         resp = await client.patch(
             f"/v1/sessions/{session_id}",

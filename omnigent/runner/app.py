@@ -5185,6 +5185,7 @@ def create_runner_app(
             post_tools_changed,
             start_tool_relay,
         )
+        from omnigent.runner.bgr_runtime import bgr_brain_registered
 
         try:
             spec_entry = await _resolve_session_spec_entry(session_id)
@@ -5220,7 +5221,13 @@ def create_runner_app(
         # can reassign it independently — the terminal-launch and per-harness
         # startup paths — all pass a bridge hint and take the branch below.
         current = _session_comment_relays.get(session_id)
-        if current is not None and current.spec_entry is spec_entry and known_bridge_dir is None:
+        bgr_brain = bgr_brain_registered(session_id)
+        if (
+            current is not None
+            and current.spec_entry is spec_entry
+            and current.bgr_brain == bgr_brain
+            and known_bridge_dir is None
+        ):
             return
 
         bridge_dir = known_bridge_dir
@@ -5237,9 +5244,11 @@ def create_runner_app(
         # Re-read after the awaits above: a concurrent caller may have
         # installed a relay that already matches the current agent.
         current = _session_comment_relays.get(session_id)
+        bgr_brain = bgr_brain_registered(session_id)
         if (
             current is not None
             and current.spec_entry is spec_entry
+            and current.bgr_brain == bgr_brain
             and current.bridge_dir == bridge_dir
         ):
             return
@@ -5259,13 +5268,20 @@ def create_runner_app(
                     error,
                     extra={"session_id": session_id},
                 )
-            current = _session_comment_relays.get(session_id)
-            if (
-                current is not None
-                and current.spec_entry is spec_entry
-                and current.bridge_dir == bridge_dir
-            ):
-                return
+
+        bgr_brain = bgr_brain_registered(session_id)
+        current = _session_comment_relays.get(session_id)
+        if (
+            current is not None
+            and current.spec_entry is spec_entry
+            and current.bgr_brain == bgr_brain
+            and current.bridge_dir == bridge_dir
+        ):
+            return
+        if bgr_brain:
+            from omnigent.tools.builtins.bgr_control import SysBgrControlTool
+
+            relay_schemas.append(SysBgrControlTool().get_schema()["function"])
 
         _captured_session_id = session_id
         # ponytail: one lock per relay; split by path only if recovery contention matters.
@@ -5406,6 +5422,7 @@ def create_runner_app(
             relay=relay,
             spec_entry=spec_entry,
             bridge_dir=bridge_dir,
+            bgr_brain=bgr_brain,
         )
         # Close last: the new advertisement is already written, and
         # ClaudeNativeToolRelay.close only unlinks a tool_relay.json that
@@ -8733,6 +8750,9 @@ def create_runner_app(
     else:
         app.state.native_pane_reaper = None
 
+    from omnigent.runner.bgr_runtime import create_bgr_runtime_router
+
+    app.include_router(create_bgr_runtime_router())
     return app
 
 

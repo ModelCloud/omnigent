@@ -28,6 +28,7 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from omnigent.entities import Conversation, SessionPermission
+from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.inner.terminal import TerminalInstance
 from omnigent.runner.routing import RunnerRouter
 from omnigent.runner.transports.ws_tunnel.registry import TunnelRegistry
@@ -751,6 +752,7 @@ async def test_attach_terminal_local_fallback_uses_control_mode(
         socket_path: str,
         tmux_target: str,
         read_only: bool,
+        authorize_input: object = None,
     ) -> None:
         del websocket
         calls.append((socket_path, tmux_target, read_only))
@@ -767,3 +769,39 @@ async def test_attach_terminal_local_fallback_uses_control_mode(
         pass
 
     assert calls == [(str(tmp_path / "bash-s1.sock"), "main", True)]
+
+
+@pytest.mark.parametrize("deny_on_attach", [True, False])
+async def test_bgr_write_attach_rechecks_after_authority_changes(
+    app: FastAPI, deny_on_attach: bool
+):
+    class Guard:
+        blocked = deny_on_attach
+
+        def check_session_runtime_input(self, session_id: str, *, restart: bool = False) -> None:
+            assert session_id == "conv_ws" and not restart
+            if self.blocked:
+                raise OmnigentError("Runtime recovery pending", code=ErrorCode.CONFLICT)
+
+    guard = Guard()
+    app.state.bgr_store = guard
+
+    class Connection(_FakeRunnerWSConn):
+        async def send(self, data: bytes | str) -> None:
+            await super().send(data)
+            guard.blocked = True
+
+    conn = Connection(wait_close_after=1000)
+    factory = _FakeRunnerWSFactory(conn)
+    set_runner_ws_factory(factory)
+    with pytest.raises(WebSocketDisconnect) as closed:
+        with TestClient(app).websocket_connect(
+            "/v1/sessions/conv_ws/resources/terminals/terminal_bash_s1/attach"
+        ) as ws:
+            ws.send_bytes(b"allowed\n")
+            ws.send_bytes(b"blocked\n")
+            ws.receive_bytes()
+    assert closed.value.code == 1008
+    assert conn.received == ([] if deny_on_attach else [b"allowed\n"])
+    if deny_on_attach:
+        assert factory.calls == []

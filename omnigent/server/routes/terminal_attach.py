@@ -71,6 +71,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Final
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, WebSocketException
@@ -84,6 +85,7 @@ from omnigent.runtime import (
 )
 from omnigent.server._runner_ws_tunnel import RunnerUnavailableWSError, WrongReplicaWSError
 from omnigent.server.auth import LEVEL_OWNER, LEVEL_READ, AuthProvider
+from omnigent.server.bgr_input import check_bgr_session_input
 from omnigent.server.routes._auth_helpers import require_access
 from omnigent.stores import ConversationStore
 from omnigent.stores.permission_store import PermissionStore
@@ -161,6 +163,22 @@ def create_terminal_attach_router(
             permission_store=permission_store,
             conversation_store=conversation_store,
         )
+
+        async def authorize_input() -> None:
+            if not read_only:
+                try:
+                    await check_bgr_session_input(websocket.app.state, session_id)
+                except OmnigentError:
+                    await websocket.close(
+                        code=status.WS_1008_POLICY_VIOLATION,
+                        reason="BGR runtime authority changed",
+                    )
+                    raise WebSocketDisconnect(status.WS_1008_POLICY_VIOLATION) from None
+
+        try:
+            await authorize_input()
+        except WebSocketDisconnect:
+            return
         # WebSockets bypass the HTTP middleware that attributes debug-log rows
         # to the request's user; this handler task is per-connection.
         set_current_user_id(user_id)
@@ -226,7 +244,9 @@ def create_terminal_attach_router(
                     },
                 ):
                     async with runner_cm as runner_ws:
-                        await _shuttle_ws_frames(websocket, runner_ws)
+                        await _shuttle_ws_frames(
+                            websocket, runner_ws, authorize_input=authorize_input
+                        )
             except _RunnerWSClosed as closed:
                 code = (
                     closed.code
@@ -283,6 +303,7 @@ def create_terminal_attach_router(
                 socket_path=str(entry.instance.socket_path),
                 tmux_target=entry.instance.tmux_target,
                 read_only=read_only,
+                authorize_input=authorize_input,
             )
 
     return router
@@ -381,7 +402,12 @@ class _RunnerWSClosed(Exception):
         self.reason = reason
 
 
-async def _shuttle_ws_frames(browser_ws: WebSocket, runner_ws: object) -> None:
+async def _shuttle_ws_frames(
+    browser_ws: WebSocket,
+    runner_ws: object,
+    *,
+    authorize_input: Callable[[], Awaitable[None]] | None = None,
+) -> None:
     """
     Forward frames between *browser_ws* (FastAPI) and *runner_ws*
     (websockets client connection) until either side closes.
@@ -410,6 +436,8 @@ async def _shuttle_ws_frames(browser_ws: WebSocket, runner_ws: object) -> None:
                 msg_type = msg.get("type")
                 if msg_type == "websocket.disconnect":
                     return
+                if authorize_input is not None:
+                    await authorize_input()
                 text = msg.get("text")
                 data = msg.get("bytes")
                 if text is not None:

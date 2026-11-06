@@ -1180,6 +1180,44 @@ async def test_control_bridge_read_only_drops_input() -> None:
 
 @pytest.mark.skipif(not _HAS_TMUX, reason="tmux not installed")
 @pytest.mark.asyncio
+async def test_control_bridge_rechecks_authority_before_each_write() -> None:
+    sock, target = await _new_private_tmux("cat")
+    ws = _FakeWebSocket(
+        inbound=[
+            {"type": "websocket.receive", "bytes": b"allowed-before-recovery\r"},
+            {"type": "websocket.receive", "bytes": b"blocked-after-recovery\r"},
+        ]
+    )
+    checks = 0
+
+    async def authorize_input() -> None:
+        nonlocal checks
+        checks += 1
+        if checks == 2:
+            await _capture_when(sock, target, lambda data: b"allowed-before-recovery" in data)
+            await ws.close(code=1008)
+            raise WebSocketDisconnect(1008)
+
+    task = asyncio.create_task(
+        bridge_tmux_control_to_websocket(
+            ws,
+            socket_path=str(sock),
+            tmux_target=target,
+            read_only=False,
+            authorize_input=authorize_input,
+        )
+    )
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout=5)
+        assert checks == 2
+        capture = await _run_tmux_capture(str(sock), target)
+        assert capture is not None and b"blocked-after-recovery" not in capture
+    finally:
+        await _kill_and_join(sock, task)
+
+
+@pytest.mark.skipif(not _HAS_TMUX, reason="tmux not installed")
+@pytest.mark.asyncio
 async def test_control_bridge_read_only_viewer_does_not_block_harness_send_keys() -> None:
     """A read-only viewer must not stop the harness from typing into the pane.
 

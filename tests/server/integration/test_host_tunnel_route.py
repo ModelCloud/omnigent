@@ -36,6 +36,7 @@ from omnigent.host.frames import (
     HostPluginsResultFrame,
     HostSkillContentFrame,
     HostSkillContentResultFrame,
+    HostStopBgrGenerationResultFrame,
     decode_host_frame,
     encode_host_frame,
     encode_import_local_session_frames,
@@ -62,6 +63,8 @@ from omnigent.server.routes.skill_content import create_skill_content_router
 from omnigent.stores.host_store import HostStore
 from tests._helpers.polling import poll_until_async
 from tests.budgets import budget
+from tests.host.test_bgr_supervisor import request_stop as request_stop
+from tests.host.test_bgr_supervisor import stopped as stopped
 from tests.server.helpers import FakeSandboxLauncher
 
 pytestmark = pytest.mark.asyncio
@@ -1206,6 +1209,29 @@ async def test_host_tunnel_routes_launch_result_to_future(
     assert result["status"] == "launched"
     assert result["runner_id"] == "runner_token_xyz"
     assert result["error"] is None
+
+
+async def test_host_tunnel_routes_supervisor_receipt_without_a_runner(host_app, stopped):
+    app, registry, _store = host_app
+    comm = await _connect_route(app, _TUNNEL_PATH)
+    try:
+        await _send_hello_and_wait(comm, registry)
+        conn = registry.get(_HOST_ID)
+        assert conn is not None
+        future = asyncio.get_running_loop().create_future()
+        conn.pending_bgr_stops[stopped.request_id] = future
+        await comm.send_input(
+            {
+                "type": "websocket.receive",
+                "text": encode_host_frame(HostStopBgrGenerationResultFrame(stopped)),
+            }
+        )
+        assert await asyncio.wait_for(future, timeout=budget(2)) == stopped.model_dump(mode="json")
+        assert not conn.pending_bgr_stops
+    finally:
+        await comm.send_input({"type": "websocket.disconnect", "code": 1000})
+        comm.stop(exceptions=False)
+        await asyncio.gather(comm.future, return_exceptions=True)
 
 
 async def test_host_tunnel_reassembles_chunked_import_session(

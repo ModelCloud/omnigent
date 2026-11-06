@@ -4193,13 +4193,36 @@ describe("chatStore — first message during native model startup", () => {
     await tick();
   }
 
-  it("keeps the first draft local until the model reports, then hands Interrupt to the runner", async () => {
-    begin();
+  it("restores an accepted first input with raw attachments after model readiness and Interrupt", async () => {
+    const file = new File(["notes"], "notes.txt", { type: "text/plain" });
+    const respond = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation((input, init) => {
+      if (String(input).endsWith("/resources/files")) return mockResponse({ id: "file_notes" });
+      if (String(input).endsWith("/events")) {
+        const body = JSON.parse(String(init?.body));
+        return mockResponse(
+          body.type === "interrupt"
+            ? {
+                queued: false,
+                discarded_inputs: [
+                  {
+                    pending_id: "pending_initial",
+                    initial: true,
+                    content: [{ type: "input_text", text: original }],
+                  },
+                ],
+              }
+            : { queued: true, pending_id: "pending_initial" },
+        );
+      }
+      return respond(input, init);
+    });
+    begin([file]);
     await settle();
     expect(useChatStore.getState()).toMatchObject({
       conversationId: sessionId,
       sessionModelSeeded: true,
-      pendingUserMessages: [{ initialDraft: { text: original, files: [] } }],
+      pendingUserMessages: [{ initialDraft: { text: original, files: [file] } }],
     });
     expect(eventBodies()).toEqual([]);
 
@@ -4211,15 +4234,22 @@ describe("chatStore — first message during native model startup", () => {
     expect(eventBodies()).toEqual([
       {
         type: "message",
-        data: expect.objectContaining({ content: [{ type: "input_text", text: original }] }),
+        data: expect.objectContaining({
+          content: [
+            { type: "input_file", file_id: "file_notes", filename: "notes.txt" },
+            { type: "input_text", text: original },
+          ],
+        }),
       },
     ]);
     expect(useChatStore.getState().pendingUserMessages[0]?.initialDraft).toBeUndefined();
+    expect(useChatStore.getState().pendingUserMessages[0]?.files?.[0]).toBe(file);
     expect(useChatStore.getState().status).toBe("streaming");
     useChatStore.getState().stop();
     await settle();
     expect(eventBodies().at(-1)?.type).toBe("interrupt");
-    expect(useChatStore.getState().failedSendDraft).toBeNull();
+    expect(useChatStore.getState().failedSendDraft?.text).toBe(original);
+    expect(useChatStore.getState().failedSendDraft?.files[0]).toBe(file);
   });
 
   it("cancels and restores repeated corrected drafts before native startup finishes", async () => {
@@ -6112,7 +6142,7 @@ describe("chatStore — send (cross-session routing)", () => {
 });
 
 describe("chatStore — send (file attachments)", () => {
-  it("refreshes the pending entry with real file_ids after upload", async () => {
+  it("refreshes uploaded file_ids and restores raw files when Interrupt discards an unsent input", async () => {
     // Claude-native's session.input.consumed is text-only, so the
     // consumed handler merges pending file blocks with server text;
     // pending must already carry real ids or the bubble renders the
@@ -6131,6 +6161,22 @@ describe("chatStore — send (file attachments)", () => {
           metadata: { filename: "photo.png", bytes: 10, created_at: 0 },
         });
       }
+      if (url.endsWith("/v1/sessions/conv_existing/events")) {
+        const body = JSON.parse(String(init?.body));
+        return mockResponse(
+          body.type === "interrupt"
+            ? {
+                queued: false,
+                discarded_inputs: [
+                  {
+                    pending_id: "pending_server",
+                    content: [{ type: "input_text", text: "look at this" }],
+                  },
+                ],
+              }
+            : { queued: true, pending_id: "pending_server" },
+        );
+      }
       return defaultFetchHandler(input, init);
     });
 
@@ -6144,6 +6190,11 @@ describe("chatStore — send (file attachments)", () => {
       { type: "input_image", file_id: "file_real_abc123", filename: "photo.png" },
       { type: "input_text", text: "look at this" },
     ]);
+    expect(state.pendingUserMessages[0]!.files?.[0]).toBe(file);
+    useChatStore.getState().stop();
+    await tick();
+    expect(useChatStore.getState().failedSendDraft?.text).toBe("look at this");
+    expect(useChatStore.getState().failedSendDraft?.files[0]).toBe(file);
   });
 
   it("gives same-named attachments distinct optimistic ids", async () => {

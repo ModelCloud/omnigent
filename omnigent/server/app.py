@@ -172,6 +172,7 @@ from omnigent.stores import (
     ConversationStore,
     FileStore,
 )
+from omnigent.stores.bgr_store import BgrStore
 from omnigent.stores.comment_store import CommentStore
 from omnigent.stores.conversation_store import (
     ConversationNotFoundError,
@@ -1599,6 +1600,7 @@ def create_app(
     default_agents_seeded: bool = False,
     suppressed_agent_names: frozenset[str] = frozenset(),
     preference_store: PreferenceStore | None = None,
+    bgr_store: BgrStore | None = None,
     preference_policy: PreferencePolicy = DEFAULT_PREFERENCE_POLICY,
     scheduled_task_dispatch: ScheduledTaskDispatchHooks | None = None,
     scheduled_task_scheduler_config: ScheduledTaskSchedulerConfig | None = None,
@@ -2234,6 +2236,9 @@ def create_app(
             )
             if startup_inputs is not None:
                 await startup_inputs.shutdown()
+            controllers = getattr(app.state, "bgr_controllers", None)
+            if controllers is not None:
+                await controllers.close()
             await background_title_coordinator.shutdown()
             _uninstall_subagent_block_notifier()
             set_resource_registry(None)
@@ -2270,13 +2275,34 @@ def create_app(
     app.state.runner_session_initializer = runner_session_initializer
     app.state.background_title_coordinator = background_title_coordinator
     app.state.host_registry = host_registry
+    app.state.bgr_store = bgr_store
+    from omnigent.server.bgr_generation_auth import GenerationAuth, GenerationAuthorityMiddleware
+
+    def _generation_binding(session_id: str) -> tuple[str | None, str | None] | None:
+        conversation = conversation_store.get_conversation(session_id)
+        if conversation is None or conversation.archived:
+            return None
+        return conversation.runner_id, conversation.host_id
+
+    generation_auth = (
+        GenerationAuth(
+            key=auth_provider.generation_signing_key() if auth_provider is not None else None,
+            resolve=bgr_store.generation_for_runner,
+            validate=bgr_store.validate_supervised_generation,
+            binding=_generation_binding,
+        )
+        if bgr_store is not None
+        else None
+    )
+    app.state.bgr_generation_auth = generation_auth
     from omnigent.server.startup_inputs import ManagedStartupInputs
 
     # Only managed creates accept a durable first input, and only managed hosts
     # need their startup recovered on the replica holding the tunnel.
     startup_inputs = (
         ManagedStartupInputs(conversation_store, host_registry)
-        if sandbox_config is not None and sandbox_config.managed_launch_supported
+        if bgr_store is not None
+        or (sandbox_config is not None and sandbox_config.managed_launch_supported)
         else None
     )
     app.state.startup_inputs = startup_inputs
@@ -4002,6 +4028,25 @@ def create_app(
             tags=["projects"],
         )
 
+    if bgr_store is not None:
+        from omnigent.server.bgr_controller import create_bgr_controllers
+        from omnigent.server.routes.bgr import create_bgr_router
+        from omnigent.server.routes.bgr_control import create_bgr_control_router
+
+        controllers = create_bgr_controllers(bgr_store, conversation_store, permission_store)
+        app.state.bgr_controllers = controllers
+        app.include_router(
+            create_bgr_control_router(
+                controllers, conversation_store, permission_store, auth_provider
+            ),
+            prefix="/v1",
+            tags=["bgr"],
+        )
+        app.include_router(
+            create_bgr_router(bgr_store, conversation_store, permission_store, auth_provider),
+            prefix="/v1",
+            tags=["bgr"],
+        )
     if preference_store is not None:
         app.include_router(
             create_preferences_router(preference_store, auth_provider, policy=preference_policy),
@@ -5313,6 +5358,7 @@ def create_app(
 
     app.add_middleware(AccountAuthorityMiddleware, auth_provider=auth_provider)
     app.add_middleware(PublicSharingPolicyMiddleware, max_level=app.state.public_sharing_max_level)
+    app.add_middleware(GenerationAuthorityMiddleware, authority=generation_auth)
     if resolved_base_path:
         # Added last → outermost ASGI layer, so the prefix is stripped before
         # routing and every other middleware sees canonical `/v1/...` paths.

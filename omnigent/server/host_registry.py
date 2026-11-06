@@ -31,8 +31,15 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, TypedDict
 
 from cachetools import TTLCache
+from pydantic import TypeAdapter
 
 from omnigent._platform import normalize_interactive_shells
+from omnigent.bgr_supervision import (
+    GenerationStopReceipt,
+    SupervisorStopRequest,
+    SupervisorStopResult,
+    SupervisorUnknown,
+)
 from omnigent.db.account_authority import (
     AccountAuthority,
     account_generation,
@@ -42,14 +49,17 @@ from omnigent.db.db_models import InvalidUuidError, current_workspace_id, uuid_t
 from omnigent.harness_accounts import HarnessAccounts
 from omnigent.harness_availability import HarnessAvailability
 from omnigent.host.frames import (
+    CAP_BGR_SUPERVISOR_STOP,
     CAP_CODEX_SIDE_CHAT,
     HostHelloFrame,
     HostMcpServersResultFrame,
     HostMcpToolsResultFrame,
     HostPluginsResultFrame,
     HostProbeAccountsFrame,
+    HostProbeBgrFrame,
     HostSkillContentResultFrame,
     HostSkillsResultFrame,
+    HostStopBgrGenerationFrame,
     encode_host_frame,
 )
 from omnigent.host.harness_startup import HarnessStartup
@@ -194,6 +204,8 @@ def _fail_pending_mcp_servers(conn: HostConnection) -> None:
 def _fail_pending_worktrees(conn: HostConnection) -> None:
     """Fail worktree requests as soon as their host disappears."""
     for pending in (
+        conn.pending_bgr_probes,
+        conn.pending_bgr_stops,
         conn.pending_create_worktrees,
         conn.pending_remove_worktrees,
         conn.pending_list_worktrees,
@@ -539,6 +551,9 @@ class HostConnection:
     pending_harness_account_probes: dict[str, asyncio.Future[dict[str, Any]]] = field(
         default_factory=dict,
     )
+    pending_bgr_probes: dict[str, asyncio.Future[dict[str, Any]]] = field(default_factory=dict)
+    pending_bgr_stops: dict[str, asyncio.Future[dict[str, Any]]] = field(default_factory=dict)
+    bgr_probe_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     harness_account_probe_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     harness_accounts_probed_at: float | None = None
     pending_harness_login_starts: dict[str, asyncio.Future[dict[str, Any]]] = field(
@@ -962,6 +977,55 @@ class HostRegistry:
                 raise ConnectionError(f"host {conn.host_id!r} connection was replaced")
 
         conn.enqueue(data)
+
+    async def request_bgr_probe(
+        self, conn: HostConnection, *, timeout_s: float = 30
+    ) -> dict[str, Any]:
+        """Request one owner-checked, metadata-only native runtime probe."""
+        async with conn.bgr_probe_lock:
+            request_id = secrets.token_hex(8)
+            future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+            conn.pending_bgr_probes[request_id] = future
+            try:
+                self.send_text(conn, encode_host_frame(HostProbeBgrFrame(request_id=request_id)))
+                return await asyncio.wait_for(future, timeout=timeout_s)
+            finally:
+                conn.pending_bgr_probes.pop(request_id, None)
+
+    async def request_bgr_generation_stop(
+        self,
+        conn: HostConnection,
+        request: SupervisorStopRequest,
+        *,
+        owner_id: str,
+        timeout_s: float = 35,
+    ) -> GenerationStopReceipt:
+        """Use the authenticated host channel, never runner metadata or PID status."""
+        if (
+            conn.host_id != request.admission.generation.host_id
+            or conn.owner != owner_id
+            or CAP_BGR_SUPERVISOR_STOP not in conn.hello.capabilities
+            or request.request_id in conn.pending_bgr_stops
+        ):
+            raise ConnectionError("Host does not support this exact supervisor stop request")
+        future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+        conn.pending_bgr_stops[request.request_id] = future
+        try:
+            self.send_text(conn, encode_host_frame(HostStopBgrGenerationFrame(request)))
+            payload = await asyncio.wait_for(future, timeout=timeout_s)
+            with self._lock:
+                if self._hosts.get((conn.workspace_id, conn.host_id)) is not conn:
+                    raise ConnectionError(
+                        "Supervisor response came from a replaced host connection"
+                    )
+            if account_generation(owner_id) != conn.account_generation:
+                raise ConnectionError("Supervisor host owner registration changed")
+            result = TypeAdapter(SupervisorStopResult).validate_python(payload)
+            if isinstance(result, SupervisorUnknown):
+                raise ConnectionError("Host supervisor cannot prove generation shutdown")
+            return result.verify(request)
+        finally:
+            conn.pending_bgr_stops.pop(request.request_id, None)
 
     async def request_harness_accounts(
         self,

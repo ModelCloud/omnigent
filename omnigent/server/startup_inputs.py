@@ -95,14 +95,33 @@ class StartupInputContext:
     user_id: str | None
     input_id: str
     submitted: bool = False
+    expected_binding: tuple[HostConnection, str] | None = None
 
     async def is_disconnected(self) -> bool:
         return False
+
+    async def binding_is_current(self, store: ConversationStore, session_id: str) -> bool:
+        if self.expected_binding is None:
+            return True
+        connection, runner_id = self.expected_binding
+        conv = await asyncio.to_thread(store.get_conversation, session_id)
+        return (
+            conv is not None
+            and conv.host_id == connection.host_id
+            and conv.runner_id == runner_id
+            and self.app.state.host_registry.get(connection.host_id) is connection
+        )
 
     async def claim(self, store: ConversationStore, session_id: str) -> bool:
         # Leave the row queued throughout launch, authorization and policy checks.
         # A submitted native input is never replayed without its transcript receipt.
         start_fire_stage("input_claim", session_id=session_id)
+        if not await self.binding_is_current(store, session_id):
+            return False
+        if self.expected_binding is not None:
+            from omnigent.server.bgr_input import check_bgr_session_input
+
+            await check_bgr_session_input(self.app.state, session_id)
         self.submitted = await asyncio.to_thread(
             store.transition_pending_input,
             session_id,
@@ -130,6 +149,9 @@ def wake_startup_worker(host_id: str) -> None:
         entry = service._workers.get(key)
         if entry is not None:
             entry[2].set()
+        for connection, _, _, wake in service._session_workers.values():
+            if connection.host_id == host_id:
+                wake.set()
 
 
 class ManagedStartupInputs:
@@ -142,6 +164,9 @@ class ManagedStartupInputs:
         self.dispatch: StartupDispatch | None = None
         self._workers: dict[
             tuple[int, str], tuple[HostConnection, asyncio.Task[None], asyncio.Event]
+        ] = {}
+        self._session_workers: dict[
+            tuple[int, str], tuple[HostConnection, str, asyncio.Task[None], asyncio.Event]
         ] = {}
         self._deliveries: dict[tuple[int, str], asyncio.Task[Any]] = {}
 
@@ -350,12 +375,81 @@ class ManagedStartupInputs:
 
         task.add_done_callback(remove_worker)
 
+    async def session_ready(self, app: Any, session_id: str) -> None:
+        """Drain one authenticated, attached session without launching another runner."""
+        conv = await asyncio.to_thread(self.conversations.get_conversation, session_id)
+        if conv is None or conv.host_id is None or conv.runner_id is None:
+            return
+        connection = self.hosts.get(conv.host_id)
+        if connection is None:
+            return
+        key = (current_workspace_id(), session_id)
+        runner_id = conv.runner_id
+        previous = self._session_workers.get(key)
+        if previous is not None:
+            if previous[0] is connection and previous[1] == runner_id and not previous[2].done():
+                previous[3].set()
+                return
+            previous[2].cancel()
+        wake = asyncio.Event()
+
+        async def serve() -> None:
+            delay = 0.25
+            try:
+                while self.hosts.get(connection.host_id) is connection:
+                    current = await asyncio.to_thread(
+                        self.conversations.get_conversation, session_id
+                    )
+                    if (
+                        current is None
+                        or current.host_id != connection.host_id
+                        or current.runner_id != runner_id
+                        or current.labels.get(STARTUP_LABEL) in ("cancelled", "failed")
+                    ):
+                        return
+                    busy = await self._recover_session(
+                        app, session_id, connection, expected_runner_id=runner_id
+                    )
+                    items = await asyncio.to_thread(
+                        self.conversations.list_pending_inputs, session_id
+                    )
+                    if not items and key not in self._deliveries:
+                        await self._finish(session_id)
+                        return
+                    if items and all(item.status == "failed" for item in items):
+                        return
+                    delay = 0.25 if busy else min(delay * 2, 30.0)
+                    with contextlib.suppress(TimeoutError):
+                        await asyncio.wait_for(wake.wait(), timeout=delay)
+                    wake.clear()
+            except Exception:
+                _logger.exception("Unable to recover startup messages for session %s", session_id)
+
+        task = asyncio.create_task(serve(), name=f"startup-session-{session_id}")
+        self._session_workers[key] = (connection, runner_id, task, wake)
+
+        def remove_worker(done: asyncio.Task[None]) -> None:
+            if self._session_workers.get(key, (None, None, None, None))[2] is done:
+                self._session_workers.pop(key, None)
+
+        task.add_done_callback(remove_worker)
+
     async def _recover_session(
-        self, app: Any, session_id: str, connection: HostConnection
+        self,
+        app: Any,
+        session_id: str,
+        connection: HostConnection,
+        *,
+        expected_runner_id: str | None = None,
     ) -> bool:
         """Advance one session's startup here; return whether work is in flight."""
         conv = await asyncio.to_thread(self.conversations.get_conversation, session_id)
         if conv is None or conv.host_id != connection.host_id:
+            return False
+        if expected_runner_id is not None and (
+            conv.runner_id != expected_runner_id
+            or self.hosts.get(connection.host_id) is not connection
+        ):
             return False
         state = conv.labels.get(STARTUP_LABEL)
         if state == "failed":
@@ -375,7 +469,15 @@ class ManagedStartupInputs:
             key = (current_workspace_id(), session_id)
             if head.status == "in_progress" and key not in self._deliveries:
                 task = asyncio.create_task(
-                    self._deliver(app, session_id, head), name=f"startup-input-{session_id}"
+                    self._deliver(
+                        app,
+                        session_id,
+                        head,
+                        expected_binding=(connection, expected_runner_id)
+                        if expected_runner_id is not None
+                        else None,
+                    ),
+                    name=f"startup-input-{session_id}",
                 )
                 self._deliveries[key] = task
             return head.status == "in_progress"
@@ -409,7 +511,14 @@ class ManagedStartupInputs:
                 self.conversations.set_labels, session_id, {STARTUP_LABEL: "ready"}
             )
 
-    async def _deliver(self, app: Any, session_id: str, item: ConversationItem) -> None:
+    async def _deliver(
+        self,
+        app: Any,
+        session_id: str,
+        item: ConversationItem,
+        *,
+        expected_binding: tuple[HostConnection, str] | None = None,
+    ) -> None:
         options = (
             item.data.startup_options
             if isinstance(item.data, (MessageData, SlashCommandData))
@@ -419,9 +528,16 @@ class ManagedStartupInputs:
             options.scheduled_run if options else None, session_id=session_id
         ):
             start_fire_stage("input_validation", session_id=session_id)
-            await self._deliver_scoped(app, session_id, item)
+            await self._deliver_scoped(app, session_id, item, expected_binding=expected_binding)
 
-    async def _deliver_scoped(self, app: Any, session_id: str, item: ConversationItem) -> None:
+    async def _deliver_scoped(
+        self,
+        app: Any,
+        session_id: str,
+        item: ConversationItem,
+        *,
+        expected_binding: tuple[HostConnection, str] | None = None,
+    ) -> None:
         if self.dispatch is None:
             return
         key = (current_workspace_id(), session_id)
@@ -460,7 +576,10 @@ class ManagedStartupInputs:
                 ),
                 item.created_by,
                 item.id,
+                expected_binding=expected_binding,
             )
+            if not await context.binding_is_current(self.conversations, session_id):
+                return
             event = SessionEventInput(
                 type=item.type,
                 data={**item.data.model_dump(exclude={"startup_options"}), "stable_id": item.id},
@@ -648,8 +767,13 @@ class ManagedStartupInputs:
         _publish_status(session_id, "failed", failure_origin="startup_input_failed")
 
     async def shutdown(self) -> None:
-        tasks = [task for _, task, _ in self._workers.values()] + list(self._deliveries.values())
+        tasks = (
+            [task for _, task, _ in self._workers.values()]
+            + [task for _, _, task, _ in self._session_workers.values()]
+            + list(self._deliveries.values())
+        )
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         self._workers.clear()
+        self._session_workers.clear()

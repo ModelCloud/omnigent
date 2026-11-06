@@ -685,16 +685,35 @@ async def test_session_delete_removes_comment_relay(relay_env: _RelayEnv) -> Non
 
 
 @pytest.mark.asyncio
-async def test_repeated_terminal_launch_keeps_single_relay(relay_env: _RelayEnv) -> None:
+@pytest.mark.parametrize(
+    "brain_before,brain_after", [(False, False), (False, True), (True, False)]
+)
+async def test_repeated_terminal_launch_keeps_single_relay(
+    relay_env: _RelayEnv, monkeypatch: pytest.MonkeyPatch, brain_before: bool, brain_after: bool
+) -> None:
     """A second bridge_inject_dir launch reuses the relay instead of rebinding."""
+    brain_sessions = {relay_env.session_id} if brain_before else set()
+    monkeypatch.setattr(
+        "omnigent.runner.bgr_runtime.bgr_brain_registered",
+        lambda session_id: session_id in brain_sessions,
+    )
     first = await _launch_terminal(relay_env.client, relay_env.session_id, bridge_inject_dir=True)
     assert first.status_code == 200
     relay_file = relay_env.bridge_dir / _TOOL_RELAY_FILE
-    first_url = json.loads(relay_file.read_text())["url"]
+    first_relay = json.loads(relay_file.read_text())
+    first_url = first_relay["url"]
+    assert ("sys_bgr_control" in {tool["name"] for tool in first_relay["tools"]}) is brain_before
 
+    if brain_after:
+        brain_sessions.add(relay_env.session_id)
+    else:
+        brain_sessions.clear()
     second = await _launch_terminal(relay_env.client, relay_env.session_id, bridge_inject_dir=True)
     assert second.status_code == 200
-    second_url = json.loads(relay_file.read_text())["url"]
+    second_relay = json.loads(relay_file.read_text())
+    second_url = second_relay["url"]
+    assert ("sys_bgr_control" in {tool["name"] for tool in second_relay["tools"]}) is brain_after
+    assert first_relay["token"] == second_relay["token"]
 
     # The relay URL (its bound port) must be unchanged. A different port means
     # _ensure_comment_relay_started bound a second relay instead of
@@ -1562,6 +1581,72 @@ async def test_native_relay_discovers_session_mcp_tools_through_gateway(
                 assert len(requests) == discovery_count
             finally:
                 await client.delete(f"/v1/sessions/{session_id}")
+    finally:
+        shutil.rmtree(bridge_dir, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("brain_before,brain_after", [(False, True), (True, False)])
+async def test_slow_relay_discovery_preserves_newer_brain_membership(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, brain_before: bool, brain_after: bool
+) -> None:
+    from types import SimpleNamespace
+
+    from omnigent.runner.proxy_mcp_manager import ProxyMcpManager
+
+    session_id = f"conv_{uuid.uuid4().hex[:12]}"
+    brain_sessions = {session_id} if brain_before else set()
+    monkeypatch.setattr(
+        "omnigent.runner.bgr_runtime.bgr_brain_registered",
+        lambda target: target in brain_sessions,
+    )
+    discovery_started = asyncio.Event()
+    release_discovery = asyncio.Event()
+    calls = 0
+
+    async def discover(self, spec):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            discovery_started.set()
+            await release_discovery.wait()
+        return SimpleNamespace(schemas=[], failures={})
+
+    monkeypatch.setattr(ProxyMcpManager, "schemas_for", discover)
+    spec = AgentSpec(
+        spec_version=1,
+        mcp_servers=[MCPServerConfig(name="github", transport="registry")],
+    )
+    app = _switch_app(
+        tmp_path,
+        _SwitchableServerClient("with-mcp"),
+        {"with-mcp": ResolvedSpec(spec=spec, workdir=tmp_path)},
+    )
+    bridge_dir = prepare_bridge_dir(session_id, workspace=tmp_path)
+    relay_file = bridge_dir / _TOOL_RELAY_FILE
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://runner"
+        ) as client:
+            old_launch = asyncio.create_task(_launch_bridged(client, session_id))
+            try:
+                await asyncio.wait_for(discovery_started.wait(), timeout=5)
+                if brain_after:
+                    brain_sessions.add(session_id)
+                else:
+                    brain_sessions.clear()
+                await _launch_bridged(client, session_id)
+                current = json.loads(relay_file.read_text())
+                assert ("sys_bgr_control" in _relay_tool_names(relay_file)) is brain_after
+            finally:
+                release_discovery.set()
+                await asyncio.wait_for(old_launch, timeout=5)
+            assert calls == 2
+            assert ("sys_bgr_control" in _relay_tool_names(relay_file)) is brain_after
+            latest = json.loads(relay_file.read_text())
+            assert latest["url"] == current["url"]
+            assert latest["token"] == current["token"]
+            await client.delete(f"/v1/sessions/{session_id}")
     finally:
         shutil.rmtree(bridge_dir, ignore_errors=True)
 

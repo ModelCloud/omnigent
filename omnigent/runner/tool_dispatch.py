@@ -77,6 +77,7 @@ from omnigent.tools.builtins.async_inbox import (
     SysCancelTaskTool,
     SysReadInboxTool,
 )
+from omnigent.tools.builtins.bgr_control import SysBgrControlTool
 from omnigent.tools.builtins.browser import BROWSER_TOOL_NAMES
 from omnigent.tools.builtins.download_file import DownloadFileTool
 from omnigent.tools.builtins.list_comments import ListCommentsTool
@@ -880,6 +881,7 @@ def _bounded_discovery_result(
 # Union of all locally-dispatched tools.
 _ALL_LOCAL_TOOLS = (
     {SysSessionMessageTool.name()}
+    | {SysBgrControlTool.name()}
     | _OS_ENV_TOOLS
     | _REST_TOOLS
     | _FILE_TOOLS
@@ -1035,6 +1037,9 @@ def _ungranted_tool_reason(
     """
     from omnigent.spec.types import AgentSpec as _AgentSpec
 
+    if tool_name == SysBgrControlTool.name():
+        # The authenticated server checks the durable Brain, team and current lease.
+        return None
     if not isinstance(agent_spec, _AgentSpec):
         return None
     try:
@@ -7118,6 +7123,10 @@ async def execute_tool(
             from omnigent.runner.session_message import execute_message_tool
 
             output = await execute_message_tool(args, server_client, conversation_id)
+        elif tool_name == SysBgrControlTool.name():
+            from omnigent.runner.bgr_control import execute_bgr_control
+
+            output = await execute_bgr_control(args, server_client, conversation_id)
         elif tool_name in _SESSION_CREATE_TOOLS:
             output = await _execute_session_create(
                 args,

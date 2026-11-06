@@ -10894,6 +10894,8 @@ def _reject_server_reserved_label_seed(labels: dict[str, str] | None) -> None:
     """
     if not labels:
         return
+    if any(key.startswith("omnigent.bgr.") for key in labels):
+        raise OmnigentError("BGR lifecycle labels are server-owned", code=ErrorCode.INVALID_INPUT)
     from omnigent.stores.sandbox_profile_store import PROFILE_LABEL_PREFIX
 
     if any(key.startswith(PROFILE_LABEL_PREFIX) for key in labels):

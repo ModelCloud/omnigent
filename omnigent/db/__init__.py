@@ -1,5 +1,7 @@
 """Database package — SQLAlchemy models and Alembic migrations."""
 
+from omnigent.db import bgr_control_models as bgr_control_models
+from omnigent.db import bgr_models as bgr_models
 from omnigent.db.db_models import (
     DEFAULT_WORKSPACE_ID,
     ConversationBase,
