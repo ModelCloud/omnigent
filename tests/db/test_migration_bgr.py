@@ -13,12 +13,18 @@ from omnigent.db.utils import _build_alembic_config
 from tests.db.test_migration_conversation_metadata_pull_requests import _migrate
 from tests.db.test_migration_conversation_metadata_pull_requests import database as database
 
+_BGR_HEAD = "d9e4c3b2a167"
+_MAIN_HEAD = "f1c7a9e2b406"
 
-def test_bgr_upgrade_downgrade_and_model_parity(database):
+
+@pytest.mark.parametrize("starting_revision", ["base", _BGR_HEAD, _MAIN_HEAD])
+def test_bgr_upgrade_downgrade_and_model_parity(database, starting_revision):
     uri, engine = database
     script = ScriptDirectory.from_config(_build_alembic_config(uri))
     assert len(script.get_heads()) == 1
-    _migrate(uri, engine, "upgrade", "d0a1f879a01d")
+    _migrate(uri, engine, "upgrade", starting_revision)
+    if starting_revision == "base":
+        _migrate(uri, engine, "upgrade", "head")
     session = bytes.fromhex("0123456789abcdef0123456789abcdef")
     with engine.begin() as connection:
         connection.execute(
@@ -70,6 +76,30 @@ def test_bgr_upgrade_downgrade_and_model_parity(database):
             assert index["column_names"] == [column.name for column in expected.columns]
     native = {column["name"]: column for column in inspector.get_columns("bgr_native_bindings")}
     assert isinstance(native["thread_id"]["type"], sa.LargeBinary)
+    assert "family_id" in {
+        column["name"] for column in inspector.get_columns("omnigent_conversation_metadata")
+    }
+    _migrate(uri, engine, "downgrade", _BGR_HEAD)
+    with engine.connect() as connection:
+        assert set(
+            connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalars()
+        ) == {
+            _BGR_HEAD,
+            _MAIN_HEAD,
+        }
+        assert (
+            connection.execute(
+                sa.text("SELECT kind FROM omnigent_conversation_metadata WHERE id = :id"),
+                {"id": session},
+            ).scalar_one()
+            == 1
+        )
+    assert {table.name for table in models} <= set(sa.inspect(engine).get_table_names())
+    assert "family_id" in {
+        column["name"]
+        for column in sa.inspect(engine).get_columns("omnigent_conversation_metadata")
+    }
+    _migrate(uri, engine, "upgrade", "head")
     _migrate(uri, engine, "downgrade", "d0a1f879a01d")
     assert not any(name.startswith("bgr_") for name in sa.inspect(engine).get_table_names())
     with engine.connect() as connection:
@@ -89,7 +119,7 @@ def test_bgr_ddl_without_application_metadata(database):
     scripts = ScriptDirectory.from_config(_build_alembic_config(uri))
     revisions = [
         revision.revision
-        for revision in reversed(list(scripts.iterate_revisions("heads", "d0a1f879a01d")))
+        for revision in reversed(list(scripts.iterate_revisions(_BGR_HEAD, "d0a1f879a01d")))
     ]
     with engine.begin() as connection, Operations.context(MigrationContext.configure(connection)):
         for revision in revisions:
