@@ -2164,7 +2164,6 @@ function NewChatWorkspaceControls({
   );
 }
 
-
 export function NewChatLandingScreen() {
   const [params] = useSearchParams();
   const navigate = useNavigate();

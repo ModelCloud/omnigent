@@ -280,12 +280,6 @@ from omnigent.version import display_version
 ClearSessionIntoFreshSession = Callable[
     [Request, Conversation, Callable[[], Awaitable[None]]], Awaitable[str]
 ]
-
-# Continues a claude-sdk session in a fresh session on ``/clear`` once the
-# release callback has freed its client; returns the new session's id.
-ClearSessionIntoFreshSession = Callable[
-    [Request, Conversation, Callable[[], Awaitable[None]]], Awaitable[str]
-]
 _SESSION_LIST_BATCH_SIZE = 1000
 
 
@@ -3859,8 +3853,7 @@ def register_core_routes(
         )
         settings_forward_timeout = (
             _CODEX_NATIVE_SETTINGS_FORWARD_TIMEOUT_S
-            if updated_native_agent is not None
-            and updated_native_agent.harness == "codex-native"
+            if updated_native_agent is not None and updated_native_agent.harness == "codex-native"
             else _CODEX_SETTINGS_FORWARD_TIMEOUT_S
             if codex_native
             else _TUI_INJECT_FORWARD_TIMEOUT_S
