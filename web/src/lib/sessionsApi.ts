@@ -29,6 +29,7 @@ import type {
   SandboxStatus,
   Session,
   SessionEventInput,
+  SessionFamily,
   SessionItem,
   SessionStatus,
 } from "./types";
@@ -110,6 +111,7 @@ interface ModelUsageWire {
  * camelCase `Session` type at the parse boundary.
  */
 interface SessionResponseWire {
+  family?: SessionFamily | null;
   sandbox_profile?: SandboxProfile | null;
   id: string;
   agent_id: string;
@@ -349,6 +351,7 @@ function sessionFromWire(wire: SessionResponseWire): Session {
   setSessionParent(wire.id, wire.parent_session_id, wire.labels);
   return {
     id: wire.id,
+    family: wire.family,
     agentId: wire.agent_id,
     agentName: wire.agent_name ?? null,
     runnerId: wire.runner_id,
@@ -1527,7 +1530,15 @@ export async function postEvent(
   // for the 503 the server returns when a host-bound runner never connects.
   if (!res.ok) throw await apiErrorFromResponse(res);
   return postEventResponseFromWire(
-    (await res.json()) as Parameters<typeof postEventResponseFromWire>[0],
+    (await res.json()) as {
+      queued: boolean;
+      item_id?: string;
+      denied?: boolean;
+      pending_id?: string;
+      recovered?: boolean;
+      recovery?: PostEventResponse["recovery"];
+      session_id?: string;
+    },
   );
 }
 

@@ -77,6 +77,10 @@ implements them separately, so a fix for one harness does not reach the others.
   approval waits from the five-minute execution budget. A pending approval
   stays pending past five minutes; rejection or expiry does not run the tool.
   Cancellation or a disconnected caller releases that call's pending approval.
+- `questions`: Claude's questions show an answer form in chat. An answer
+  submitted during a brief Omnigent outage still reaches Claude. If the web
+  question can't be shown or its wait expires, Claude receives a request to
+  ask in chat text.
 - `devin-questions`: Devin's native question picker appears in Chat and Inbox;
   selected options and custom answers return to the running tool.
 - `resume`: resume a previous conversation from the CLI (`--resume`, or a bare
@@ -200,10 +204,11 @@ once both end. While the server runs, the composer shows "1 background task"
 with its command, the same list Codex shows for `/ps` in its terminal.
 Answer an approval in Chat and another from the Inbox: "Needs response" clears
 at once. Block the answer request in the browser's developer tools and answer
-again: the prompt comes back. A prompt shown only in Claude's terminal has no
-reliable manual trigger: Claude's own prompts also get a Chat card within about
-a second, and a dialog the user opens, such as `/model`, leaves Claude
-reporting working during a turn and done after it, so the row does not change.
+again: the prompt comes back. Claude's own terminal prompts also get a Chat
+card within about a second. A dialog the user opens during a turn, such as
+`/model`, leaves Claude reporting working, so after about 15 seconds the row
+shows "May need input" in Needs attention until the dialog closes. Claude
+reports done after the turn, so a dialog opened then leaves the row unchanged.
 
 **Pi Smart Routing:** enable Smart Routing for the session, then send a task
 from Chat or type it into the native Pi terminal. Follow a completed tool call
@@ -272,7 +277,7 @@ Probes run only on expansion.
 
 **Harness settings navigation:** Settings sidebar → Harnesses, a direct link to
 `/settings/harnesses` or its harness detail pages, or the import review modal
-shown for a newly connected or requested host → See more. The modal auto-opens
+shown once for the host desktop onboarding just connected → See more. It opens
 only when the server enables the `import_review` release feature.
 
 **Harness credential repair:** Settings → Harnesses → a needs-auth harness →
@@ -331,7 +336,6 @@ columns name one journey test per harness; "—" means none exists yet.
 | `hermes-native` | `omnigent hermes` | no | tests/e2e_ui/messages/test_native_hermes_render_parity.py::test_native_hermes_message_render_parity | tests/e2e/test_hermes_native_policy_hook_path_e2e.py::test_hermes_native_policy_hook_path_lets_the_tool_run | — |
 | `kimi-native` | `omnigent kimi` | no | — | tests/e2e/test_kimi_native_steering_e2e.py::test_midturn_steer_is_applied_not_queued | — |
 | `kiro-native` | `omnigent kiro` | no | tests/e2e_ui/messages/test_native_kiro_render_parity.py::test_native_kiro_message_render_parity | tests/e2e/test_kiro_native_cli_e2e.py::test_kiro_native_cli_smoke | — |
-| `multidex-native` | Legacy sessions only; new MultiDex sessions use `codex-native` | no | — | — | — |
 | `opencode-native` | `omnigent opencode` | no | — | tests/e2e/test_host_opencode_native_mock_e2e.py::test_reply_reaches_the_bound_mock_and_renders_once | — |
 | `pi-native` | `omnigent pi` | no | — | tests/e2e/test_pi_native_send_now_steer_e2e.py::test_pi_native_send_now_steers_into_active_turn | [pi-native-e2e-dev](../.claude/skills/pi-native-e2e-dev/SKILL.md) |
 | `qwen-native` | `omnigent qwen` | no | — | tests/e2e/test_qwen_native_subagent_wake_e2e.py::test_qwen_native_subagent_completion_wakes_parent | — |
@@ -562,12 +566,13 @@ Cross-harness journeys:
   `web/src/components/onboarding/ImportContextModal.test.tsx` and
   `web/src/pages/SettingsPage.test.tsx`, plus
   `web/src/shell/settingsNav.test.tsx` and
-  `tests/e2e_ui/onboarding/test_import_review_modal.py::test_import_modal_opens_once_and_links_to_harnesses`.
+  `tests/e2e_ui/onboarding/test_import_review_modal.py::test_import_modal_opens_after_onboarding`.
   Start the isolated instance without release flags. Check the Harnesses sidebar
   link and direct links to the catalog and a harness detail page. Stop it, then
   use `OMNIGENT_FEATURES=import_review verify-env start`; without that feature the
-  import review modal never opens. Connect a new host, then click See more
-  beside Confirm. Check that the modal closes and Harnesses opens. Open Import
+  import review modal never opens. Finish desktop onboarding (or stub the
+  shell's `takeOnboardingRunner` as the E2E does), then click See more beside
+  Confirm. Check that the modal closes and Harnesses opens. Open Import
   sessions and check that only session imports remain. The Harnesses sidebar
   and direct links remain available without the import-review flag. The server
   response contract is covered by
@@ -741,6 +746,11 @@ Cross-harness journeys:
   (`tests/runner/test_app_sessions_native_events_lifecycle.py::test_codex_native_late_settings_ack_still_reaches_an_older_server`).
 - **`approvals`:**
   `tests/e2e_ui/approvals/test_native_edit_tools_approval_card.py::test_native_file_edit_tools_require_approval_card`
+- **`questions` (`claude-native`):**
+  `tests/e2e_ui/approvals/test_native_claude_question.py::test_native_question_reaches_chat_and_returns_to_claude`
+  sends from both chat and the embedded terminal, answers the web form, and
+  separately injects the server's empty-200 timeout response to check the
+  chat-text fallback.
 - **`approvals`, Claude directory access:**
   `tests/e2e_ui/approvals/test_claude_permission_auto_mode.py::test_permission_card_grants_directories_without_changing_auto_mode`
   checks Chat (including reload), Inbox, and standalone approval links against
@@ -1098,6 +1108,11 @@ Cross-harness journeys:
   failing-operation evidence when tmux exits after readiness. These tests
   exercise the injection used by existing-session and first-message composers;
   CLI typing bypasses the web injection gate. They do not run a vendor model.
+  `tests/harnesses/claude_native/test_claude_native_overdrawn_prompt.py` checks
+  redraw recovery in single and split tmux windows, the requested pane's exit
+  while its neighbor stays alive, a missing target, and a suspended background
+  job staying paused during redraw. It uses a scripted TUI
+  and real tmux; it does not establish browser or vendor-model compatibility.
 - **`disconnect`, Codex transport (plain `uv run pytest`, no vendor CLI):**
   `tests/e2e/test_codex_native_event_stream_disconnect_e2e.py` covers waiting
   consumers, buffered events, explicit close, and startup discovery without a

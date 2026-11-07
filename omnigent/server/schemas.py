@@ -1706,6 +1706,7 @@ class _SessionCreateRequestBase(_SandboxProfileSelection):
     mcp_registry_services: list[McpRegistryServiceId] = Field(default_factory=list, max_length=40)
     title: str | None = Field(default=None, max_length=USER_SESSION_TITLE_MAX_CHARS)
     labels: dict[str, str] = Field(default_factory=dict)
+    sibling_source_id: str | None = None
     parent_session_id: str | None = None
     sub_agent_name: str | None = None
     host_type: Literal["external", "managed"] = "external"
@@ -1958,6 +1959,7 @@ class SessionCreateMetadata(_SandboxProfileSelection):
     host_id: str | None = None
     workspace: str | None = None
     terminal_launch_args: list[str] | None = None
+    sibling_source_id: str | None = None
     parent_session_id: str | None = None
     host_type: Literal["external", "managed"] = "external"
     sandbox_provider: str | None = None
@@ -2176,6 +2178,13 @@ class BackgroundTaskInfo(BaseModel):
     status: str | None = None
     description: str | None = None
     command: str | None = None
+
+
+class SessionFamily(BaseModel):
+    id: str
+    representative_id: str | None
+    pinned: bool = False
+    pinned_at: str | None = None
 
 
 class SessionResponse(BaseModel):
@@ -2444,6 +2453,7 @@ class SessionResponse(BaseModel):
         snapshots independently of lifecycle status.
     """
 
+    family: SessionFamily | None = None
     id: str
     agent_id: str
     agent_name: str | None = None
@@ -2637,6 +2647,7 @@ class UpdateSessionRequest(BaseModel):
     """
 
     runner_id: str | None = None
+    family_pinned: bool | None = None
     title: str | None = Field(default=None, max_length=USER_SESSION_TITLE_MAX_CHARS)
     labels: dict[str, str] | None = None
     reasoning_effort: str | None = None
@@ -3133,6 +3144,11 @@ class SessionListItem(BaseModel):
         ``omnigent claude`` sessions. ``None`` for regular
         AP-only conversations. Lets the sidebar / picker render
         a runtime badge without a follow-up GET.
+    :param shared_with_others: Whether the requesting user owns this
+        session and has granted access to another user (the public link
+        alone doesn't count). ``None`` when the requester isn't the owner
+        or permissions are disabled, so the grant list never leaks to
+        non-owners.
     :param pending_elicitations_count: Number of approval prompts
         currently waiting on this session. Powers the sidebar's
         "needs attention" badge so a user with several sessions
@@ -3205,6 +3221,7 @@ class SessionListItem(BaseModel):
         "not known yet". ``None`` on servers without PR storage.
     """
 
+    family: SessionFamily | None = None
     id: str
     agent_id: str
     agent_name: str | None = None
@@ -3222,6 +3239,7 @@ class SessionListItem(BaseModel):
     permission_level: int | None = None
     owner: str | None = None
     external_session_id: str | None = None
+    shared_with_others: bool | None = None
     pending_elicitations_count: int = 0
     background_work_running: bool = False
     blocked_on: str | None = None
@@ -3242,6 +3260,14 @@ class SessionListItem(BaseModel):
     pull_requests_synced: bool | None = None
 
 
+class SessionPageBoundary(BaseModel):
+    """Last visible primary-page row, before family context is appended."""
+
+    id: str
+    created_at: int
+    updated_at: int
+
+
 class SessionList(BaseModel):
     """Paginated list of sessions; ``data`` is a page of ``SessionListItem``."""
 
@@ -3250,6 +3276,7 @@ class SessionList(BaseModel):
     first_id: str | None = None
     last_id: str | None = None
     has_more: bool = False
+    page_boundary: SessionPageBoundary | None = None
 
 
 class ChildSessionList(BaseModel):
