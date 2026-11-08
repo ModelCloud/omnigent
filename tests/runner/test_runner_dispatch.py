@@ -6025,9 +6025,7 @@ def test_list_tasks_is_not_runner_local_builtin() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "wrapper_label", ["claude-code-native-ui", "codex-native-ui"]
-)
+@pytest.mark.parametrize("wrapper_label", ["claude-code-native-ui", "codex-native-ui"])
 async def test_sys_cancel_task_stops_subagent_and_dedupes_late_completion(
     monkeypatch: pytest.MonkeyPatch,
     wrapper_label: str,
