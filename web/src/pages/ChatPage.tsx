@@ -1,6 +1,7 @@
 import { SelectionPopup } from "@/components/chat/SelectionPopup";
 import { NativeModelSelectors } from "@/components/NativeModelSelectors";
 import { hasGroupedModelOptions } from "@/lib/modelSelection";
+import { mergeNativeModelOptions } from "@/lib/mergeNativeModelOptions";
 import { useLoadedConversations } from "@/hooks/useSidebarData";
 import { useConversationRedirect } from "@/hooks/useConversationRedirect";
 import { MAIN_CANVAS_ID } from "@/canvas/canvasLayout";
@@ -908,7 +909,8 @@ export function ChatPage() {
     hostProbeHarness ?? "",
     !activeSession?.inferenceConfigured &&
       hostProbeHarness !== null &&
-      sessionModelOptions.length === 0,
+      (hostProbeHarness === "codex-native" || sessionModelOptions.length === 0),
+    { poll: sessionModelOptions.length === 0 },
   );
   // A launching sandbox has no host to probe until it is bound, so fall back to
   // its provider's preview for the harnesses sandboxes run.
@@ -935,13 +937,20 @@ export function ChatPage() {
       : sandboxPreviewOptions;
   // Keep the store's array reference unless pre-launch rows exist: a fresh []
   // would re-render every options consumer on each streaming/liveness tick.
-  const codexModelOptions =
-    !activeSession?.inferenceConfigured &&
-    sessionModelOptions.length === 0 &&
-    preLaunchOptions != null &&
-    preLaunchOptions.length > 0
+  const codexModelOptions = useMemo(() => {
+    if (activeSession?.inferenceConfigured) return sessionModelOptions;
+    if (hostProbeHarness === "codex-native") {
+      return mergeNativeModelOptions(sessionModelOptions, preLaunchOptions);
+    }
+    return sessionModelOptions.length === 0 && preLaunchOptions?.length
       ? preLaunchOptions
       : sessionModelOptions;
+  }, [
+    activeSession?.inferenceConfigured,
+    hostProbeHarness,
+    preLaunchOptions,
+    sessionModelOptions,
+  ]);
   const modelsFromLaunchPreview =
     sandboxPreviewOptions !== undefined && codexModelOptions === sandboxPreviewOptions;
 
