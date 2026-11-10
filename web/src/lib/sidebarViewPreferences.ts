@@ -5,12 +5,7 @@ const STORAGE_KEY = "omnigent:sidebar-view";
 export type SidebarGrouping = "default" | "status" | "harness" | "created" | "updated";
 export type SidebarOrdering = "updated" | "created" | "custom";
 export type SidebarShowField =
-  | "harness"
-  | "updated"
-  | "environment"
-  | "automation"
-  | "repo"
-  | "branch";
+  "harness" | "updated" | "environment" | "automation" | "repo" | "branch";
 
 /** Saved positions on top of the automatic order Custom started from. */
 export interface SidebarCustomOrder {

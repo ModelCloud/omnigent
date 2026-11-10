@@ -6025,9 +6025,7 @@ def test_list_tasks_is_not_runner_local_builtin() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "wrapper_label", ["claude-code-native-ui", "codex-native-ui"]
-)
+@pytest.mark.parametrize("wrapper_label", ["claude-code-native-ui", "codex-native-ui"])
 async def test_sys_cancel_task_stops_subagent_and_dedupes_late_completion(
     monkeypatch: pytest.MonkeyPatch,
     wrapper_label: str,
@@ -13582,7 +13580,7 @@ _SIGN_IN_PROMPT_SCREEN = (
     "\n\thttps://databricks.okta.com/oauth2/v1/authorize?client_id=0oa1&state=T4IU\n\n"
 )
 _SIGNED_IN_SCREENS = {
-    # Codex draws inline: dbcert's lines stay above its banner.
+    # Codex draws inline: the launcher's lines stay above its banner.
     "codex-native": (
         _SIGN_IN_PROMPT_SCREEN + "dbcert: All credentials successfully written\n"
         "╭── OpenAI Codex (v0.156.1) ──╮\n"
