@@ -76,7 +76,14 @@ export function NativeModelSelectors({
   ];
   const family = effectiveSelected ? familyId(effectiveSelected) : undefined;
   const familyRows = options.filter((row) => familyId(row) === family);
-  const providers = [...new Set(familyRows.map(providerId))];
+  const providerOrder = ["multidex", "wafer", "openrouter", "lithos"];
+  const providers = [...new Set(familyRows.map(providerId))].sort((a, b) => {
+    const rank = (id: string) => {
+      const index = providerOrder.indexOf(id);
+      return index < 0 ? providerOrder.length : index;
+    };
+    return rank(a) - rank(b);
+  });
   const provider = effectiveSelected ? providerId(effectiveSelected) : undefined;
   const variants = [
     ...new Set(familyRows.filter((row) => providerId(row) === provider).map(variantId)),
@@ -90,6 +97,7 @@ export function NativeModelSelectors({
   const labels: Record<string, string> = {
     multidex: "Local",
     openrouter: "OpenRouter",
+    wafer: "Wafer",
     lithos: "Lithos",
     openai: "OpenAI",
     regular: "Regular",

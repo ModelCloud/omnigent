@@ -17,6 +17,29 @@ from omnigent.harnesses.multidex_native.config import (
 )
 
 
+def test_wafer_registers_one_standard_deepseek_model_with_speed(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        '[model_providers.wafer]\n'
+        'base_url = "https://us.pass.wafer.ai/v1"\n'
+        'experimental_bearer_token = "test-token"\n',
+        encoding="utf-8",
+    )
+    models_path = tmp_path / "models.toml"
+    models_path.write_text('[models]\n', encoding="utf-8")
+    config = load_multidex_config(config_path, models_path=models_path)
+    rows = with_multidex_model_picker_row([], config)
+    assert len(rows) == 1
+    assert rows[0]["id"] == "DeepSeek-V4.1-Flash-1017"
+    assert rows[0]["modelFamily"] == "ds-v4.1-flash-1017"
+    assert rows[0]["providerId"] == "wafer"
+    assert rows[0]["variant"] == "regular"
+    assert rows[0]["speed"] == 1.0
+    provider = tomllib.loads(multidex_provider_config_overrides(config)[0])["model_providers"]["wafer"]
+    assert provider["experimental_bearer_token"] == "test-token"
+    assert "auth" not in provider
+
+
 @pytest.mark.parametrize("explicit_fast", [False, True])
 def test_lithos_provider_registers_three_variants_with_one_model_label(
     tmp_path: Path, explicit_fast: bool
