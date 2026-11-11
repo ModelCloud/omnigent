@@ -59,8 +59,8 @@ MULTIDEX_RUNTIME_CAPABILITIES_FILE = "multidex-runtime-capabilities.json"
 # them, so :func:`multidex_provider_config_overrides` embeds the registered
 # literal token in an auth command rather than writing either field.
 #
-# ``wire_api`` and ``requires_openai_auth`` are emitted only at their defaults,
-# which Codex accepts.
+# OpenRouter and Lithos emit ``wire_api`` and ``requires_openai_auth`` only at
+# their defaults. Wafer uses its built-in values and a literal bearer token.
 MULTIDEX_BUILTIN_PROVIDER_OVERRIDE_FIELDS = frozenset(
     {
         "provider",
@@ -73,8 +73,7 @@ MULTIDEX_BUILTIN_PROVIDER_OVERRIDE_FIELDS = frozenset(
     }
 )
 
-# Built-in gateway providers, which accept only the limited override fields
-# above and authenticate through a command-backed ``auth`` entry.
+# Built-in gateway providers accept only the limited override fields above.
 MULTIDEX_BUILTIN_PROVIDER_IDS = frozenset({"openrouter", "lithos", "wafer"})
 
 # The variable older MultiDex builds read a built-in gateway's bearer from.
@@ -409,6 +408,8 @@ def multidex_provider_config_overrides(config: MultiDexConfig) -> tuple[str, ...
             # launcher forwards that variable alongside this table.
             if model.provider == "wafer":
                 provider_config.pop("auth", None)
+                provider_config.pop("wire_api", None)
+                provider_config.pop("requires_openai_auth", None)
             else:
                 provider_config["auth"] = multidex_builtin_provider_auth(
                     model.provider, model.provider_config
