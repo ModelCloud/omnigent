@@ -32,9 +32,12 @@ MULTIDEX_MODELS_PATH = MULTIDEX_CONFIG_ROOT / "models.toml"
 MULTIDEX_BINARY = Path.home() / ".local" / "bin" / "codex"
 
 MULTIDEX_MODEL = "DS v4.1 Flash 1017"
+WAFER_MODEL = "DeepSeek-V4.1-Flash-1017"
+WAFER_US_BASE_URL = "https://us.pass.wafer.ai/v1"
 DEEPSEEK_MODEL_LABEL = "DeepSeek v4.1 Flash"
 DEEPSEEK_SELECTOR_MODELS = {
     MULTIDEX_MODEL: ("multidex", "regular"),
+    WAFER_MODEL: ("wafer", "regular"),
     **dict.fromkeys(MULTIDEX_DEEPSEEK_OPENROUTER.model_ids, ("openrouter", "regular")),
     **{
         model: ("lithos", variant)
@@ -71,7 +74,7 @@ MULTIDEX_BUILTIN_PROVIDER_OVERRIDE_FIELDS = frozenset(
 
 # Built-in gateway providers, which accept only the limited override fields
 # above and authenticate through a command-backed ``auth`` entry.
-MULTIDEX_BUILTIN_PROVIDER_IDS = frozenset({"openrouter", "lithos"})
+MULTIDEX_BUILTIN_PROVIDER_IDS = frozenset({"openrouter", "lithos", "wafer"})
 
 # The variable older MultiDex builds read a built-in gateway's bearer from.
 #
@@ -127,6 +130,8 @@ def multidex_model_picker_row(
     }
     if model.model not in DEEPSEEK_SELECTOR_MODELS and model.model_family != "ds-v4.1-flash-1017":
         return row
+    if model.model == WAFER_MODEL:
+        row["speed"] = 1.0
     row.update(
         {
             "defaultReasoningEffort": "max",
@@ -201,6 +206,8 @@ def with_multidex_model_picker_row(
             row["isDefault"] = True
         if family == "ds-v4.1-flash-1017":
             row["displayName"] = DEEPSEEK_MODEL_LABEL
+        if item.model == WAFER_MODEL:
+            row["speed"] = 1.0
         if any(
             source.get("isDefault") is True
             and (source.get("id") == item.model or source.get("model") == item.model)
@@ -226,6 +233,8 @@ def with_multidex_model_picker_row(
                     "variant": variant,
                 }
             )
+            if model_id == WAFER_MODEL:
+                row["speed"] = 1.0
     if any(row.get("isDefault") is True for row in registered_rows):
         for row in remaining_rows:
             row.pop("isDefault", None)
@@ -293,7 +302,7 @@ def multidex_runtime_provider_id(provider: str) -> str:
     """Map a MultiDex config name into a private Codex provider namespace."""
     # These endpoint ids are also inferred by MultiDex during live switches.
     # Other registrations must not shadow official or gateway providers.
-    if provider in {"multidex", "openrouter", "lithos"}:
+    if provider in {"multidex", "wafer", "openrouter", "lithos"}:
         return provider
     slug = re.sub(r"[^A-Za-z0-9_-]+", "-", provider).strip("-_")[:24] or "provider"
     digest = hashlib.sha256(provider.encode("utf-8")).hexdigest()[:10]
@@ -475,6 +484,16 @@ def load_multidex_config(
                         "variant": variant,
                     },
                 )
+    if isinstance(providers.get("wafer"), dict):
+        declared_models.setdefault(
+            WAFER_MODEL,
+            {
+                "provider": "wafer",
+                "model_family": "ds-v4.1-flash-1017",
+                "model_label": DEEPSEEK_MODEL_LABEL,
+                "variant": "regular",
+            },
+        )
     if not declared_models:
         raise ValueError("MultiDex models.toml requires [models.<model-id>] entries")
 
@@ -494,6 +513,13 @@ def load_multidex_config(
         if provider_name == "lithos" and (provider is None or isinstance(provider, dict)):
             provider = {
                 "base_url": "https://api.lithosai.cloud/v1",
+                "wire_api": "responses",
+                "requires_openai_auth": False,
+                **(provider or {}),
+            }
+        if provider_name == "wafer" and (provider is None or isinstance(provider, dict)):
+            provider = {
+                "base_url": WAFER_US_BASE_URL,
                 "wire_api": "responses",
                 "requires_openai_auth": False,
                 **(provider or {}),
@@ -527,6 +553,8 @@ def load_multidex_config(
         base_url = provider.get("base_url")
         if not isinstance(base_url, str):
             raise ValueError(f"MultiDex provider {provider_name!r} base_url must be HTTP(S)")
+        if provider_name == "wafer" and base_url.rstrip("/") != WAFER_US_BASE_URL:
+            raise ValueError("MultiDex Wafer provider must use the US endpoint")
         parsed = urlparse(base_url)
         if (
             parsed.scheme not in {"http", "https"}

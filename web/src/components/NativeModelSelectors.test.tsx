@@ -88,8 +88,8 @@ it("selects a provider's regular model atomically and only shows its available s
   expect(screen.queryByRole("combobox", { name: "Speed" })).not.toBeInTheDocument();
   fireEvent.keyDown(screen.getByRole("combobox", { name: "Provider" }), { key: "ArrowDown" });
   expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
-    "OpenRouter",
     "Local",
+    "OpenRouter",
     "Lithos",
   ]);
   fireEvent.click(await screen.findByRole("option", { name: "Lithos" }));
@@ -114,6 +114,30 @@ it("selects a provider's regular model atomically and only shows its available s
   expect(change).toHaveBeenLastCalledWith("openai-Astra");
   rerender(<NativeModelSelectors {...props} selectedModel="openai-Astra" />);
   expect(screen.queryByRole("combobox", { name: "Provider" })).not.toBeInTheDocument();
+});
+
+it("groups Wafer beside Local at speed 1.0", async () => {
+  const change = vi.fn();
+  const wafer: NativeModelOption = {
+    id: "DeepSeek-V4.1-Flash-1017",
+    modelFamily: "ds",
+    modelLabel: "DeepSeek v4.1 Flash",
+    providerId: "wafer",
+    variant: "regular",
+    speed: 1.0,
+    supportedReasoningEfforts: [{ reasoningEffort: "high" }],
+    defaultReasoningEffort: "high",
+  };
+  render(<NativeModelSelectors options={[...options, wafer]} selectedModel="local-1017" effort={null} onModelChange={change} onEffortChange={vi.fn()} />);
+  fireEvent.keyDown(screen.getByRole("combobox", { name: "Provider" }), { key: "ArrowDown" });
+  expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+    "Local",
+    "Wafer⚡, speed 1.0",
+    "OpenRouter",
+    "Lithos",
+  ]);
+  fireEvent.click(await screen.findByRole("option", { name: "Wafer, speed 1.0" }));
+  expect(change).toHaveBeenCalledWith("DeepSeek-V4.1-Flash-1017");
 });
 
 it("prefixes provider options with an online/offline status dot", async () => {
