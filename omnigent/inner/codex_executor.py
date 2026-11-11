@@ -1681,6 +1681,11 @@ def materialize_codex_provider_config(
     for provider_name, provider_config in list(providers.items()):
         if not isinstance(provider_config, MutableMapping):
             continue
+        if provider_name == "wafer":
+            # Remove fields stamped into older private homes before Codex reads them.
+            for key in tuple(provider_config):
+                if key not in {"base_url", "auth", "http_headers", "experimental_bearer_token"}:
+                    provider_config.pop(key)
         if provider_name in CODEX_BUILTIN_PROVIDERS:
             continue
         if isinstance(provider_config, tomlkit.items.InlineTable):
