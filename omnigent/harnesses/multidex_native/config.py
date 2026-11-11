@@ -66,6 +66,7 @@ MULTIDEX_BUILTIN_PROVIDER_OVERRIDE_FIELDS = frozenset(
         "provider",
         "base_url",
         "auth",
+        "experimental_bearer_token",
         "http_headers",
         "wire_api",
         "requires_openai_auth",
@@ -406,10 +407,13 @@ def multidex_provider_config_overrides(config: MultiDexConfig) -> tuple[str, ...
             # token through a command and drop every other non-default field.
             # Older builds still resolve their default ``env_key`` first; the
             # launcher forwards that variable alongside this table.
-            provider_config["auth"] = multidex_builtin_provider_auth(
-                model.provider, model.provider_config
-            )
-            provider_config.pop("experimental_bearer_token", None)
+            if model.provider == "wafer":
+                provider_config.pop("auth", None)
+            else:
+                provider_config["auth"] = multidex_builtin_provider_auth(
+                    model.provider, model.provider_config
+                )
+                provider_config.pop("experimental_bearer_token", None)
             provider_config = {
                 key: value
                 for key, value in provider_config.items()

@@ -35,6 +35,9 @@ def test_wafer_registers_one_standard_deepseek_model_with_speed(tmp_path: Path) 
     assert rows[0]["providerId"] == "wafer"
     assert rows[0]["variant"] == "regular"
     assert rows[0]["speed"] == 1.0
+    provider = tomllib.loads(multidex_provider_config_overrides(config)[0])["model_providers"]["wafer"]
+    assert provider["experimental_bearer_token"] == "test-token"
+    assert "auth" not in provider
 
 
 @pytest.mark.parametrize("explicit_fast", [False, True])
