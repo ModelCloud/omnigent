@@ -378,7 +378,24 @@ export function ErrorBanner({
   const [signInBusy, setSignInBusy] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
-  const [dismissed, setDismissed] = useState(false);
+  const dismissalKey = itemId ? `omnigent:dismissed-error:${itemId}` : null;
+  const [dismissed, setDismissed] = useState(() => {
+    try {
+      return dismissalKey !== null && window.localStorage.getItem(dismissalKey) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const dismiss = () => {
+    if (dismissalKey !== null) {
+      try {
+        window.localStorage.setItem(dismissalKey, "1");
+      } catch {
+        // Closing the banner still works when browser storage is unavailable.
+      }
+    }
+    setDismissed(true);
+  };
   const copyResetRef = useRef<number>(0);
   const retryInFlightRef = useRef(false);
   const dismissButtonRef = useRef<HTMLButtonElement>(null);
@@ -485,7 +502,7 @@ export function ErrorBanner({
     setRetryError(null);
     try {
       await onRetry(actionableError);
-      setDismissed(true);
+      dismiss();
     } catch (error) {
       retryInFlightRef.current = false;
       setRetryError(
@@ -583,7 +600,7 @@ export function ErrorBanner({
             aria-label={notice ? "Dismiss notice" : "Dismiss error message"}
             onClick={(event) => {
               event.stopPropagation();
-              setDismissed(true);
+              dismiss();
             }}
             className="size-6 shrink-0 rounded-[var(--control-radius,var(--radius-lg))] text-muted-foreground hover:bg-muted hover:text-foreground"
           >

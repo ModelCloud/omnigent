@@ -534,6 +534,40 @@ describe("ErrorBanner", () => {
     expect(screen.getByText("Unrelated transcript content")).toBeInTheDocument();
   });
 
+  it("keeps a dismissed historical error hidden after remount", () => {
+    const itemId = "err_persisted_terminal_failure";
+    const storageKey = `omnigent:dismissed-error:${itemId}`;
+    const originalStorageDescriptor = Object.getOwnPropertyDescriptor(window, "localStorage");
+    const stored = new Map<string, string>();
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: (key: string) => stored.get(key) ?? null,
+        setItem: (key: string, value: string) => stored.set(key, value),
+        removeItem: (key: string) => stored.delete(key),
+      },
+    });
+    window.localStorage.removeItem(storageKey);
+    const props = {
+      itemId,
+      message: "Old terminal launch failed",
+      source: "execution",
+      code: "native_terminal_start_failed",
+    };
+    const first = render(<ErrorBanner {...props} />);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss error message" }));
+    first.unmount();
+    render(<ErrorBanner {...props} />);
+    expect(screen.queryByText("Old terminal launch failed")).toBeNull();
+    expect(window.localStorage.getItem(storageKey)).toBe("1");
+    window.localStorage.removeItem(storageKey);
+    if (originalStorageDescriptor) {
+      Object.defineProperty(window, "localStorage", originalStorageDescriptor);
+    } else {
+      Reflect.deleteProperty(window, "localStorage");
+    }
+  });
+
   it("toggles from the pill body but not from nested action buttons", async () => {
     let resolveRetry: (() => void) | undefined;
     const onRetry = vi.fn(
