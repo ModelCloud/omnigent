@@ -3,37 +3,44 @@ import { getOmnigentServerIdentity } from "./host";
 import { getCurrentUserId } from "./identity";
 import type { NativeModelOption } from "./types";
 
+// Runner-reported catalogs send null for unset fields; read them as absent.
+function unset<T extends z.ZodType>(schema: T) {
+  return z.preprocess((value) => value ?? undefined, schema.optional());
+}
+
 // Rows must stay verbatim: the grouped codex picker reads extension fields
 // (modelFamily/providerId/variant/speed/…) that a closed schema would silently
 // strip, flattening the drill-down back to a plain list. Stay loose so
 // runner-added fields round-trip untouched.
 export const modelOptionSchema: z.ZodType<NativeModelOption> = z.looseObject({
   id: z.string(),
-  model: z.string().optional(),
-  displayName: z.string().optional(),
-  modelFamily: z.string().optional(),
-  modelLabel: z.string().optional(),
-  providerId: z.string().optional(),
-  providerHealth: z.enum(["online", "offline"]).optional(),
-  variant: z.string().optional(),
-  speed: z.number().optional(),
-  isDefault: z.boolean().optional(),
-  defaultReasoningEffort: z.string().optional(),
-  supportedReasoningEfforts: z
-    .array(z.object({ reasoningEffort: z.string(), description: z.string().optional() }))
-    .optional(),
-  source: z
-    .object({
+  model: unset(z.string()),
+  displayName: unset(z.string()),
+  modelFamily: unset(z.string()),
+  modelLabel: unset(z.string()),
+  providerId: unset(z.string()),
+  providerHealth: unset(z.enum(["online", "offline"])),
+  variant: unset(z.string()),
+  speed: unset(z.number()),
+  isDefault: unset(z.boolean()),
+  defaultReasoningEffort: unset(z.string()),
+  supportedReasoningEfforts: unset(
+    z.array(z.object({ reasoningEffort: z.string(), description: unset(z.string()) })),
+  ),
+  source: unset(
+    z.object({
       kind: z.string(),
       label: z.string(),
-      name: z.string().optional(),
-      host: z.string().optional(),
-    })
-    .optional(),
-  fusion: z.any().optional(),
+      name: unset(z.string()),
+      host: unset(z.string()),
+    }),
+  ),
+  fusion: unset(z.any()),
 });
 
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
+/** Session catalogs are only a launch hint; the session rechecks its pick once online. */
+export const SANDBOX_SESSION_CATALOG_MAX_AGE_MS = 7 * MAX_AGE_MS;
 const cacheSchema = z.object({
   models: z.array(modelOptionSchema),
   configured: z.boolean(),
@@ -52,16 +59,45 @@ export function modelCatalogCacheKey(
   return `omnigent:model-catalog:v1:${JSON.stringify([server, user, target, targetId, harness, target === "sandbox" ? agentId : null])}`;
 }
 
-export function readModelCatalogCache(key: string | null) {
+/**
+ * Key for the catalog a sandbox session last reported. Scoped by agent, so an
+ * agent with its own provider never shares its models with other agents.
+ */
+export function sandboxSessionCatalogKey(
+  provider: string | null,
+  harness: string | null,
+  agentId: string | null,
+): string | null {
+  const server = getOmnigentServerIdentity();
+  const user = getCurrentUserId();
+  if (server === null || user === null || !provider || !harness || !agentId) return null;
+  return `omnigent:model-catalog:v1:${JSON.stringify([server, user, "sandbox-session", provider, harness, agentId])}`;
+}
+
+/** The raw stored entry, comparable across renders. */
+export function readModelCatalogCacheText(key: string | null): string | null {
   if (key === null || typeof window === "undefined") return null;
   try {
-    const result = cacheSchema.safeParse(JSON.parse(window.localStorage.getItem(key) ?? "null"));
-    if (!result.success) return null;
-    const age = Date.now() - result.data.savedAt;
-    return age >= 0 && age <= MAX_AGE_MS ? result.data : null;
+    return window.localStorage.getItem(key);
   } catch {
     return null;
   }
+}
+
+export function parseModelCatalogCache(text: string | null, maxAgeMs = MAX_AGE_MS) {
+  if (text === null) return null;
+  try {
+    const result = cacheSchema.safeParse(JSON.parse(text));
+    if (!result.success) return null;
+    const age = Date.now() - result.data.savedAt;
+    return age >= 0 && age <= maxAgeMs ? result.data : null;
+  } catch {
+    return null;
+  }
+}
+
+export function readModelCatalogCache(key: string | null, maxAgeMs = MAX_AGE_MS) {
+  return parseModelCatalogCache(readModelCatalogCacheText(key), maxAgeMs);
 }
 
 /** Store catalog data only; live queries always own launch availability. */
