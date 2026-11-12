@@ -944,12 +944,12 @@ async def _multidex_runtime_settings_overrides(
     """Attach a freshly-discovered MultiDex context budget to a new turn.
 
     MultiDex deployments can change their serving context window without a
-    client upgrade.  Query only when the target is the configured local model;
-    the app-server uses this runtime value for pre-turn compaction instead of
-    trusting bundled metadata. Official Codex models never read this
-    MultiDex-specific session file, so their routing and limits stay intact.
+    client upgrade. Query the local model's capacity for every DeepSeek
+    provider variant so switching providers keeps one context and compaction
+    budget. Official Codex models never read this session file.
     """
     from omnigent.harnesses.multidex_native.config import (
+        DEEPSEEK_SELECTOR_MODELS,
         MULTIDEX_MODEL,
         clear_multidex_runtime_capabilities,
         fetch_multidex_runtime_capabilities,
@@ -995,16 +995,24 @@ async def _multidex_runtime_settings_overrides(
                 )
             if has_model_selection:
                 overrides["modelProvider"] = multidex_runtime_provider_id(registration.provider)
-            if registration.discover_capabilities or registration.model == MULTIDEX_MODEL:
+            is_deepseek = (
+                registration.model in DEEPSEEK_SELECTOR_MODELS
+                or registration.model_family == "ds-v4.1-flash-1017"
+            )
+            selected_config = None
+            if is_deepseek:
+                selected_config = multidex
+            elif registration.discover_capabilities:
                 selected_config = dataclasses.replace(
                     multidex,
                     local_model=registration.model,
                     provider=registration.provider,
                     base_url=registration.base_url,
                 )
+            if selected_config is not None:
                 try:
                     capabilities = await fetch_multidex_runtime_capabilities(selected_config)
-                except RuntimeError:
+                except (RuntimeError, ValueError):
                     clear_multidex_runtime_capabilities(Path(state.codex_home))
                     _logger.warning(
                         "MultiDex capability discovery failed; using conservative fallback"

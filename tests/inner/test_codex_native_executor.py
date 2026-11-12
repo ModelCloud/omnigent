@@ -121,6 +121,85 @@ def test_multidex_turn_refreshes_runtime_context_capability(
     assert writes == [(tmp_path / "codex-home", 262_144)]
 
 
+@pytest.mark.parametrize(
+    ("provider", "model"),
+    [
+        ("wafer", "DeepSeek-V4.1-Flash-1017"),
+        ("openrouter", "deepseek/deepseek-v4.1-flash-1017"),
+        ("lithos", "deepseek-ai/DeepSeek-V4.1-Flash"),
+    ],
+)
+def test_hosted_deepseek_turn_uses_local_context_capability(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    provider: str,
+    model: str,
+) -> None:
+    """Hosted DeepSeek switches use the local endpoint's live budget."""
+    from omnigent.harnesses.multidex_native import config as multidex_config
+
+    local_url = "http://127.0.0.1:2120/v1"
+    registration = multidex_config.MultiDexConfig(
+        local_model="DS v4.1 Flash 1017",
+        provider="multidex",
+        base_url=local_url,
+        models=(
+            multidex_config.MultiDexModelRegistration(
+                model="DS v4.1 Flash 1017",
+                provider="multidex",
+                display_name="Local",
+                base_url=local_url,
+                provider_config={"experimental_bearer_token": "local-test-token"},
+            ),
+            multidex_config.MultiDexModelRegistration(
+                model=model,
+                provider=provider,
+                display_name="Hosted",
+                base_url="https://hosted.example/v1",
+                provider_config={"experimental_bearer_token": "hosted-test-token"},
+            ),
+        ),
+    )
+    discovered: list[tuple[str, str]] = []
+    written: list[tuple[str, int]] = []
+
+    async def _capabilities(
+        config: multidex_config.MultiDexConfig,
+    ) -> multidex_config.MultiDexRuntimeCapabilities:
+        discovered.append((config.local_model, config.base_url))
+        return multidex_config.MultiDexRuntimeCapabilities(
+            context_window=294_912, max_prompt_tokens=262_144
+        )
+
+    def _write(
+        _home: Path,
+        config: multidex_config.MultiDexConfig,
+        capabilities: multidex_config.MultiDexRuntimeCapabilities,
+    ) -> None:
+        written.append((config.local_model, capabilities.context_window))
+
+    monkeypatch.setattr(multidex_config, "load_multidex_config", lambda **_kwargs: registration)
+    monkeypatch.setattr(multidex_config, "fetch_multidex_runtime_capabilities", _capabilities)
+    monkeypatch.setattr(multidex_config, "write_multidex_runtime_capabilities", _write)
+    state = CodexNativeBridgeState(
+        session_id="session_123",
+        socket_path=str(tmp_path / "app-server.sock"),
+        thread_id="thread_123",
+        codex_home=str(tmp_path / "codex-home"),
+    )
+
+    actual = asyncio.run(
+        codex_native_executor._multidex_runtime_settings_overrides(state, {"model": model})
+    )
+
+    assert actual == {
+        "model": model,
+        "modelProvider": multidex_config.multidex_runtime_provider_id(provider),
+    }
+    assert discovered == [("DS v4.1 Flash 1017", local_url)]
+    assert written == [("DS v4.1 Flash 1017", 294_912)]
+
+
 def test_multidex_runtime_capability_snapshot_is_session_private(tmp_path: Path) -> None:
     """The live endpoint limit must not become shared global configuration."""
     from omnigent.harnesses.multidex_native import config as multidex_config
