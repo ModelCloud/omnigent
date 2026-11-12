@@ -872,6 +872,28 @@ async def test_model_change_recovers_idle_reaped_codex_on_connected_runner(
 
 
 @pytest.mark.parametrize("clear_bridge", [False, True], ids=["stale-bridge", "missing-bridge"])
+async def test_model_options_recreates_idle_reaped_codex(
+    client: httpx.AsyncClient,
+    native_session: _NativeSession,
+    clear_bridge: bool,
+) -> None:
+    session = native_session
+    await session.reap(clear_bridge=clear_bridge)
+    response = await session.runner.get(f"/v1/sessions/{session.session_id}/codex-model-options")
+    if clear_bridge:
+        assert response.status_code == 503, response.text
+        assert session.codex.launches == 1
+    else:
+        assert response.status_code == 200, response.text
+        assert session.codex.launches == 2
+        assert [row["id"] for row in response.json()["models"]] == [
+            _PREVIOUS_MODEL,
+            _REQUESTED_MODEL,
+            _LATEST_MODEL,
+        ]
+
+
+@pytest.mark.parametrize("clear_bridge", [False, True], ids=["stale-bridge", "missing-bridge"])
 async def test_reopening_terminal_allows_model_change_after_idle_reap(
     client: httpx.AsyncClient, native_session: _NativeSession, clear_bridge: bool
 ) -> None:

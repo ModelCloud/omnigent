@@ -999,7 +999,10 @@ def build_native_controls(
             list_codex_model_options,
             mark_launch_default,
         )
-        from omnigent.harnesses.codex_native.bridge import read_codex_home_config_model
+        from omnigent.harnesses.codex_native.bridge import (
+            bridge_dir_for_codex_home,
+            read_codex_home_config_model,
+        )
         from omnigent.runner.native.orchestration import _AUTO_CODEX_APP_SERVERS
 
         state, bridge_dir = await _codex_native_bridge_state_and_dir_for_session(
@@ -1009,6 +1012,18 @@ def build_native_controls(
         )
         if state is None:
             raise _CodexNativeModelOptionsNotReady("Codex-native model options are not ready yet.")
+
+        # Idle reaping closes the native pane and its app-server, but the bridge
+        # file can still name the old listener. Recreate the pane before using
+        # that address. The readiness helper serializes with the idle reaper.
+        registry = resource_registry.terminal_registry
+        if registry is not None and registry.get(conv_id, "codex", "main") is None:
+            state = await _ready_codex_bridge_for_settings(conv_id)
+            if state is None:
+                raise _CodexNativeModelOptionsNotReady(
+                    "Codex-native model options are not ready yet."
+                )
+            bridge_dir = bridge_dir_for_codex_home(Path(state.codex_home))
 
         codex_client = client_for_transport(
             state.socket_path,
