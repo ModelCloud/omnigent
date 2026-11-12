@@ -1062,7 +1062,8 @@ html:not(.dark) .conversations-sidebar:not(.is-peek) {
   border-color: var(--workspace-panel-border);
 }
 
-/* Mobile drawers use the shared glass layer behind their content. */
+/* Mobile drawers need an opaque base so the chat cannot show through the
+ * session list, including on browsers where the glass layer is transparent. */
 @media (width < 48rem) {
   :root:not(.dark) .sidebar-glass-surface {
     --omni-glass-blur: 16px;
@@ -1073,7 +1074,7 @@ html:not(.dark) .conversations-sidebar:not(.is-peek) {
     margin-top: -1px;
     margin-bottom: -1px;
     isolation: isolate;
-    background: transparent !important;
+    background: var(--card-solid) !important;
     border: 0 !important;
     box-shadow: none !important;
     -webkit-backdrop-filter: none !important;
