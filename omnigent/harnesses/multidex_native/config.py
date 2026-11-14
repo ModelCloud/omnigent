@@ -134,7 +134,7 @@ def multidex_model_picker_row(
         row["speed"] = 1.0
     row.update(
         {
-            "defaultReasoningEffort": "max",
+            "defaultReasoningEffort": "high",
             "supportedReasoningEfforts": [
                 {
                     "reasoningEffort": "none",
@@ -202,6 +202,9 @@ def with_multidex_model_picker_row(
             else:
                 for key, value in fallback.items():
                     row.setdefault(key, value)
+        if family == "ds-v4.1-flash-1017":
+            # Host catalogs from older MultiDex builds may still say Max.
+            row["defaultReasoningEffort"] = "high"
         if item.model == MULTIDEX_MODEL:
             row["isDefault"] = True
         if family == "ds-v4.1-flash-1017":
@@ -235,6 +238,7 @@ def with_multidex_model_picker_row(
             )
             if model_id == WAFER_MODEL:
                 row["speed"] = 1.0
+            row["defaultReasoningEffort"] = "high"
     if any(row.get("isDefault") is True for row in registered_rows):
         for row in remaining_rows:
             row.pop("isDefault", None)
