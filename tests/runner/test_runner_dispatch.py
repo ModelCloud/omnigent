@@ -9304,8 +9304,8 @@ async def test_sys_session_get_info_projects_metadata_and_runner_connectivity() 
     /v1/hosts/{id}``.
 
     Proves the full runner-dispatch path: read the session snapshot,
-    derive the effective model (a per-session ``model_override`` wins
-    over the spec's ``llm_model``), count pending approval prompts, and
+    derive the effective model (a confirmed ``reported_model`` wins
+    over a stale ``model_override``), count pending approval prompts, and
     attach ``runner_online``. If the projection regressed (dropped a
     field, skipped the runner-status call, or picked the wrong model),
     the asserted values would differ. The transcript is intentionally
@@ -9335,6 +9335,7 @@ async def test_sys_session_get_info_projects_metadata_and_runner_connectivity() 
                     "sub_agent_name": "researcher",
                     "llm_model": "anthropic/claude-sonnet-4-6",
                     "model_override": "claude-opus-4-8",
+                    "reported_model": "deepinfra/deepseek-v4.1-flash-1017-priority",
                     "workspace": "/repo",
                     "git_branch": "feature/x",
                     "pending_elicitations": [{"id": "el_1"}, {"id": "el_2"}],
@@ -9377,10 +9378,8 @@ async def test_sys_session_get_info_projects_metadata_and_runner_connectivity() 
         "cursor-native": False,
     }
     assert info["parent_session_id"] == "conv_parent"
-    # Effective model: the per-session override wins over the spec
-    # default. "anthropic/claude-sonnet-4-6" here would mean the
-    # override was ignored.
-    assert info["model"] == "claude-opus-4-8"
+    # The native terminal's current model wins over the older web pick.
+    assert info["model"] == "deepinfra/deepseek-v4.1-flash-1017-priority"
     # Two outstanding approval prompts surfaced from the snapshot — both
     # the prompts themselves and a count. If the projection dropped the
     # prompts (count-only), the orchestrator couldn't tell what the

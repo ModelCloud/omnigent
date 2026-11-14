@@ -1877,6 +1877,50 @@ async def _inherited_parent_model(
     return parent_model
 
 
+async def _inherited_parent_reasoning_effort(
+    *,
+    server_client: httpx.AsyncClient,
+    conversation_id: str,
+    sub_agent_name: str,
+    agent_spec: AgentSpec | None,
+    child_harness: str | None,
+    inherited_model: str | None,
+) -> str | None:
+    """Keep the parent's current effort when the child also inherits its model.
+
+    An explicit worker model or effort remains a worker-specific setting. If
+    model inheritance was rejected, do not pair the worker's different model
+    with an effort chosen for the parent model.
+    """
+    sub_spec = _find_subagent_spec(sub_agent_name, agent_spec)
+    executor = getattr(sub_spec, "executor", None)
+    if getattr(executor, "model", None) or getattr(executor, "reasoning_effort", None):
+        return None
+    if child_harness is None:
+        return None
+    try:
+        resp = await server_client.get(f"{_session_url(conversation_id)}", timeout=10.0)
+    except (httpx.HTTPError, ValueError, RuntimeError):
+        return None
+    if resp.status_code != 200:
+        return None
+    snap = _string_object_dict(resp.json())
+    if snap is None or _child_is_foreign_harness(child_harness, snap.get("harness")):
+        return None
+    parent_model = (
+        snap.get("reported_model") or snap.get("model_override") or snap.get("llm_model")
+    )
+    if parent_model and inherited_model is None:
+        return None
+    raw_effort = snap.get("reasoning_effort")
+    if not isinstance(raw_effort, str) or not raw_effort:
+        return None
+    try:
+        return validate_effort_for_harness(raw_effort, child_harness)
+    except ValueError:
+        return None
+
+
 def _subagent_reasoning_effort_from_args(args: _JsonObject) -> str | None:
     """
     Extract the optional ``reasoning_effort`` from
@@ -2833,6 +2877,7 @@ async def _execute_subagent_tool(
         }
         if harness_override_canonical is not None:
             create_body["harness_override"] = harness_override_canonical
+        inherited = None
         if model is not None:
             # Reject up front when the child harness would silently
             # ignore the persisted override — no silent drops.
@@ -2879,10 +2924,9 @@ async def _execute_subagent_tool(
                     agent_spec=agent_spec,
                     harness=child_harness,
                 )
-        # A dispatch that names no effort inherits the sub-agent spec's
-        # ``executor.reasoning_effort``, so a worker's default is declared
-        # once in its config instead of depending on the orchestrator
-        # remembering to pass it on every dispatch.
+        # Explicit dispatch effort wins; a worker-spec pin wins over the
+        # parent's selection. Otherwise keep the parent's current effort with
+        # the inherited model/provider/variant.
         effective_effort = reasoning_effort
         effort_source = "sys_session_send"
         if effective_effort is None:
@@ -2893,6 +2937,17 @@ async def _execute_subagent_tool(
             if isinstance(spec_effort, str) and spec_effort:
                 effective_effort = spec_effort
                 effort_source = f"sub-agent {sub_agent_name!r} spec"
+        if effective_effort is None and model is None:
+            effective_effort = await _inherited_parent_reasoning_effort(
+                server_client=server_client,
+                conversation_id=conversation_id,
+                sub_agent_name=str(sub_agent_name),
+                agent_spec=agent_spec,
+                child_harness=child_harness,
+                inherited_model=inherited,
+            )
+            if effective_effort is not None:
+                effort_source = "parent session"
         if effective_effort is not None:
             try:
                 create_body["reasoning_effort"] = validate_effort_for_harness(
@@ -5503,9 +5558,11 @@ async def _session_get_info_via_rest(
             ),
             "sub_agent_name": snap.get("sub_agent_name"),
             "reasoning_effort": snap.get("reasoning_effort"),
-            # Effective model: a per-session override wins over the
-            # agent spec's default; both may be None when unset.
-            "model": snap.get("model_override") or snap.get("llm_model"),
+            # Native runtime reports the confirmed current pick; the web
+            # override may still contain the launch-time model after a switch.
+            "model": (
+                snap.get("reported_model") or snap.get("model_override") or snap.get("llm_model")
+            ),
             "workspace": snap.get("workspace"),
             "git_branch": snap.get("git_branch"),
             # The outstanding approval prompts themselves (original

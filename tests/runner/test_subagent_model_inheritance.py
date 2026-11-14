@@ -29,6 +29,7 @@ def _spec_with_worker(
     harness: str,
     *,
     worker_model: str | None = None,
+    worker_effort: str | None = None,
 ) -> SimpleNamespace:
     """
     Build a parent-spec stub declaring one ``worker`` sub-agent.
@@ -40,6 +41,8 @@ def _spec_with_worker(
     executor = SimpleNamespace(type="omnigent", config={"harness": harness})
     if worker_model is not None:
         executor.model = worker_model
+    if worker_effort is not None:
+        executor.reasoning_effort = worker_effort
     return SimpleNamespace(sub_agents=[SimpleNamespace(name="worker", executor=executor)])
 
 
@@ -169,9 +172,32 @@ async def test_child_inherits_confirmed_provider_variant_after_parent_switch(
             "model_override": "gpt-6-sol",
             "reported_model": "deepinfra/deepseek-v4.1-flash-1017-priority",
             "llm_model": "deepinfra/deepseek-v4.1-flash-1017-priority",
+            "reasoning_effort": "high",
         },
     )
     assert bodies[0]["model_override"] == "deepinfra/deepseek-v4.1-flash-1017-priority"
+    assert bodies[0]["reasoning_effort"] == "high"
+
+
+@pytest.mark.asyncio
+async def test_worker_effort_pin_wins_over_parent_effort(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit worker setting keeps its own reasoning level."""
+    bodies = await _dispatch_without_model(
+        monkeypatch,
+        agent_spec=_spec_with_worker("codex-native", worker_effort="low"),
+        conv_id="conv_parent_worker_effort",
+        parent_snapshot={
+            "id": "conv_parent_worker_effort",
+            "agent_id": "ag_parent",
+            "harness": "codex-native",
+            "reported_model": "DS v4.1 Flash 1017",
+            "reasoning_effort": "high",
+        },
+    )
+    assert bodies[0]["model_override"] == "DS v4.1 Flash 1017"
+    assert bodies[0]["reasoning_effort"] == "low"
 
 
 @pytest.mark.asyncio
