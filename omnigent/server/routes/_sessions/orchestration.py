@@ -11822,6 +11822,59 @@ async def _create_session_from_existing_agent(
         conversation_store=conversation_store,
     )
 
+    # An independently created session has no parent_conversation_id, so the
+    # ordinary child inheritance path cannot seed its launch. The source id is
+    # supplied by the authenticated orchestration route, not the request body.
+    # Carry the current selection only when the caller launches the same agent;
+    # a different agent may not support its model or permission vocabulary.
+    inherited_source_labels: dict[str, str] = {}
+    if created_by_session_id is not None:
+        source = await asyncio.to_thread(
+            conversation_store.get_conversation, created_by_session_id
+        )
+        if source is not None and source.agent_id == agent.id:
+            inherited: dict[str, Any] = {}
+            for field in (
+                "model_override",
+                "reasoning_effort",
+                "terminal_launch_args",
+                "harness_override",
+                "cost_control_mode_override",
+                "subagent_routing_override",
+            ):
+                if field in body.model_fields_set:
+                    continue
+                value = getattr(source, field)
+                if field == "model_override" and value is None:
+                    value = source.reported_model
+                if value is not None:
+                    inherited[field] = list(value) if field == "terminal_launch_args" else value
+            if (
+                "terminal_launch_args" not in body.model_fields_set
+                and "harness_override" not in body.model_fields_set
+            ):
+                from omnigent.server.routes._sessions.common import (
+                    _CLAUDE_NATIVE_PERMISSION_MODE_LABEL_KEY,
+                    _CODEX_NATIVE_APPROVAL_MODE_LABEL_KEY,
+                    _CODEX_NATIVE_COLLABORATION_MODE_LABEL_KEY,
+                )
+                from omnigent.stores.conversation_store import (
+                    CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY,
+                )
+
+                inherited_source_labels = {
+                    key: source.labels[key]
+                    for key in (
+                        _CLAUDE_NATIVE_PERMISSION_MODE_LABEL_KEY,
+                        _CODEX_NATIVE_APPROVAL_MODE_LABEL_KEY,
+                        _CODEX_NATIVE_COLLABORATION_MODE_LABEL_KEY,
+                        CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY,
+                    )
+                    if key in source.labels
+                }
+            if inherited:
+                body = body.model_copy(update=inherited)
+
     # Top-level Smart Routing: "auto" on a native wrapper agent means the client
     # picked Smart Routing with no bundle agent, and its ``agent_id`` is only a
     # placeholder. Route now (the terminal launches with the row, so there is no
@@ -12345,7 +12398,7 @@ async def _create_session_from_existing_agent(
             )
 
     native_agent = native_coding_agent_for_agent_name(agent.name)
-    initial_labels = dict(body.labels) if body.labels else {}
+    initial_labels = {**inherited_source_labels, **body.labels}
     client_surface = resolve_client_surface(
         request.headers,
         parent_labels=_parent_for_routing.labels if _parent_for_routing is not None else None,

@@ -83,10 +83,9 @@ def test_configure_host_git_resets_then_adds_broker_helper(
         if c[:5] == ["git", "config", "--global", "--add", key] and "host1" in c[-1]
     )
     assert reset_idx < add_idx
-    # Commit identity attributed to the connected owner.
+    # Authentication must not replace the repository/local Git commit identity.
     flat = [" ".join(c) for c in calls]
-    assert any("user.email alice@example.com" in c for c in flat)
-    assert any("user.name octo" in c for c in flat)
+    assert not any("user.email" in c or "user.name" in c for c in flat)
 
 
 def test_configure_host_git_noop_without_token(monkeypatch: pytest.MonkeyPatch) -> None:
