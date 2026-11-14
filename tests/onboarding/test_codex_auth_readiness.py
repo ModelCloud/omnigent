@@ -46,7 +46,7 @@ model_provider = "profile-provider"
     assert effective_codex_model_provider(parsed) == "profile-provider"
 
 
-@pytest.mark.parametrize("provider", ["openrouter", "lithos", "wafer"])
+@pytest.mark.parametrize("provider", ["openrouter", "lithos", "wafer", "deepinfra"])
 @pytest.mark.parametrize("with_table", [False, True])
 @pytest.mark.parametrize("value", [None, "test-key"])
 def test_builtin_gateway_needs_a_config_toml_credential(
@@ -66,7 +66,7 @@ def test_builtin_gateway_needs_a_config_toml_credential(
     assert effective_self_sufficient_builtin_provider(load_codex_config(path) or {}) is None
 
 
-@pytest.mark.parametrize("provider", ["openrouter", "lithos", "wafer"])
+@pytest.mark.parametrize("provider", ["openrouter", "lithos", "wafer", "deepinfra"])
 def test_builtin_gateway_bearer_token_is_ready(tmp_path: Path, provider: str) -> None:
     path = _config(
         tmp_path,

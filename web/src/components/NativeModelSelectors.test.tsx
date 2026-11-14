@@ -128,7 +128,15 @@ it("groups Wafer beside Local at speed 1.0", async () => {
     supportedReasoningEfforts: [{ reasoningEffort: "high" }],
     defaultReasoningEffort: "high",
   };
-  render(<NativeModelSelectors options={[...options, wafer]} selectedModel="local-1017" effort={null} onModelChange={change} onEffortChange={vi.fn()} />);
+  render(
+    <NativeModelSelectors
+      options={[...options, wafer]}
+      selectedModel="local-1017"
+      effort={null}
+      onModelChange={change}
+      onEffortChange={vi.fn()}
+    />,
+  );
   fireEvent.keyDown(screen.getByRole("combobox", { name: "Provider" }), { key: "ArrowDown" });
   expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
     "Local",
@@ -138,6 +146,41 @@ it("groups Wafer beside Local at speed 1.0", async () => {
   ]);
   fireEvent.click(await screen.findByRole("option", { name: "Wafer, speed 1.0" }));
   expect(change).toHaveBeenCalledWith("DeepSeek-V4.1-Flash-1017");
+});
+
+it("shows DeepInfra flex and priority as speed variants", async () => {
+  const change = vi.fn();
+  const deepinfra = (["flex", "priority"] as const).map((variant, index): NativeModelOption => ({
+    id: `deepinfra/deepseek-v4.1-flash-1017-${variant}`,
+    modelFamily: "ds",
+    modelLabel: "DeepSeek v4.1 Flash",
+    providerId: "deepinfra",
+    variant,
+    speed: index === 0 ? 1.0 : 1.1,
+    supportedReasoningEfforts: [{ reasoningEffort: "high" }],
+    defaultReasoningEffort: "high",
+  }));
+  const props = {
+    options: [...options, ...deepinfra],
+    selectedModel: "local-1017",
+    effort: null,
+    onModelChange: change,
+    onEffortChange: vi.fn(),
+  };
+  const { rerender } = render(<NativeModelSelectors {...props} />);
+  fireEvent.keyDown(screen.getByRole("combobox", { name: "Provider" }), { key: "ArrowDown" });
+  expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+    "Local",
+    "DeepInfra⚡⚡, speed 1.0–1.1",
+    "OpenRouter",
+    "Lithos",
+  ]);
+  fireEvent.click(await screen.findByRole("option", { name: "DeepInfra, speed 1.0–1.1" }));
+  expect(change).toHaveBeenLastCalledWith(deepinfra[0].id);
+  rerender(<NativeModelSelectors {...props} selectedModel={deepinfra[0].id} />);
+  fireEvent.keyDown(screen.getByRole("combobox", { name: "Speed" }), { key: "ArrowDown" });
+  fireEvent.click(await screen.findByRole("option", { name: "Priority, speed 1.1" }));
+  expect(change).toHaveBeenLastCalledWith(deepinfra[1].id);
 });
 
 it("prefixes provider options with an online/offline status dot", async () => {
