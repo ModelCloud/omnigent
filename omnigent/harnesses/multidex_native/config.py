@@ -31,6 +31,12 @@ MULTIDEX_CONFIG_PATH = MULTIDEX_CONFIG_ROOT / "config.toml"
 MULTIDEX_MODELS_PATH = MULTIDEX_CONFIG_ROOT / "models.toml"
 MULTIDEX_BINARY = Path.home() / ".local" / "bin" / "codex"
 
+# Codex counts the parent in V2's total. V1 counts only child agents.
+MULTIDEX_SUBAGENT_CONFIG_OVERRIDES = (
+    "features.multi_agent_v2.max_concurrent_threads_per_session=9",
+    "agents.max_concurrent_threads_per_session=8",
+)
+
 MULTIDEX_MODEL = "DS v4.1 Flash 1017"
 WAFER_MODEL = "DeepSeek-V4.1-Flash-1017"
 WAFER_US_BASE_URL = "https://us.pass.wafer.ai/v1"

@@ -5434,6 +5434,7 @@ async def _auto_create_codex_terminal(
     from omnigent.harnesses.multidex_native.config import (
         MULTIDEX_BINARY,
         MULTIDEX_MODEL,
+        MULTIDEX_SUBAGENT_CONFIG_OVERRIDES,
         load_multidex_config,
         multidex_model_for_selection,
         multidex_model_selected,
@@ -6030,6 +6031,11 @@ async def _auto_create_codex_terminal(
         ),
         extra_config_overrides=[
             *_multidex_provider_overrides,
+            *(
+                MULTIDEX_SUBAGENT_CONFIG_OVERRIDES
+                if _codex_cli_path == str(MULTIDEX_BINARY)
+                else ()
+            ),
             *_codex_launch.config_overrides,
             *_codex_reasoning_trace_overrides,
             *mcp_overrides,
