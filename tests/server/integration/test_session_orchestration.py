@@ -15,8 +15,10 @@ from omnigent.server.feature_flags import (
     FeatureFlags,
     resolve_feature_flags,
 )
+from omnigent.server.routes._sessions.common import _CODEX_NATIVE_APPROVAL_MODE_LABEL_KEY
 from omnigent.server.sharing_settings import write_peer_session_messaging_override
 from omnigent.stores.conversation_store import (
+    CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY,
     CREATED_BY_SESSION_LABEL_KEY,
     SCHEDULED_TASK_ORIGIN_LABEL_KEY,
     SIDE_CHAT_SOURCE_LABEL_KEY,
@@ -638,6 +640,80 @@ async def test_same_host_still_requires_host_ownership(auth_client, auth_app, pe
     assert auth_app.state.host_registry.get(host_id).outbound_queue.empty()
     assert {s.id for s in store.list_conversations().data} == before_sessions
     assert permissions.list_for_user("alice") == before_grants
+
+
+async def test_independent_same_agent_inherits_current_session_settings(
+    auth_client, auth_app, peers, db_uri, monkeypatch
+):
+    from omnigent.host.frames import HostLaunchRunnerFrame, HostStatFrame, decode_host_frame
+    from tests.server.integration.test_sessions_permissions import _register_online_host
+
+    source, _, _ = peers
+    host_id = uuid4().hex
+    _register_online_host(auth_app, host_id, "alice")
+    auth_app.state.host_store.upsert_on_connect(host_id, host_id, "alice")
+    store = SqlAlchemyConversationStore(db_uri)
+    store.set_host_id(source["id"], host_id, workspace="/original")
+    store.update_conversation(
+        source["id"],
+        model_override="deepinfra/deepseek-v4.1-flash-1017-priority",
+        reasoning_effort="high",
+        terminal_launch_args=["--dangerously-bypass-approvals-and-sandbox"],
+        cost_control_mode_override="off",
+        subagent_routing_override="off",
+    )
+    store.set_labels(
+        source["id"],
+        {
+            CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY: "1",
+            _CODEX_NATIVE_APPROVAL_MODE_LABEL_KEY: "full-access",
+        },
+    )
+
+    def answer_host(connection, payload):
+        frame = decode_host_frame(payload)
+        if isinstance(frame, HostStatFrame):
+            connection.pending_stats[frame.request_id].set_result(
+                {"status": "ok", "exists": True, "type": "directory", "canonical_path": frame.path}
+            )
+        elif isinstance(frame, HostLaunchRunnerFrame):
+            connection.pending_launches[frame.request_id].set_result({"status": "launched"})
+        else:
+            pytest.fail(f"Unexpected host frame: {frame}")
+
+    monkeypatch.setattr(auth_app.state.host_registry, "send_text", answer_host)
+    response = await auth_client.post(
+        "/v1/sessions/orchestrated",
+        headers={ORCHESTRATION_SOURCE_HEADER: source["id"]},
+        json={"agent_id": source["agent_id"]},
+    )
+    assert response.status_code == 201, response.text
+    worker = store.get_conversation(response.json()["id"])
+    assert worker.parent_conversation_id is None
+    assert worker.model_override == "deepinfra/deepseek-v4.1-flash-1017-priority"
+    assert worker.reasoning_effort == "high"
+    assert worker.terminal_launch_args == ["--dangerously-bypass-approvals-and-sandbox"]
+    assert worker.cost_control_mode_override == "off"
+    assert worker.subagent_routing_override == "off"
+    assert worker.labels[CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY] == "1"
+    assert worker.labels[_CODEX_NATIVE_APPROVAL_MODE_LABEL_KEY] == "full-access"
+
+    explicit = await auth_client.post(
+        "/v1/sessions/orchestrated",
+        headers={ORCHESTRATION_SOURCE_HEADER: source["id"]},
+        json={
+            "agent_id": source["agent_id"],
+            "model_override": "DS v4.1 Flash 1017",
+            "reasoning_effort": "low",
+            "terminal_launch_args": [],
+        },
+    )
+    assert explicit.status_code == 201, explicit.text
+    selected = store.get_conversation(explicit.json()["id"])
+    assert selected.model_override == "DS v4.1 Flash 1017"
+    assert selected.reasoning_effort == "low"
+    assert selected.terminal_launch_args == []
+    assert CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY not in selected.labels
 
 
 @pytest.mark.parametrize(
