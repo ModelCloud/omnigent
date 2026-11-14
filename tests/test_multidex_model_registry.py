@@ -20,13 +20,13 @@ from omnigent.harnesses.multidex_native.config import (
 def test_wafer_registers_one_standard_deepseek_model_with_speed(tmp_path: Path) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text(
-        '[model_providers.wafer]\n'
+        "[model_providers.wafer]\n"
         'base_url = "https://us.pass.wafer.ai/v1"\n'
         'experimental_bearer_token = "test-token"\n',
         encoding="utf-8",
     )
     models_path = tmp_path / "models.toml"
-    models_path.write_text('[models]\n', encoding="utf-8")
+    models_path.write_text("[models]\n", encoding="utf-8")
     config = load_multidex_config(config_path, models_path=models_path)
     rows = with_multidex_model_picker_row([], config)
     assert len(rows) == 1
@@ -35,7 +35,9 @@ def test_wafer_registers_one_standard_deepseek_model_with_speed(tmp_path: Path) 
     assert rows[0]["providerId"] == "wafer"
     assert rows[0]["variant"] == "regular"
     assert rows[0]["speed"] == 1.0
-    provider = tomllib.loads(multidex_provider_config_overrides(config)[0])["model_providers"]["wafer"]
+    provider = tomllib.loads(multidex_provider_config_overrides(config)[0])["model_providers"][
+        "wafer"
+    ]
     assert provider["experimental_bearer_token"] == "test-token"
     assert set(provider) == {"base_url", "experimental_bearer_token"}
 
@@ -62,7 +64,7 @@ def test_lithos_provider_registers_three_variants_with_one_model_label(
     assert {row["displayName"] for row in rows} == {"DeepSeek v4.1 Flash"}
     assert {row["providerId"] for row in rows} == {"lithos"}
     assert {row["variant"] for row in rows} == {"regular", "fast", "ultra"}
-    assert all(row["defaultReasoningEffort"] == "max" for row in rows)
+    assert all(row["defaultReasoningEffort"] == "high" for row in rows)
     assert all(
         [level["reasoningEffort"] for level in row["supportedReasoningEfforts"]]
         == ["none", "low", "high", "max"]
@@ -148,7 +150,7 @@ def test_openrouter_registration_keeps_native_routing_and_picker_metadata(
             "modelLabel": "DeepSeek v4.1 Flash",
             "providerId": "openrouter",
             "variant": "regular",
-            "defaultReasoningEffort": "none" if default_effort == "off" else default_effort,
+            "defaultReasoningEffort": "high",
             "supportedReasoningEfforts": [
                 {"reasoningEffort": "none", "description": "off"},
                 *source["supportedReasoningEfforts"][1:],
@@ -224,7 +226,7 @@ display_name = "Lab Coder"
         ("lab/coder-32b", "Lab Coder"),
     ]
     assert rows[0]["isDefault"] is True
-    assert rows[0]["defaultReasoningEffort"] == "max"
+    assert rows[0]["defaultReasoningEffort"] == "high"
     assert rows[0]["supportedReasoningEfforts"][0]["reasoningEffort"] == "none"
 
 
