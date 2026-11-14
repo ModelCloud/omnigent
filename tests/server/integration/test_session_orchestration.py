@@ -656,7 +656,8 @@ async def test_independent_same_agent_inherits_current_session_settings(
     store.set_host_id(source["id"], host_id, workspace="/original")
     store.update_conversation(
         source["id"],
-        model_override="deepinfra/deepseek-v4.1-flash-1017-priority",
+        model_override="gpt-6-sol",
+        reported_model="deepinfra/deepseek-v4.1-flash-1017-priority",
         reasoning_effort="high",
         terminal_launch_args=["--dangerously-bypass-approvals-and-sandbox"],
         cost_control_mode_override="off",
@@ -669,6 +670,8 @@ async def test_independent_same_agent_inherits_current_session_settings(
             _CODEX_NATIVE_APPROVAL_MODE_LABEL_KEY: "full-access",
         },
     )
+    source_snapshot = (await auth_client.get(f"/v1/sessions/{source['id']}")).json()
+    assert source_snapshot["reported_model"] == "deepinfra/deepseek-v4.1-flash-1017-priority"
 
     def answer_host(connection, payload):
         frame = decode_host_frame(payload)

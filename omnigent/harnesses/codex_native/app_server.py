@@ -5984,6 +5984,7 @@ async def preload_codex_thread_for_resume(
     terminal_launch_args: Sequence[str] | None = None,
     retain_client: bool = False,
     cwd: Path | None = None,
+    model: str | None = None,
     model_provider: str | None = None,
     rollout_path: Path | None = None,
 ) -> CodexAppServerClient | None:
@@ -6004,6 +6005,7 @@ async def preload_codex_thread_for_resume(
     :param retain_client: Keep the thread subscribed through terminal attachment.
         The caller must pass the returned client to the forwarder and close it.
     :param cwd: Session working directory for resolving additional writable roots.
+    :param model: Launch-selected model to restore over the rollout's older model.
     :param model_provider: Launch-selected provider to apply over persisted thread settings.
         None preserves Codex's default resume behavior.
     :param rollout_path: Thread rollout to restamp when Codex refuses the resume
@@ -6021,6 +6023,8 @@ async def preload_codex_thread_for_resume(
     try:
         await client.connect()
         params = _codex_resume_permission_params(terminal_launch_args)
+        if model is not None:
+            params["model"] = model
         # Resume otherwise restores the persisted provider even when startup
         # config and the refreshed rollout name a different one.
         if model_provider is not None:

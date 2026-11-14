@@ -1567,6 +1567,7 @@ def _build_session_response(
         llm_model=llm_model,
         harness=harness,
         model_override=conv.model_override,
+        reported_model=conv.reported_model,
         cost_control_mode_override=conv.cost_control_mode_override,
         subagent_routing_override=conv.subagent_routing_override,
         share_workspace_files=conv.share_workspace_files,
@@ -11845,7 +11846,10 @@ async def _create_session_from_existing_agent(
                 if field in body.model_fields_set:
                     continue
                 value = getattr(source, field)
-                if field == "model_override" and value is None:
+                if field == "model_override" and source.reported_model is not None:
+                    # The native terminal can switch models without changing
+                    # the older web request. Carry its confirmed current pick,
+                    # including the provider/variant encoded in the model id.
                     value = source.reported_model
                 if value is not None:
                     inherited[field] = list(value) if field == "terminal_launch_args" else value

@@ -1390,6 +1390,7 @@ async def _codex_native_launch_config(
         "workspace",
         "terminal_launch_args",
         "model_override",
+        "reported_model",
         "external_session_id",
         "reasoning_effort",
         "labels",
@@ -1431,6 +1432,22 @@ async def _codex_native_launch_config(
         not isinstance(external_session_id, str) or not external_session_id
     ):
         raise RuntimeError(f"Invalid external_session_id for Codex session {session_id!r}.")
+    # A model selected inside the native terminal is reported back to the
+    # server, but does not change the web pick (model_override). On a cold
+    # resume the last confirmed runtime model wins over that older pick and
+    # over the agent spec's default. A new session still uses the requested
+    # override, since no native thread has run yet.
+    reported_model = snapshot.get("reported_model")
+    if external_session_id is not None and isinstance(reported_model, str) and reported_model:
+        try:
+            model_override = validate_model_override(reported_model)
+        except ValueError:
+            _logger.warning(
+                "Ignoring invalid reported_model %r for Codex session %s",
+                reported_model,
+                session_id,
+                extra={"session_id": session_id},
+            )
     from omnigent.harnesses.codex_native.bridge import CODEX_NATIVE_BRIDGE_ID_LABEL_KEY
     from omnigent.util.reasoning_effort import CODEX_NATIVE_EFFORTS, validate_effort
 
@@ -6125,6 +6142,7 @@ async def _auto_create_codex_terminal(
                         launch_config.external_session_id,
                         terminal_launch_args=launch_config.terminal_launch_args,
                         cwd=Path(workspace),
+                        model=_codex_launch.model,
                         model_provider=(
                             _session_meta_provider
                             if native_codex_launch_pins_model_provider(_codex_launch)

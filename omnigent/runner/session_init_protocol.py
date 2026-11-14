@@ -25,6 +25,7 @@ class RunnerSessionInitSnapshot(BaseModel):  # type: ignore[explicit-any]  # Pyd
     labels: dict[str, str] = Field(default_factory=dict)
     reasoning_effort: str | None = None
     model_override: str | None = None
+    reported_model: str | None = None
     harness_override: str | None = None
     cost_control_mode_override: str | None = None
     terminal_launch_args: list[str] | None = None
@@ -89,6 +90,7 @@ def build_runner_session_init_payload(
             labels=conversation.labels,
             reasoning_effort=conversation.reasoning_effort,
             model_override=conversation.model_override,
+            reported_model=conversation.reported_model,
             harness_override=conversation.harness_override,
             cost_control_mode_override=conversation.cost_control_mode_override,
             terminal_launch_args=conversation.terminal_launch_args,

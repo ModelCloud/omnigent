@@ -1265,6 +1265,7 @@ async def _prepare_codex_terminal(
                     thread_id,
                     terminal_launch_args=codex_args,
                     cwd=Path.cwd(),
+                    model=_codex_launch.model,
                     model_provider=(
                         codex_session_meta_model_provider(_codex_launch)
                         if native_codex_launch_pins_model_provider(_codex_launch)
