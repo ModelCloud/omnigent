@@ -1837,9 +1837,10 @@ async def _inherited_parent_model(
     snap = _string_object_dict(resp.json())
     if snap is None:
         return None
-    # Effective selection: an explicit per-session override wins over the
-    # spec/CLI-resolved model; both may be absent.
-    raw_model = snap.get("model_override") or snap.get("llm_model")
+    # A confirmed native-terminal switch may leave the older web request in
+    # model_override. Preserve the actual provider/variant for the child; an
+    # unconfirmed pick still wins over the spec's default when no report exists.
+    raw_model = snap.get("reported_model") or snap.get("model_override") or snap.get("llm_model")
     if not isinstance(raw_model, str) or not raw_model:
         return None
     try:

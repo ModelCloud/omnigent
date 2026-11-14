@@ -2394,9 +2394,11 @@ class SessionResponse(BaseModel):
     :param model_override: Per-session LLM model override,
         e.g. ``"claude-opus-4-7"``. ``None`` means no override is
         active (the agent's ``llm_model`` applies). Set via
-        ``PATCH /v1/sessions/{id}`` or the REPL's ``/model``
-        command; both write the same column so the web UI and
-        the TUI stay in sync.
+        ``PATCH /v1/sessions/{id}``; a native terminal's ``/model``
+        command writes ``reported_model`` instead.
+    :param reported_model: Last model confirmed by the native runtime. Unlike
+        ``llm_model``, this is absent until the runtime reports a model, so
+        resume and child-session creation can distinguish it from a spec default.
     :param cost_control_mode_override: Per-session cost-control
         switch: ``"on"`` activates the spec's configured cost-control
         mode, ``"off"`` disables cost control for this session.
@@ -2581,6 +2583,7 @@ class SessionResponse(BaseModel):
     llm_model: str | None = None
     harness: str | None = None
     model_override: str | None = None
+    reported_model: str | None = None
     cost_control_mode_override: str | None = None
     subagent_routing_override: str | None = None
     share_workspace_files: bool = False

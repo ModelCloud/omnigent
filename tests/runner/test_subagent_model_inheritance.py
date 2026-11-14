@@ -154,6 +154,27 @@ async def test_child_inherits_parent_model_override(
 
 
 @pytest.mark.asyncio
+async def test_child_inherits_confirmed_provider_variant_after_parent_switch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stale web pick must not replace the native parent's live selection."""
+    bodies = await _dispatch_without_model(
+        monkeypatch,
+        agent_spec=_spec_with_worker("codex-native"),
+        conv_id="conv_parent_native_switch",
+        parent_snapshot={
+            "id": "conv_parent_native_switch",
+            "agent_id": "ag_parent",
+            "harness": "codex-native",
+            "model_override": "gpt-6-sol",
+            "reported_model": "deepinfra/deepseek-v4.1-flash-1017-priority",
+            "llm_model": "deepinfra/deepseek-v4.1-flash-1017-priority",
+        },
+    )
+    assert bodies[0]["model_override"] == "deepinfra/deepseek-v4.1-flash-1017-priority"
+
+
+@pytest.mark.asyncio
 async def test_child_inherits_parent_llm_model_when_no_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
