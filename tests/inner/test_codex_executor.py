@@ -4902,7 +4902,7 @@ def test_materialize_codex_provider_config_pins_multidex_retry_policy(
 def test_materialize_codex_provider_config_keeps_builtin_provider_tables_compatible(
     tmp_path: Path,
 ) -> None:
-    """Built-in tables avoid retry stamping; stale Wafer fields are removed."""
+    """Built-in tables avoid retry stamping; stale gateway fields are removed."""
     import tomllib
 
     from omnigent.inner.codex_executor import materialize_codex_provider_config
@@ -4916,6 +4916,8 @@ def test_materialize_codex_provider_config_keeps_builtin_provider_tables_compati
         '[model_providers.wafer]\nbase_url = "https://us.pass.wafer.ai/v1"\n'
         'experimental_bearer_token = "test-token"\nrequest_max_retries = 7\n'
         "stream_max_retries = 7\nstream_idle_timeout_ms = 120000\n\n"
+        '[model_providers.deepinfra]\nbase_url = "https://api.deepinfra.com/v1/openai"\n'
+        'experimental_bearer_token = "test-token"\nrequest_max_retries = 7\n\n'
         '[model_providers.gateway]\nname = "Gateway"\nbase_url = "https://example.test"\n'
     )
 
@@ -4926,6 +4928,10 @@ def test_materialize_codex_provider_config_keeps_builtin_provider_tables_compati
     assert config["model_providers"]["amazon-bedrock"] == {"aws": {"region": "us-east-1"}}
     assert config["model_providers"]["wafer"] == {
         "base_url": "https://us.pass.wafer.ai/v1",
+        "experimental_bearer_token": "test-token",
+    }
+    assert config["model_providers"]["deepinfra"] == {
+        "base_url": "https://api.deepinfra.com/v1/openai",
         "experimental_bearer_token": "test-token",
     }
     gateway = config["model_providers"]["gateway"]

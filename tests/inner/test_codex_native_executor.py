@@ -125,6 +125,8 @@ def test_multidex_turn_refreshes_runtime_context_capability(
     ("provider", "model"),
     [
         ("wafer", "DeepSeek-V4.1-Flash-1017"),
+        ("deepinfra", "deepinfra/deepseek-v4.1-flash-1017-flex"),
+        ("deepinfra", "deepinfra/deepseek-v4.1-flash-1017-priority"),
         ("openrouter", "deepseek/deepseek-v4.1-flash-1017"),
         ("lithos", "deepseek-ai/DeepSeek-V4.1-Flash"),
     ],

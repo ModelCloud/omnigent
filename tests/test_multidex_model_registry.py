@@ -42,6 +42,40 @@ def test_wafer_registers_one_standard_deepseek_model_with_speed(tmp_path: Path) 
     assert set(provider) == {"base_url", "experimental_bearer_token"}
 
 
+def test_deepinfra_registers_flex_and_priority_with_one_family(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "[model_providers.deepinfra]\n"
+        'base_url = "https://api.deepinfra.com/v1/openai"\n'
+        'experimental_bearer_token = "test-token"\n',
+        encoding="utf-8",
+    )
+    models_path = tmp_path / "models.toml"
+    models_path.write_text("[models]\n", encoding="utf-8")
+    config = load_multidex_config(config_path, models_path=models_path)
+    rows = with_multidex_model_picker_row([], config)
+    assert len(rows) == 2
+    assert {row["modelFamily"] for row in rows} == {"ds-v4.1-flash-1017"}
+    assert {row["providerId"] for row in rows} == {"deepinfra"}
+    assert {row["variant"]: row["speed"] for row in rows} == {
+        "flex": 1.0,
+        "priority": 1.1,
+    }
+    assert {row["defaultReasoningEffort"] for row in rows} == {"high"}
+    assert all(
+        [level["reasoningEffort"] for level in row["supportedReasoningEfforts"]]
+        == ["none", "low", "medium", "high", "max"]
+        for row in rows
+    )
+    provider = tomllib.loads(multidex_provider_config_overrides(config)[0])["model_providers"][
+        "deepinfra"
+    ]
+    assert provider == {
+        "base_url": "https://api.deepinfra.com/v1/openai",
+        "experimental_bearer_token": "test-token",
+    }
+
+
 @pytest.mark.parametrize("explicit_fast", [False, True])
 def test_lithos_provider_registers_three_variants_with_one_model_label(
     tmp_path: Path, explicit_fast: bool
