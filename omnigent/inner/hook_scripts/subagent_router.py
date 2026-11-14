@@ -806,6 +806,7 @@ def route_pre_tool_use(
     session_id: str | None = None,
     timeout: float = REQUEST_TIMEOUT_S,
     tool_matcher: Callable[[Any], bool] = is_agent_tool,  # type: ignore[explicit-any]
+    should_route: Callable[[dict[str, Any]], bool] | None = None,  # type: ignore[explicit-any]
     task_keys: Sequence[str] = DEFAULT_TASK_KEYS,
     include_prompt: bool = True,
     prompt_keys: Sequence[str] = ("prompt",),
@@ -831,6 +832,7 @@ def route_pre_tool_use(
         advertisement carries none.
     :param timeout: Socket timeout in seconds.
     :param tool_matcher: Recognizes the harness's spawn tool by name.
+    :param should_route: Optional harness-specific check before requesting a routing decision.
     :param task_keys: ``tool_input`` keys naming the subagent.
     :param include_prompt: ``False`` withholds the spawn prompt.
     :param prompt_keys: ``tool_input`` keys carrying the task text.
@@ -853,6 +855,8 @@ def route_pre_tool_use(
         return None
     tool_input = payload.get("tool_input")
     if not isinstance(tool_input, dict):
+        return None
+    if should_route is not None and not should_route(tool_input):
         return None
     discovered_dir = discover_router_dir(router_dir)
     endpoint = read_router_endpoint(discovered_dir)

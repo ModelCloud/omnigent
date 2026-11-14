@@ -116,6 +116,26 @@ def test_build_route_request_forwards_an_explicit_model_ask() -> None:
 
 
 @pytest.mark.parametrize(
+    "selection",
+    [
+        {"provider": "openai", "model": "astra", "reasoning_effort": "high"},
+        {"model": "gpt-6-astra"},
+        {"agent_type": "reviewer"},
+    ],
+)
+def test_explicit_model_or_reviewer_bypasses_smart_routing(
+    tmp_path: Path,
+    router: _Router,
+    selection: dict[str, str],
+) -> None:
+    advertise_router(tmp_path)
+    router.response = {"action": "rewrite", "model": "system.ai.glm-5-2"}
+
+    assert _route(_payload(**selection), router_dir=tmp_path) is None
+    assert router.calls == []
+
+
+@pytest.mark.parametrize(
     ("tool_input", "expected_task_name"),
     [
         # Codex names the spawn ``agent_name`` on some paths, ``task_name`` on
@@ -282,33 +302,16 @@ def test_routing_notice_announces_only_a_routed_model(
         assert "systemMessage" not in out["hookSpecificOutput"]
 
 
-@pytest.mark.parametrize(
-    ("asked", "expected_notice"),
-    [
-        # The parent asked for one arm and the router picked another. Codex
-        # reports no model change of its own, so without naming the ask the
-        # parent reads its own choice back and never learns it was substituted.
-        ("gpt-5.6-sol", "Using Smart Routing. Requested gpt-5.6-sol; routing to gpt-5.6-luna."),
-        # The router agreed with the ask — nothing was substituted.
-        ("gpt-5.6-luna", "Using Smart Routing. Routing to gpt-5.6-luna."),
-        # No ask at all.
-        (None, "Using Smart Routing. Routing to gpt-5.6-luna."),
-    ],
-)
-def test_the_notice_names_a_model_the_router_substituted(
+def test_the_notice_names_the_routed_model_when_no_model_was_requested(
     tmp_path: Path,
     router: _Router,
-    asked: str | None,
-    expected_notice: str,
 ) -> None:
     advertise_router(tmp_path)
     router.response = {"action": "rewrite", "model": "databricks-gpt-5-6-luna", "rationale": "r"}
-    tool_input = {} if asked is None else {"model": asked}
-
-    out = _route(_payload(**tool_input), router_dir=tmp_path)
+    out = _route(_payload(), router_dir=tmp_path)
 
     assert out is not None
-    assert out["systemMessage"] == expected_notice
+    assert out["systemMessage"] == "Using Smart Routing. Routing to gpt-5.6-luna."
 
 
 def test_finalize_spawn_input_passes_no_opinion_through() -> None:

@@ -4891,12 +4891,12 @@ def test_materialize_codex_provider_config_pins_multidex_retry_policy(
         codex_home, [], retry_policy=RetryPolicy(max_retries=7, timeout_per_request_s=120)
     )
 
-    provider = tomllib.loads((codex_home / "config.toml").read_text())["model_providers"][
-        "multidex"
-    ]
+    config = tomllib.loads((codex_home / "config.toml").read_text())
+    provider = config["model_providers"]["multidex"]
     assert provider["request_max_retries"] == 0
     assert provider["stream_max_retries"] == 0
     assert provider["stream_idle_timeout_ms"] == 900_000
+    assert config["features"]["multi_agent_v2"] is True
 
 
 def test_materialize_codex_provider_config_keeps_builtin_provider_tables_compatible(
@@ -4915,13 +4915,14 @@ def test_materialize_codex_provider_config_keeps_builtin_provider_tables_compati
         '[model_providers.amazon-bedrock.aws]\nregion = "us-east-1"\n\n'
         '[model_providers.wafer]\nbase_url = "https://us.pass.wafer.ai/v1"\n'
         'experimental_bearer_token = "test-token"\nrequest_max_retries = 7\n'
-        'stream_max_retries = 7\nstream_idle_timeout_ms = 120000\n\n'
+        "stream_max_retries = 7\nstream_idle_timeout_ms = 120000\n\n"
         '[model_providers.gateway]\nname = "Gateway"\nbase_url = "https://example.test"\n'
     )
 
     materialize_codex_provider_config(codex_home, [])
 
     config = tomllib.loads((codex_home / "config.toml").read_text())
+    assert config.get("features", {}).get("multi_agent_v2") is None
     assert config["model_providers"]["amazon-bedrock"] == {"aws": {"region": "us-east-1"}}
     assert config["model_providers"]["wafer"] == {
         "base_url": "https://us.pass.wafer.ai/v1",
