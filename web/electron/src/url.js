@@ -256,7 +256,7 @@
    * True when a server URL is hosted by Databricks: a workspace domain
    * (workspace-mounted Omnigent) or a Databricks App. Https-only: a local or
    * self-hosted server is never "managed", whatever its hostname claims. Used
-   * to scope managed desktop features (e.g. the personal remote host host option) to managed servers.
+   * to scope managed desktop features (e.g. the personal remote host option) to managed servers.
    *
    * @param {string | null | undefined} rawUrl
    * @returns {boolean}

@@ -225,7 +225,7 @@ interface ElectronDesktopApi extends NativeShellApi {
   connectSshHost?: (destination: string) => Promise<ArcaConnectResult>;
   /** Extend this machine's running Arca instance with an approved mode. */
   extendArca?: (mode: ArcaExtendMode) => Promise<ArcaExtendResult>;
-  /** Renew this machine's machine credential. */
+  /** Renew this machine's credential. */
   refreshDbcert?: (options?: DbcertRefreshOptions) => Promise<DbcertRefreshResult>;
   /** Check local credentials before an Arclet launch without starting sign-in. */
   checkDbcert?: () => Promise<DbcertStatusResult>;
@@ -456,7 +456,7 @@ export interface ArcaConnectResult extends HostActionResult {
  */
 export interface DesktopFeatures {
   /**
-   * Managed features (e.g. the personal remote host host option) are enabled.
+   * Managed features (e.g. the personal remote host option) are enabled.
    * Already scoped by the shell: true only when the flag is set AND the
    * window's server is a managed server.
    */

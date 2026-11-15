@@ -54,7 +54,7 @@ def test_canonical_models_materialize_the_native_alias_table(model, expected_id)
     tables = tomllib.loads(multidex_provider_config_overrides(config)[0])["model_providers"]
     assert set(tables) == {expected_id}
     assert tables[expected_id]["base_url"] == registration.base_url
-    if expected_id == "wafer":
+    if expected_id in {"wafer", "deepinfra"}:
         assert set(tables[expected_id]) == {"base_url", "experimental_bearer_token"}
         assert tables[expected_id]["experimental_bearer_token"] == "test-token"
         assert multidex_provider_env_keys(config) == ()

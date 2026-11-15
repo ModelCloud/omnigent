@@ -15,7 +15,7 @@ policy does not need to allow editor protocol schemes.
 Remote controls require the host to be online. The UI infers standard SSH
 aliases from the existing host list: provider
 `databricks-arca` uses `arca.ssh`, and provider `arclet` uses
-`arclet_<host.name>.ssh`. managed sandbox names must be 1–64 ASCII letters, digits,
+`arclet_<host.name>.ssh`. Managed sandbox names must be 1–64 ASCII letters, digits,
 underscores, or hyphens, start with a letter or digit, and not start with
 `arclet_` or `arclet-`. The alias must exist in your local SSH configuration.
 For user-connected hosts without a sandbox provider, the UI reads the host's
@@ -36,7 +36,7 @@ controls visible. Host-list updates refresh availability and provider aliases.
 No new host protocol, server API, or database migration is required. The browser
 cannot check whether an editor or SSH alias is installed locally.
 
-To verify, open an personal host or managed sandbox session, choose **Files**, and click **Open**
+To verify, open a personal host or managed sandbox session, choose **Files**, and click **Open**
 beside the folder path. Accept the protocol prompt and confirm the editor's
 remote indicator names the intended host. Open a file in the viewer and repeat;
 the editor should select that file on the same remote machine. Repeat in the

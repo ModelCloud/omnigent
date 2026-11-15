@@ -2267,7 +2267,7 @@ under `/releases`.
 - [Chore] The runner's native-terminal auto-create now honours `harness.<id>.command`/`args` from `~/.omnigent/config.yaml`, so a downstream wrapper can be selected by config on both the CLI and runner launch paths. (#5765)
 - [Bug fix] cursor-native now refuses to start a session when its bridge directory sits under a directory tree it does not exclusively own, instead of writing the relay token there (#5771)
 - [UI / Bug fix] Conversations imported from Codex now render pasted inline images instead of showing a blank transcript (#5778)
-- [UI / Feature] Desktop: managed-device users can connect an personal remote host instance as a host from a transparent, live terminal flow. (#5779)
+- [UI / Feature] Desktop: managed-device users can connect a personal remote host instance as a host from a transparent, live terminal flow. (#5779)
 - [Bug fix] Kimi Code installs using a custom OpenAI-compatible provider (e.g. OpenRouter) as the default are now detected as configured, so the Kimi harness is selectable in the UI (#5815)
 - [UI / Bug fix] Typing with an IME in the Terminal pane no longer drops the composed text when Shift+Enter is pressed mid-conversion (#5821)
 - [Bug fix] An external `omnigent host` now rides out the brief 404 window while the server restarts behind a reverse proxy, instead of exiting and killing its live runner sessions (#5842)

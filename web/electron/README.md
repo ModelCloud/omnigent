@@ -541,7 +541,7 @@ session's agent browser view and are not targeted by the agent relay.
 The verified Arca exception also applies to the address bar and chat/file links.
 The remote app's port must be forwarded to the desktop first.
 
-On a managed server with the managed features enabled, an personal remote host session's agent
+On a managed server with the managed features enabled, a personal remote host session's agent
 can open and inspect an app through a forwarded port using the existing browser
 tools and tool approval or autoapproval policy.
 Provide the actual forwarded URL to the agent; its local port may differ from
