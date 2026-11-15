@@ -43,6 +43,7 @@ import {
   type ComposerConfigSection,
 } from "@/components/composer/ComposerConfigSections";
 import { NativeModelSelectors } from "@/components/NativeModelSelectors";
+import { BgrLaunchDialog } from "@/components/BgrLaunchDialog";
 import { hasGroupedModelOptions } from "@/lib/modelSelection";
 import { useComposerConfigCycleHotkeys } from "@/hooks/useComposerConfigCycleHotkeys";
 import { buildFusionSections } from "@/components/composer/fusionSections";
@@ -322,12 +323,17 @@ import { useSavedSandboxSessionCatalog } from "@/hooks/useSandboxSessionCatalog"
 import { markSandboxLaunch } from "@/hooks/useSandboxLaunchSelectionCheck";
 import { useSkills } from "@/hooks/useSkills";
 import { useOnboardingRunnerHost } from "@/hooks/useOnboardingRunnerHost";
-import { findConnectedArcaHost, readArcaHostId, writeArcaHostId } from "@/lib/arcaHost";
+import {
+  findConnectedPersonalHost,
+  readPersonalHostId,
+  writePersonalHostId,
+} from "@/lib/personalHost";
 import {
   connectArcaHost,
   controlHost,
   checkDbcert,
   getDesktopFeatures,
+  personalHostCapabilities,
   getHostIdentity,
   hasDbcertPreflightBridge,
   isElectronShell,
@@ -590,11 +596,11 @@ export function ConnectHostInstructions({
   /** After the desktop shell connects a machine over SSH, with its host id. */
   onSshConnected?: (hostId: string) => void;
 }) {
-  // Managed servers add the Lakebox connect path. Other builds show only the
+  // Managed servers add the managed sandbox runtime connect path. Other builds show only the
   // plain `omni host` command. Driven by /v1/info.
   const info = useServerInfo();
   // "loading" counts as no managed hints until the probe resolves, so the
-  // Lakebox option never flashes in.
+  // managed sandbox runtime option never flashes in.
   const databricksFeatures = info !== "loading" && info.databricks_features;
   const quotedServerUrl = quoteShellArgument(serverUrl);
   const sshConnectAvailable = useSshConnectAvailable();
@@ -1241,6 +1247,7 @@ export function AgentHarnessPicker({
   pendingAgentId,
   onSelectPending,
   onCreateCustomAgent,
+  onConfigureBgr,
   sandboxSelected,
   allowCreateCustomAgent = true,
   onOpenChange,
@@ -1287,6 +1294,8 @@ export function AgentHarnessPicker({
   pendingAgentId: string;
   onSelectPending: () => void;
   onCreateCustomAgent: () => void;
+  /** Configuration-only entry; never selects a launchable catalog agent. */
+  onConfigureBgr?: () => void;
   sandboxSelected: boolean;
   /** Whether to offer the "Create custom agent" action. Defaults true; an
    *  embedder that only picks an existing agent (e.g. project settings) can
@@ -2058,15 +2067,30 @@ export function AgentHarnessPicker({
                 no bundle agents and no custom group, and a rule closing the
                 menu with nothing under it is the same leftover the Agents
                 header below avoids. */}
-              {(bundleEntries.length > 0 || hasCustomGroup) && <DropdownMenuSeparator />}
+              {(bundleEntries.length > 0 || hasCustomGroup || onConfigureBgr) && (
+                <DropdownMenuSeparator />
+              )}
             </>
           )}
           {/* Agents group — bundle agents inline; header only when the group
             has content, like "Harnesses" above. */}
-          {(bundleEntries.length > 0 || hasCustomGroup) && (
+          {(bundleEntries.length > 0 || hasCustomGroup || onConfigureBgr) && (
             <PickerSectionHeader>Agents</PickerSectionHeader>
           )}
           {bundleEntries.map(renderEntry)}
+          {onConfigureBgr && (
+            <DropdownMenuItem
+              data-testid="new-chat-landing-bgr"
+              onSelect={() => {
+                changeOpen(false);
+                onConfigureBgr();
+              }}
+              className="items-center"
+            >
+              <span className="min-w-0 flex-1">BGR</span>
+              <span className="text-xs text-muted-foreground">Configure draft</span>
+            </DropdownMenuItem>
+          )}
           {/* Existing custom agents fold into an "Other..." submenu (with
             the pending upload and the create action). With no custom agents the
             submenu would hold only "Create custom agent", so we surface that as
@@ -2452,6 +2476,7 @@ function NewChatLandingContent({
   // form submit, handleCreate detects the pending bundle, builds the
   // tar.gz, and uses multipart POST instead of the normal JSON path.
   const [createAgentOpen, setCreateAgentOpen] = useState(false);
+  const [bgrOpen, setBgrOpen] = useState(false);
   const [pendingAgent, setPendingAgent] = useState<AgentBundleInput | null>(null);
   // Sentinel id for the pending custom agent in the picker dropdown.
   const PENDING_AGENT_ID = "__pending_custom_agent__";
@@ -2696,14 +2721,14 @@ function NewChatLandingContent({
   // consumed in the menu's onOpenChange) — connecting while the menu is open
   // looks janky. A ref so the close handler sees it synchronously.
   const pendingConnectRef = useRef(false);
-  // The desktop shell reports whether Arca is enabled. When it is, the picker
-  // offers connecting the user's Arca instance as a host.
-  const [arcaEnabled, setArcaEnabled] = useState(false);
-  const [arcaPreviewRecovery, setArcaPreviewRecovery] = useState(false);
-  const [connectingArca, setConnectingArca] = useState(false);
-  const [arcaError, setArcaError] = useState<string | null>(null);
+  // The desktop shell reports whether personal remote host is enabled. When it is, the picker
+  // offers connecting the user's personal remote host instance as a host.
+  const [personalHostEnabled, setPersonalHostEnabled] = useState(false);
+  const [personalHostPreviewRecovery, setPersonalHostPreviewRecovery] = useState(false);
+  const [connectingPersonalHost, setConnectingPersonalHost] = useState(false);
+  const [personalHostError, setPersonalHostError] = useState<string | null>(null);
   // Mirrors pendingConnectRef for the Arca row: connect after the menu closes.
-  const pendingArcaConnectRef = useRef(false);
+  const pendingPersonalHostConnectRef = useRef(false);
   // Sandbox repository inputs — composed into the managed create's
   // `workspace` string (`<url>[#<branch>]`); both blank = empty
   // server-created workspace.
@@ -3025,8 +3050,9 @@ function NewChatLandingContent({
     let cancelled = false;
     void getDesktopFeatures().then((features) => {
       if (!cancelled) {
-        setArcaEnabled(features?.databricksInternalFeatures === true);
-        setArcaPreviewRecovery(features?.arcaPreviewRecovery === true);
+        const capabilities = personalHostCapabilities(features);
+        setPersonalHostEnabled(capabilities.enabled);
+        setPersonalHostPreviewRecovery(capabilities.previewRecovery);
       }
     });
     return () => {
@@ -5166,25 +5192,26 @@ function NewChatLandingContent({
     ? null
     : (selectedNativeHarness ?? pickedHarness ?? selectedAgent?.harness ?? null);
   // Native prompts stay plain text; SDK skill invocations require the sandbox's catalog.
-  const arcletSkills =
+  const managedSandboxSkills =
     sandboxSelected && effectiveSandboxProvider === "arclet" && isNativeTerminalAgent;
   function getSkillsHost() {
     if (!sandboxSelected) return selectedHost;
-    if (arcletSkills) return findConnectedArcaHost(allHosts, readArcaHostId());
+    if (managedSandboxSkills) return findConnectedPersonalHost(allHosts, readPersonalHostId());
     return undefined;
   }
   const skillsHost = getSkillsHost();
   const skillsHostId = sandboxSelected ? skillsHost?.host_id : selectedHostId;
   const skillsPath = sandboxSelected ? "~" : workspaceTrimmed;
   function getSkillsUnavailableMessage() {
-    if (sandboxSelected && !arcletSkills) {
+    if (sandboxSelected && !managedSandboxSkills) {
       return "Host skills will be available after the sandbox starts.";
     }
     if (selectedAgent?.id === PENDING_AGENT_ID) {
       return "Skills will be available after this session starts.";
     }
     if (!skillsHostId) {
-      if (arcletSkills) return "Connect your Arca to discover skills before the sandbox starts.";
+      if (managedSandboxSkills)
+        return "Connect your personal host to discover skills before the sandbox starts.";
       return "Choose a host to discover skills.";
     }
     if (!sandboxSelected && skillsHost?.status !== "online") {
@@ -5214,7 +5241,7 @@ function NewChatLandingContent({
           }
         : null,
     enabled: canDiscoverHostSkills,
-    starting: (!sandboxSelected || arcletSkills) && (hostsLoading || agentsLoading),
+    starting: (!sandboxSelected || managedSandboxSkills) && (hostsLoading || agentsLoading),
   });
   const availableSkills = useMemo(
     () => (skillsStatus === "ready" ? hostSkills : (selectedAgent?.skills ?? [])),
@@ -5485,6 +5512,12 @@ function NewChatLandingContent({
     field: "sandboxRepo" | "other";
     message: string | null;
   } | null => {
+    if (bgrOpen) {
+      return {
+        field: "other",
+        message: "Finish or close BGR configuration before sending a chat.",
+      };
+    }
     if (
       effectiveAgentId === PENDING_AGENT_ID &&
       siblingSourceId &&
@@ -5600,26 +5633,29 @@ function NewChatLandingContent({
     : null;
   // The Arca row is remembered by host ID, never inferred from its machine hostname.
   // A recovery-capable desktop restores preview identity on demand. Older
-  // shells keep Run on Arca visible because reconnecting is their only recovery.
-  const arcaHostId = arcaEnabled ? readArcaHostId() : null;
-  const arcaHostOnline = arcaHostId !== null && onlineHosts.some((h) => h.host_id === arcaHostId);
-  const showArcaOption =
-    arcaEnabled &&
-    (siblingMayUseOtherHosts || arcaHostId === siblingSource?.hostId) &&
-    (!arcaPreviewRecovery || !arcaHostOnline);
+  // shells keep Connect personal host visible because reconnecting is their only recovery.
+  const personalHostHostId = personalHostEnabled ? readPersonalHostId() : null;
+  const personalHostHostOnline =
+    personalHostHostId !== null && onlineHosts.some((h) => h.host_id === personalHostHostId);
+  const showPersonalHostOption =
+    personalHostEnabled &&
+    (siblingMayUseOtherHosts || personalHostHostId === siblingSource?.hostId) &&
+    (!personalHostPreviewRecovery || !personalHostHostOnline);
   const hostLabel = connectingThisMachine
     ? "Connecting…"
-    : connectingArca
-      ? "Connecting to Arca…"
+    : connectingPersonalHost
+      ? "Connecting to personal host…"
       : sandboxSelected
         ? selectedSandboxLabel
         : (selectedHostDisplayName ?? "No host selected");
   const hostTooltipRows =
-    connectingThisMachine || connectingArca
+    connectingThisMachine || connectingPersonalHost
       ? [
           {
             label: "Host",
-            value: connectingArca ? "Arca" : localMachineLabel(navigator.userAgent),
+            value: connectingPersonalHost
+              ? "Personal host"
+              : localMachineLabel(navigator.userAgent),
           },
           { label: "Status", value: "Connecting…" },
         ]
@@ -5638,7 +5674,9 @@ function NewChatLandingContent({
             ]
           : [{ label: "Host", value: "None" }];
   const hostChipStatus =
-    sandboxSelected || connectingThisMachine || connectingArca ? undefined : selectedHost?.status;
+    sandboxSelected || connectingThisMachine || connectingPersonalHost
+      ? undefined
+      : selectedHost?.status;
   const hostChipLabel = hostChipStatus
     ? `Host: ${hostLabel}, ${hostChipStatus === "online" ? "Online" : "Offline"}`
     : `Host: ${hostLabel}`;
@@ -5824,13 +5862,13 @@ function NewChatLandingContent({
     }
   }
 
-  // Connect the user's Arca instance as a host, then select it. The bridge
+  // Connect the user's personal remote host instance as a host, then select it. The bridge
   // resolves once the remote daemon starts. The daemon registers a moment
   // later, so poll the host list briefly for the host that came online.
-  async function connectArca() {
-    if (connectingArca) return;
-    setConnectingArca(true);
-    setArcaError(null);
+  async function connectPersonalRemoteHost() {
+    if (connectingPersonalHost) return;
+    setConnectingPersonalHost(true);
+    setPersonalHostError(null);
     const onlineBefore = new Set(
       allHosts.filter((h) => h.status === "online").map((h) => h.host_id),
     );
@@ -5842,12 +5880,12 @@ function NewChatLandingContent({
         // this strip is only for gate failures with no other surface (e.g.
         // the feature being unavailable to this window).
         if (!res.canceled && !res.shownInConsole) {
-          setArcaError(res.error ?? "Couldn't connect to Arca.");
+          setPersonalHostError(res.error ?? "Couldn't connect to personal host.");
         }
         return;
       }
       if (res.identity) {
-        writeArcaHostId(res.identity.hostId);
+        writePersonalHostId(res.identity.hostId);
         await queryClient.invalidateQueries({ queryKey: ["hosts"] });
         selectHost(res.identity.hostId);
         return;
@@ -5872,8 +5910,8 @@ function NewChatLandingContent({
         });
         const fresh = hostList.find((h) => h.status === "online" && !onlineBefore.has(h.host_id));
         if (fresh) {
-          // Remember which host is the Arca instance so the picker can tag it.
-          writeArcaHostId(fresh.host_id);
+          // Remember which host is the personal remote host instance so the picker can tag it.
+          writePersonalHostId(fresh.host_id);
           selectHost(fresh.host_id);
           return;
         }
@@ -5884,11 +5922,11 @@ function NewChatLandingContent({
       /* oxlint-enable no-await-in-loop */
       // The daemon started but its registration hasn't landed — soft-fail so
       // the user knows to look at the host list rather than re-running.
-      setArcaError(
+      setPersonalHostError(
         "Arca started, but the host hasn't appeared yet — it should show up in the host list shortly.",
       );
     } finally {
-      setConnectingArca(false);
+      setConnectingPersonalHost(false);
     }
   }
 
@@ -5919,6 +5957,7 @@ function NewChatLandingContent({
   }
 
   async function handleCreate() {
+    if (bgrOpen) return;
     // Mirror the Send button's disabled condition (canSubmit) so the Enter-key
     // and form-submit paths that call this directly can't create a session with
     // a blank message, host, agent, or workspace.
@@ -6678,7 +6717,7 @@ function NewChatLandingContent({
     managedSandboxesEnabled ||
     showDisabledSandboxWithDocs ||
     cloudHosts.length > 0 ||
-    showArcaOption;
+    showPersonalHostOption;
   const renderHostMenuItem = (host: Host) => {
     const reconnect = isReconnectRow(host);
     return (
@@ -6702,7 +6741,7 @@ function NewChatLandingContent({
           host={host}
           cloud={isCloudHostEntry(host)}
           displayName={displayNameForHost(host, thisMachineHostId, navigator.userAgent)}
-          subtitle={host.host_id === arcaHostId ? "Arca instance" : undefined}
+          subtitle={host.host_id === personalHostHostId ? "Personal host" : undefined}
           action={
             reconnect ? (
               <span
@@ -7135,6 +7174,31 @@ function NewChatLandingContent({
       className="relative flex min-h-0 flex-1 items-stretch justify-center md:items-center md:pb-24"
       data-testid="new-chat-landing"
     >
+      {bgrOpen && (
+        <BgrLaunchDialog
+          key={`${pickerCacheKey}:${selectedHostId}`}
+          scope={pickerCacheKey}
+          host={selectedHost}
+          agents={agents ?? []}
+          harnessLabels={brainHarnessLabelsAll}
+          workspace={workspace}
+          initialPrompt={sanitizeInitialPrompt(message)}
+          projectId={selectedProject ? configProjectId : null}
+          onClose={() => setBgrOpen(false)}
+          onLaunched={({ brainSessionId }) => {
+            setSessionHost(brainSessionId, selectedHostId);
+            markSessionCreated(brainSessionId, "computer");
+            const returnToCanvas =
+              searchParams.has(CANVAS_QUERY_PARAM) && isFeatureEnabled(info, "canvas");
+            const canvasId = selectedProject
+              ? (configProjectId ?? `name:${selectedProject}`)
+              : MAIN_CANVAS_ID;
+            navigate(
+              returnToCanvas ? canvasLocation(canvasId, brainSessionId) : `/c/${brainSessionId}`,
+            );
+          }}
+        />
+      )}
       {/* Padding lives inside the 800px cap, so the composer surface reaches
           its shared 48rem column (800 − 32 = 768px) on desktop. px-4 (16px
           gutters) keeps the composer from feeling cramped against the
@@ -7420,9 +7484,9 @@ function NewChatLandingContent({
                             pendingConnectRef.current = false;
                             void connectThisMachine();
                           }
-                          if (!open && pendingArcaConnectRef.current) {
-                            pendingArcaConnectRef.current = false;
-                            void connectArca();
+                          if (!open && pendingPersonalHostConnectRef.current) {
+                            pendingPersonalHostConnectRef.current = false;
+                            void connectPersonalRemoteHost();
                           }
                         }}
                       >
@@ -7445,7 +7509,9 @@ function NewChatLandingContent({
                               }
                               cloud={isCloudHost}
                               hostName={
-                                connectingThisMachine || connectingArca ? undefined : hostLabel
+                                connectingThisMachine || connectingPersonalHost
+                                  ? undefined
+                                  : hostLabel
                               }
                               className={cn(
                                 connectingThisMachine &&
@@ -7532,19 +7598,23 @@ function NewChatLandingContent({
                               </DropdownMenuItem>
                             ))}
                           {cloudHosts.map(renderHostMenuItem)}
-                          {showArcaOption && (
+                          {showPersonalHostOption && (
                             <DropdownMenuItem
                               className="mobile-touch-target"
                               onSelect={() => {
-                                pendingArcaConnectRef.current = true;
+                                pendingPersonalHostConnectRef.current = true;
                               }}
-                              disabled={connectingArca}
+                              disabled={connectingPersonalHost}
                               data-testid="new-chat-landing-run-on-arca"
                             >
                               <span className="flex size-4 shrink-0 items-center justify-center">
                                 <MonitorCloudIcon className="size-3.5 text-muted-foreground" />
                               </span>
-                              <span>{connectingArca ? "Connecting to Arca…" : "Run on Arca"}</span>
+                              <span>
+                                {connectingPersonalHost
+                                  ? "Connecting to personal host…"
+                                  : "Connect personal host"}
+                              </span>
                             </DropdownMenuItem>
                           )}
                           {hasCloudOptions && <DropdownMenuSeparator />}
@@ -7729,6 +7799,11 @@ function NewChatLandingContent({
                           }
                           onDismissCyclePreview={dismissPreview}
                           agentEntries={agentEntries}
+                          onConfigureBgr={
+                            !sandboxSelected && curation.restrictToAgentNames.size === 0
+                              ? () => setBgrOpen(true)
+                              : undefined
+                          }
                           harnessEntries={harnessEntries}
                           blockedReasons={sandboxSelected ? sandboxBlockedReasons : undefined}
                           onPrefetchEntries={prefetchSandboxPreviews}
@@ -8060,17 +8135,17 @@ function NewChatLandingContent({
             </p>
           )}
 
-          {arcaError && (
+          {personalHostError && (
             <p
               className="flex flex-wrap items-center gap-x-1.5 text-sm text-destructive"
               data-testid="new-chat-landing-arca-error"
             >
-              <span>{arcaError}</span>
+              <span>{personalHostError}</span>
               <button
                 type="button"
                 className="underline underline-offset-2 hover:no-underline disabled:opacity-60"
-                onClick={() => void connectArca()}
-                disabled={connectingArca}
+                onClick={() => void connectPersonalRemoteHost()}
+                disabled={connectingPersonalHost}
                 data-testid="new-chat-landing-arca-error-retry"
               >
                 Try again

@@ -3499,19 +3499,22 @@ def test_databricks_preflight_uses_cli_workspace_id_for_workspace_mount(
     """``omni host`` routes workspace-hosted auth with the CLI profile workspace id."""
     import httpx
 
-    server = "https://example.databricks.com/api/2.0/omnigent"
+    server = (
+        "https://synthetic-security-fixture-0000000000000000.cloud.databricks.com/api/2.0/omnigent"
+    )
     requests: list[dict[str, object]] = []
     stored: list[tuple[str, str, str | None]] = []
     cfg_path = tmp_path / "databrickscfg"
     cfg_path.write_text(
-        "[expired]\n"
-        "host = https://example.databricks.com\n"
-        "workspace_id = 111\n"
-        "auth_type = databricks-cli\n"
-        "[fresh]\n"
-        "host = https://example.databricks.com\n"
-        "workspace_id = 4242424242424242\n"
-        "auth_type = databricks-cli\n"
+        """[expired]
+host = https://synthetic-security-fixture-0000000000000000.cloud.databricks.com
+workspace_id = 111
+auth_type = databricks-cli
+[fresh]
+host = https://synthetic-security-fixture-0000000000000000.cloud.databricks.com
+workspace_id = 4242424242424242
+auth_type = databricks-cli
+"""
     )
     monkeypatch.setenv("DATABRICKS_CONFIG_FILE", str(cfg_path))
 
@@ -3558,7 +3561,13 @@ def test_databricks_preflight_uses_cli_workspace_id_for_workspace_mount(
 
     assert requests[1]["headers"] == {"Authorization": "Bearer fresh-token"}
     assert requests[1]["params"] == {"o": "4242424242424242"}
-    assert stored == [(server, "https://example.databricks.com", "4242424242424242")]
+    assert stored == [
+        (
+            server,
+            "https://synthetic-security-fixture-0000000000000000.cloud.databricks.com",
+            "4242424242424242",
+        )
+    ]
 
 
 def test_databricks_preflight_refresh_handles_duplicate_workspace_profiles(

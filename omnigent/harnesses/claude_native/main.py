@@ -7022,7 +7022,7 @@ def _claude_terminal_request(
         append_system_prompt=append_system_prompt,
         allowed_tools=allowed_tools,
     )
-    # Let a registered launcher plugin (e.g. a wrapper such as isaac) rewrite the
+    # Let a registered launcher plugin (e.g. a wrapper such as managed launcher) rewrite the
     # command/args to wrap the same fully-augmented Claude launch. Identity by
     # default. See omnigent.claude_launcher.
     command, args = resolve_claude_launch(command, args)

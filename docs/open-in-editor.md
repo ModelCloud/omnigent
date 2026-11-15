@@ -15,28 +15,28 @@ policy does not need to allow editor protocol schemes.
 Remote controls require the host to be online. The UI infers standard SSH
 aliases from the existing host list: provider
 `databricks-arca` uses `arca.ssh`, and provider `arclet` uses
-`arclet_<host.name>.ssh`. Arclet names must be 1–64 ASCII letters, digits,
+`arclet_<host.name>.ssh`. Managed sandbox names must be 1–64 ASCII letters, digits,
 underscores, or hyphens, start with a letter or digit, and not start with
 `arclet_` or `arclet-`. The alias must exist in your local SSH configuration.
 For user-connected hosts without a sandbox provider, the UI reads the host's
 machine-type label through the existing authenticated session file API. A
 unique `arca_type arca` label selects `arca.ssh`. For `arca_type arclet`, it
-uses the validated canonical Arclet name for `arclet_<name>.ssh`. Display names,
+uses the validated canonical managed sandbox name for `arclet_<name>.ssh`. Display names,
 including IP-based hostnames and custom names, do not determine the machine
-type. Other types, including `isaac-arca`, are not treated as personal Arcas.
+type. Other types, including `isaac-arca`, are not treated as personal remote hosts.
 Discovery is cached per session and host for five minutes and shared by the
 folder and file controls. Clicking Open performs no metadata request.
-Remote links currently support POSIX paths, including Arca and Arclet workspaces.
+Remote links currently support POSIX paths, including personal host and managed sandbox workspaces.
 
 Other remote providers, custom aliases, missing or offline host rows, invalid
-Arclet names, and unreadable or malformed metadata hide the remote controls.
+managed sandbox names, and unreadable or malformed metadata hide the remote controls.
 The existing file API's session permissions and filesystem reach still apply;
 the UI does not bypass them. Cached discovery cannot keep an offline host's
 controls visible. Host-list updates refresh availability and provider aliases.
 No new host protocol, server API, or database migration is required. The browser
 cannot check whether an editor or SSH alias is installed locally.
 
-To verify, open an Arca or Arclet session, choose **Files**, and click **Open**
+To verify, open a personal host or managed sandbox session, choose **Files**, and click **Open**
 beside the folder path. Accept the protocol prompt and confirm the editor's
 remote indicator names the intended host. Open a file in the viewer and repeat;
 the editor should select that file on the same remote machine. Repeat in the

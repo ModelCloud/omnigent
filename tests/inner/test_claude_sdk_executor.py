@@ -701,7 +701,7 @@ class TestConstructor(unittest.TestCase):
             patch(
                 "omnigent.inner.databricks_executor._read_databrickscfg",
                 return_value=DatabricksCredentials(
-                    host="https://example.cloud.databricks.com",
+                    host="https://synthetic-security-fixture-0000000000000000.cloud.databricks.com",
                     token="dapi_test_token",
                 ),
             ),
@@ -710,11 +710,11 @@ class TestConstructor(unittest.TestCase):
             self.assertTrue(executor._gateway)
             self.assertEqual(
                 executor._extra_env["ANTHROPIC_BASE_URL"],
-                "https://example.cloud.databricks.com/ai-gateway/anthropic",
+                "https://synthetic-security-fixture-0000000000000000.cloud.databricks.com/ai-gateway/anthropic",
             )
             self.assertEqual(executor._extra_env["CLAUDE_CODE_API_KEY_HELPER_TTL_MS"], "900000")
             self.assertIn(
-                'databricks auth token --host "https://example.cloud.databricks.com"',
+                'databricks auth token --host "https://synthetic-security-fixture-0000000000000000.cloud.databricks.com"',
                 executor._extra_env["OMNIGENT_CLAUDE_API_KEY_HELPER"],
             )
             self.assertNotIn("ANTHROPIC_AUTH_TOKEN", executor._extra_env)
@@ -736,7 +736,7 @@ class TestConstructor(unittest.TestCase):
             patch(
                 "omnigent.inner.databricks_executor._read_databrickscfg",
                 return_value=DatabricksCredentials(
-                    host="https://example.cloud.databricks.com",
+                    host="https://synthetic-security-fixture-0000000000000000.cloud.databricks.com",
                     token="dapi_test_token",
                 ),
             ),
@@ -859,7 +859,7 @@ class TestConstructor(unittest.TestCase):
             with patch(
                 "omnigent.inner.databricks_executor._read_databrickscfg",
                 return_value=DatabricksCredentials(
-                    host="https://example.cloud.databricks.com",
+                    host="https://synthetic-security-fixture-0000000000000000.cloud.databricks.com",
                     token="dapi_test_token",
                 ),
             ):
@@ -915,7 +915,7 @@ class TestConstructor(unittest.TestCase):
             with patch(
                 "omnigent.inner.databricks_executor._read_databrickscfg",
                 return_value=DatabricksCredentials(
-                    host="https://example.cloud.databricks.com",
+                    host="https://synthetic-security-fixture-0000000000000000.cloud.databricks.com",
                     token="dapi_test_token",
                 ),
             ):
@@ -931,7 +931,8 @@ class TestConstructor(unittest.TestCase):
                 patch(
                     "omnigent.runtime.credentials.databricks.resolve_databricks_workspace",
                     return_value=SimpleNamespace(
-                        host="https://example.cloud.databricks.com", token="dapi_test_token"
+                        host="https://synthetic-security-fixture-0000000000000000.cloud.databricks.com",
+                        token="dapi_test_token",
                     ),
                 ),
                 patch(
@@ -967,7 +968,7 @@ class TestConstructor(unittest.TestCase):
             with patch(
                 "omnigent.inner.databricks_executor._read_databrickscfg",
                 return_value=DatabricksCredentials(
-                    host="https://example.cloud.databricks.com",
+                    host="https://synthetic-security-fixture-0000000000000000.cloud.databricks.com",
                     token="dapi_test_token",
                 ),
             ):
@@ -1015,7 +1016,8 @@ class TestConstructor(unittest.TestCase):
             patch(
                 "omnigent.runtime.credentials.databricks.resolve_databricks_workspace",
                 return_value=SimpleNamespace(
-                    host="https://example.cloud.databricks.com", token="dapi_test_token"
+                    host="https://synthetic-security-fixture-0000000000000000.cloud.databricks.com",
+                    token="dapi_test_token",
                 ),
             ),
             patch(
@@ -1310,7 +1312,7 @@ class TestConstructor(unittest.TestCase):
             with patch(
                 "omnigent.inner.databricks_executor._read_databrickscfg",
                 return_value=DatabricksCredentials(
-                    host="https://example.cloud.databricks.com",
+                    host="https://synthetic-security-fixture-0000000000000000.cloud.databricks.com",
                     token="dapi_test_token",
                 ),
             ):
@@ -1381,7 +1383,7 @@ class TestConstructor(unittest.TestCase):
             with patch(
                 "omnigent.inner.databricks_executor._read_databrickscfg",
                 return_value=DatabricksCredentials(
-                    host="https://example.cloud.databricks.com",
+                    host="https://synthetic-security-fixture-0000000000000000.cloud.databricks.com",
                     token="dapi_test_token",
                 ),
             ):
@@ -1461,7 +1463,7 @@ class TestConstructor(unittest.TestCase):
             with patch(
                 "omnigent.inner.databricks_executor._read_databrickscfg",
                 return_value=DatabricksCredentials(
-                    host="https://example.cloud.databricks.com",
+                    host="https://synthetic-security-fixture-0000000000000000.cloud.databricks.com",
                     token="dapi_test_token",
                 ),
             ):
@@ -2515,7 +2517,8 @@ def _databricks_gateway_executor(**kwargs):
     with patch(
         "omnigent.inner.databricks_executor._read_databrickscfg",
         return_value=DatabricksCredentials(
-            host="https://example.cloud.databricks.com", token="dapi_test_token"
+            host="https://synthetic-security-fixture-0000000000000000.cloud.databricks.com",
+            token="dapi_test_token",
         ),
     ):
         return ClaudeSDKExecutor(gateway=True, **kwargs)
@@ -7214,7 +7217,8 @@ async def test_unpinned_databricks_session_replays_within_its_default_models_win
     with patch(
         "omnigent.inner.databricks_executor._read_databrickscfg",
         return_value=DatabricksCredentials(
-            host="https://example.cloud.databricks.com", token="dapi_test_token"
+            host="https://synthetic-security-fixture-0000000000000000.cloud.databricks.com",
+            token="dapi_test_token",
         ),
     ):
         executor = ClaudeSDKExecutor(gateway=True)

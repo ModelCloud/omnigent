@@ -46,7 +46,7 @@ struct WebShellView: View {
           initialURL: initialURL,
           model: model,
           settings: settings,
-          databricksInternalFeaturesEnabled: managedConfiguration.databricksInternalFeaturesEnabled,
+          managedFeaturesEnabled: managedConfiguration.managedFeaturesEnabled,
           loadFailed: loadFailed,
           loadSucceeded: {
             workspacePageLoaded = true

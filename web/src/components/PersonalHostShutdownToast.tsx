@@ -2,7 +2,7 @@ import { useEffect, useReducer, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useHosts } from "@/hooks/useHosts";
 import { useNow } from "@/hooks/useNow";
-import { isArcaHost, readArcaHostId } from "@/lib/arcaHost";
+import { isPersonalHost, readPersonalHostId } from "@/lib/personalHost";
 import {
   ARCA_WARNING_PREFERENCES_CHANGED,
   dateKey,
@@ -18,16 +18,16 @@ import { ArcaExtendActions, useCanExtendArca } from "./ArcaExtendActions";
 
 const OVERNIGHT_COMMAND = "arca extend overnight";
 
-export function ArcaShutdownToast() {
+export function PersonalHostShutdownToast() {
   const { data: hosts } = useHosts();
   const now = useNow();
   const desktopExtend = useCanExtendArca();
   const [visibility, setVisibility] = useState(() => document.visibilityState);
   const [, refresh] = useReducer((value: number) => value + 1, 0);
   const shownToastId = useRef<string | null>(null);
-  const storedId = readArcaHostId();
+  const storedId = readPersonalHostId();
   const hasOnlineArcaHost = hosts?.some(
-    (host) => host.status === "online" && isArcaHost(host, storedId),
+    (host) => host.status === "online" && isPersonalHost(host, storedId),
   );
   const dismissedToday = isDismissedToday(now);
 

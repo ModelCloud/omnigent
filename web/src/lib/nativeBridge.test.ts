@@ -17,6 +17,8 @@ import {
   isIOSShell,
   isNativeShell,
   nativeNotify,
+  personalHostCapabilities,
+  type DesktopFeatures,
   refreshDbcert,
   onNativeNotificationActivated,
   onNativeSidebarDrag,
@@ -205,6 +207,33 @@ describe("dbcert preflight bridge", () => {
       ok: false,
       error: "Couldn't check your laptop's dbcert. Try again.",
     });
+  });
+});
+
+describe("personalHostCapabilities", () => {
+  it.each([
+    [null, { enabled: false, previewRecovery: false }],
+    [{}, { enabled: false, previewRecovery: false }],
+    [{ databricksInternalFeatures: true }, { enabled: true, previewRecovery: false }],
+    [{ arcaPreviewRecovery: true }, { enabled: false, previewRecovery: true }],
+    [
+      { databricksInternalFeatures: true, arcaPreviewRecovery: true },
+      { enabled: true, previewRecovery: true },
+    ],
+    [
+      { databricksInternalFeatures: false, arcaPreviewRecovery: false },
+      { enabled: false, previewRecovery: false },
+    ],
+    [
+      { databricksInternalFeatures: "true", arcaPreviewRecovery: 1 },
+      { enabled: false, previewRecovery: false },
+    ],
+    [
+      { enabled: true, previewRecovery: true },
+      { enabled: false, previewRecovery: false },
+    ],
+  ])("maps only explicit wire capabilities: %o", (features, expected) => {
+    expect(personalHostCapabilities(features as DesktopFeatures | null)).toEqual(expected);
   });
 });
 

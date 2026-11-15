@@ -814,8 +814,8 @@ it(
       devRequests.push({ url: request.url, host: request.headers.host });
       response.writeHead(200, { "Content-Type": "text/html", "Cache-Control": "no-store" });
       response.end(
-        `<title>spog dev</title><body style="font:20px system-ui;padding:24px">` +
-          `<h1>spog dev server</h1><p>Host header: <b>${escapeHtml(request.headers.host)}</b></p>` +
+        `<title>service dev</title><body style="font:20px system-ui;padding:24px">` +
+          `<h1>service dev server</h1><p>Host header: <b>${escapeHtml(request.headers.host)}</b></p>` +
           `<p>Path: <b>${escapeHtml(request.url)}</b></p></body>`,
       );
     });
@@ -842,7 +842,7 @@ it(
     await new Promise((resolve) => {
       proxyFixture.listen(0, "127.0.0.1", resolve);
     });
-    const devHost = `spog.dev.localhost:${fixture.address().port}`;
+    const devHost = `service.dev.localhost:${fixture.address().port}`;
     const devUrl = (view) => `http://${devHost}/one?view=${view}`;
     const marks = [];
     let backend;
@@ -961,7 +961,7 @@ it(
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           key: "gpt-4o-mini",
-          text: `The dev server is up: [Open spog dev](${devUrl("chat-link")})`,
+          text: `The dev server is up: [Open service dev](${devUrl("chat-link")})`,
           stream: true,
         }),
         signal: AbortSignal.timeout(30_000),
@@ -971,7 +971,7 @@ it(
       await composer.click();
       await composer.pressSequentially("Where is the dev server?", { delay: typingDelay });
       await composer.press("Enter");
-      const link = window.getByRole("link", { name: "Open spog dev", exact: true });
+      const link = window.getByRole("link", { name: "Open service dev", exact: true });
       await link.waitFor({ timeout: 60_000 });
       await hold(1500);
       await link.click();

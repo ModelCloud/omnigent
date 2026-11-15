@@ -4,8 +4,10 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 import java.net.URI
 
+private const val SYNTHETIC_WORKSPACE_URL = "https://synthetic-security-fixture-0000000000000000.cloud.databricks.com/"
+
 class WorkspaceSessionProbeTest {
-    private val page = URI("https://dbc-123.cloud.databricks.com/omnigent/c/chat-1?o=42#latest")
+    private val page = URI(SYNTHETIC_WORKSPACE_URL + "omnigent/c/chat-1?o=42#latest")
 
     @Test
     fun `accepted session probes the workspace identity endpoint with the DBAUTH cookie`() {
@@ -15,7 +17,7 @@ class WorkspaceSessionProbeTest {
 
         assertEquals(WorkspaceSessionCheck.Valid, check)
         val request = transport.requests.single()
-        assertEquals(URI("https://dbc-123.cloud.databricks.com/omnigent/v1/me?o=42"), request.uri)
+        assertEquals(URI(SYNTHETIC_WORKSPACE_URL + "omnigent/v1/me?o=42"), request.uri)
         assertEquals("DBAUTH=session-value", request.headers["Cookie"])
     }
 

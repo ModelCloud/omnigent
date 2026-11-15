@@ -149,6 +149,7 @@ from omnigent.server.background_session_titles import (
     background_session_titles_enabled,
     prepare_background_session_title,
 )
+from omnigent.server.bgr_input import check_bgr_session_input
 from omnigent.server.bundles import (
     agent_for_user,
     bundle_location,
@@ -5275,6 +5276,7 @@ async def ensure_runner_connected(
     if runner_client is not None:
         return runner_client, conv
 
+    await check_bgr_session_input(app_state, session_id, restart=True)
     tunnel_registry = cast(TunnelRegistry | None, getattr(app_state, "tunnel_registry", None))
     host_registry = cast(HostRegistry | None, getattr(app_state, "host_registry", None))
 
@@ -11742,6 +11744,8 @@ async def _create_session_from_existing_agent(
     background_title_coordinator: BackgroundSessionTitleCoordinator | None = None,
     project_store: ProjectStore | None = None,
     created_by_session_id: str | None = None,
+    conversation_id: str | None = None,
+    framework_labels: dict[str, str] | None = None,
     created_by_project_id: str | None = None,
 ) -> tuple[SessionResponse, Conversation]:
     """
@@ -11773,6 +11777,8 @@ async def _create_session_from_existing_agent(
         to the runner.
     :param artifact_store: Optional binary content store for the same.
     :param created_by_session_id: Server-authorized source of an independent worker.
+    :param conversation_id: Server-reserved retry identity, never read from the request body.
+    :param framework_labels: Server-authored lifecycle bindings, added after client validation.
     :param created_by_project_id: That source's project. A worker whose request names
         no project is filed there, so it sits beside the session that started it.
     :returns: The newly created session snapshot and its conversation row.
@@ -12403,6 +12409,7 @@ async def _create_session_from_existing_agent(
 
     native_agent = native_coding_agent_for_agent_name(agent.name)
     initial_labels = {**inherited_source_labels, **body.labels}
+    initial_labels.update(framework_labels or {})
     client_surface = resolve_client_surface(
         request.headers,
         parent_labels=_parent_for_routing.labels if _parent_for_routing is not None else None,
@@ -12479,6 +12486,7 @@ async def _create_session_from_existing_agent(
         )
         with creation_stage("create_persistence_ms"):
             conv = conversation_store.create_conversation(
+                conversation_id=conversation_id,
                 agent_id=agent.id,
                 title=body.title,
                 parent_conversation_id=body.parent_session_id,
@@ -12999,6 +13007,8 @@ async def _handle_mcp_tools_call(
         unavailable, or the underlying MCP call fails.
     """
 
+    if request is not None:
+        await check_bgr_session_input(request.app.state, session_id)
     namespaced_name = params.get("name", "")
     arguments: dict[str, Any] = params.get("arguments") or {}
     request_state_str: str | None = params.get("requestState")
@@ -13225,6 +13235,9 @@ async def _handle_mcp_tools_call(
 
     from omnigent.runner.tool_dispatch import MCP_PROXY_FORWARD_TIMEOUT_S
 
+    if request is not None:
+        await check_bgr_session_input(request.app.state, session_id)
+
     runner_client: httpx.AsyncClient | None = None
     registry_config = None
     if request is not None and getattr(request.app.state, "mcp_registry", None) is not None:
@@ -13263,6 +13276,8 @@ async def _handle_mcp_tools_call(
             return _mcp_error_response(
                 rpc_id, -32000, f"No runner bound for session {session_id!r}"
             )
+        if request is not None:
+            await check_bgr_session_input(request.app.state, session_id)
         try:
             exec_resp = await runner_client.post(
                 f"/v1/sessions/{session_id}/mcp/execute",
@@ -13339,6 +13354,8 @@ async def _handle_mcp_tools_call(
             return _mcp_error_response(rpc_id, -32000, "Registry MCP elicitation is not supported")
 
         # Retry on the runner with the user's inputResponses.
+        if request is not None:
+            await check_bgr_session_input(request.app.state, session_id)
         try:
             retry_resp = await runner_client.post(
                 f"/v1/sessions/{session_id}/mcp/execute",

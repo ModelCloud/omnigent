@@ -172,6 +172,34 @@ uv run --no-sync pyrefly check               # Python type checking (core and cl
 uv run --no-sync pre-commit run --all-files
 ```
 
+The `reference-policy` hook checks added text and paths. Security tests that need
+the production trusted-origin shape may use only the two exact
+`SYNTHETIC_SECURITY_HOSTS` declared in `dev/lint/lint_reference_policy.py`.
+In `tests/**/test_*.py`, the exception covers HTTP/HTTPS URLs in standalone,
+unprefixed, unescaped string literals, including multiline fixture configurations and
+ordinary fixture-helper arguments. It excludes docstrings, f-strings, adjacent
+literals, binary operators, augmented assignments, subscripting, literal receiver methods, and calls
+to `str`, `bytes`, `bytearray`, `repr`, `ascii`, `format`, `format_map`, `replace`,
+`join`, `substitute` or `safe_substitute` (including qualified calls).
+Desktop `web/electron/test/**/*.test.js` and Android
+`web/android/app/src/test/**/*Test.kt` tests may instead declare
+`SYNTHETIC_WORKSPACE_URL` as their first top-level declaration (after comments,
+an optional desktop strict directive, or Android package/import lines). Its
+value must be the exact unescaped HTTPS synthetic workspace root with a trailing
+slash, using `const` in JavaScript or `private const val` in Kotlin. Reuse that
+fixture for schemeless input and path/selector variants; transformed declaration
+values, templates and other declarations are not accepted.
+
+Neither rule covers comments, other hosts or production URLs. Reserved example
+domains remain the default for tests without a trusted-origin requirement.
+The finite `COMPATIBILITY_CONTEXTS` catalog preserves existing wire fields,
+managed keys, persisted host metadata, provider IDs and operational editor
+aliases only at their named read/fixture/documentation contexts. Only captured
+contract tokens are accepted, not entire lines, files, imports or private
+implementation names. Matching examples inside code comments/strings or HTML
+comments are not read boundaries. Other prohibited names, phrases and hosts
+remain checked, even beside an accepted token.
+
 The `session-list-visibility` custom rule checks Python, JavaScript/TypeScript,
 and shell clients for explicit visibility on session-list requests. It follows
 local query builders and same-file helpers; direct server tests and mock

@@ -1,4 +1,4 @@
-import { ARCA_HOST_ID_STORAGE_KEY } from "./arcaHost";
+import { PERSONAL_HOST_ID_STORAGE_KEY } from "./personalHost";
 
 const DISMISSED_KEY = "omnigent:arca-shutdown:dismissed";
 const WARNED_KEY = "omnigent:arca-shutdown:warned";
@@ -12,7 +12,10 @@ const LAST_WORKWEEK_OFFER_DAY = 3;
 
 export function isArcaWarningStorageKey(key: string | null): boolean {
   return (
-    key === null || key === DISMISSED_KEY || key === WARNED_KEY || key === ARCA_HOST_ID_STORAGE_KEY
+    key === null ||
+    key === DISMISSED_KEY ||
+    key === WARNED_KEY ||
+    key === PERSONAL_HOST_ID_STORAGE_KEY
   );
 }
 

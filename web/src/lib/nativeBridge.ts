@@ -225,7 +225,7 @@ interface ElectronDesktopApi extends NativeShellApi {
   connectSshHost?: (destination: string) => Promise<ArcaConnectResult>;
   /** Extend this machine's running Arca instance with an approved mode. */
   extendArca?: (mode: ArcaExtendMode) => Promise<ArcaExtendResult>;
-  /** Renew this machine's dbcert. */
+  /** Renew this machine's credential. */
   refreshDbcert?: (options?: DbcertRefreshOptions) => Promise<DbcertRefreshResult>;
   /** Check local credentials before an Arclet launch without starting sign-in. */
   checkDbcert?: () => Promise<DbcertStatusResult>;
@@ -456,7 +456,7 @@ export interface ArcaConnectResult extends HostActionResult {
  */
 export interface DesktopFeatures {
   /**
-   * Managed features (e.g. the Arca host option) are enabled.
+   * Managed features (e.g. the personal remote host option) are enabled.
    * Already scoped by the shell: true only when the flag is set AND the
    * window's server is a managed server.
    */
@@ -1342,7 +1342,7 @@ export async function getHostIdentity(): Promise<HostIdentity | null> {
   }
 }
 
-/** Where desktop onboarding connected a runner: this machine, or a remote host like Arca. */
+/** Where desktop onboarding connected a runner: this machine, or a remote host like personal remote host. */
 export type OnboardingRunner = "local" | "remote";
 
 /** Features that each take the onboarding runner once per page load. */
@@ -1411,13 +1411,27 @@ export async function getDesktopFeatures(): Promise<DesktopFeatures | null> {
   }
 }
 
+export interface PersonalHostCapabilities {
+  enabled: boolean;
+  previewRecovery: boolean;
+}
+
+export function personalHostCapabilities(
+  features: DesktopFeatures | null,
+): PersonalHostCapabilities {
+  return {
+    enabled: features?.databricksInternalFeatures === true,
+    previewRecovery: features?.arcaPreviewRecovery === true,
+  };
+}
+
 /** Whether this desktop shell can connect the user's Arca instance as a host. */
 export function supportsArcaConnect(): boolean {
   return typeof electronApi()?.connectArcaHost === "function";
 }
 
 /**
- * Connect the user's Arca instance to the window's server as a host, via the
+ * Connect the user's personal remote host instance to the window's server as a host, via the
  * desktop shell. The shell asks for native consent first and resolves once the
  * remote host daemon starts or fails. A no-op `{ ok: false }` outside the shell.
  */
@@ -1497,7 +1511,7 @@ export async function checkDbcert(): Promise<DbcertStatusResult> {
   }
 }
 
-/** Renew the laptop's dbcert through the desktop shell. */
+/** Renew the laptop's machine credential through the desktop shell. */
 export async function refreshDbcert(options?: DbcertRefreshOptions): Promise<DbcertRefreshResult> {
   const bridge = electronApi()?.refreshDbcert;
   if (!bridge) return { ok: false, error: "dbcert refresh is unavailable in this app." };

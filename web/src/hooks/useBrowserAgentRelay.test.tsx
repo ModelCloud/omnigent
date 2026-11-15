@@ -22,7 +22,7 @@ vi.mock("@/lib/sessionsApi", () => ({
   getSessionSlim: (...args: unknown[]) => getSessionSlim(...args),
 }));
 import { setSessionHost, setSessionParent } from "@/lib/sessionHost";
-import { readArcaHostId, writeArcaHostId } from "@/lib/arcaHost";
+import { readPersonalHostId, writePersonalHostId } from "@/lib/personalHost";
 
 import { emitBrowserActionRequest } from "@/lib/browserActionBus";
 import type { BrowserActionRequestEvent } from "@/lib/events";
@@ -111,7 +111,7 @@ function postedResult(): Record<string, unknown> {
 }
 
 beforeEach(() => {
-  writeArcaHostId(null);
+  writePersonalHostId(null);
   authenticatedFetch.mockReset();
   getSessionSlim.mockReset().mockImplementation(async (id: string) => ({
     id,
@@ -289,13 +289,13 @@ describe("useBrowserAgentRelay — action dispatch", () => {
   });
   it("derives inherited provenance from the source session, never model args or visible host", async () => {
     const bridge = installBridge();
-    writeArcaHostId("arca-host");
+    writePersonalHostId("remote-host");
     setSessionHost(CONV, "local-host");
-    setSessionHost("parent", "arca-host");
+    setSessionHost("parent", "remote-host");
     setSessionParent("conv_background_A", "parent");
     getSessionSlim.mockImplementation(async (id: string) => ({
       id,
-      hostId: id === "parent" ? "arca-host" : null,
+      hostId: id === "parent" ? "remote-host" : null,
       parentSessionId: id === "parent" ? null : "parent",
     }));
     await runAction(
@@ -314,9 +314,9 @@ describe("useBrowserAgentRelay — action dispatch", () => {
       {
         force: true,
         agent: true,
-        sourceHostId: "arca-host",
+        sourceHostId: "remote-host",
         sessionHostProtocol: 1,
-        rememberedArcaHostId: "arca-host",
+        rememberedArcaHostId: "remote-host",
       },
     );
     expect(getSessionSlim.mock.calls.map(([id]) => id)).toEqual(["conv_background_A", "parent"]);
@@ -329,18 +329,18 @@ describe("useBrowserAgentRelay — action dispatch", () => {
       ["hosts", { includeSandbox: false }],
       [
         {
-          host_id: "actual-arca-host-b",
+          host_id: "actual-remote-host-b",
           name: "Jackson's arca",
           owner: "jackson",
           status: "online",
         },
       ],
     );
-    writeArcaHostId("remembered-host-a");
-    setSessionHost("conv_background_A", "actual-arca-host-b");
+    writePersonalHostId("remembered-host-a");
+    setSessionHost("conv_background_A", "actual-remote-host-b");
     getSessionSlim.mockResolvedValue({
       id: "conv_background_A",
-      hostId: "actual-arca-host-b",
+      hostId: "actual-remote-host-b",
       parentSessionId: null,
     });
 
@@ -356,18 +356,18 @@ describe("useBrowserAgentRelay — action dispatch", () => {
       {
         force: true,
         agent: true,
-        sourceHostId: "actual-arca-host-b",
+        sourceHostId: "actual-remote-host-b",
         sessionHostProtocol: 1,
         rememberedArcaHostId: "remembered-host-a",
         sourceIsArcaHost: true,
       },
     );
-    expect(readArcaHostId()).toBe("actual-arca-host-b");
+    expect(readPersonalHostId()).toBe("actual-remote-host-b");
   });
 
   it("loads a child's own host before granting eligibility from a parent-list hint", async () => {
     const bridge = installBridge();
-    setSessionHost("parent", "arca-host");
+    setSessionHost("parent", "remote-host");
     setSessionParent("conv_background_A", "parent");
     getSessionSlim.mockResolvedValue({
       id: "conv_background_A",
@@ -393,7 +393,7 @@ describe("useBrowserAgentRelay — action dispatch", () => {
       hostId: "local-host",
       parentSessionId: "parent",
     });
-    setSessionHost("parent", "arca-host");
+    setSessionHost("parent", "remote-host");
     setSessionParent("conv_background_A", "parent");
     getSessionSlim.mockResolvedValue({
       id: "conv_background_A",
@@ -419,7 +419,7 @@ describe("useBrowserAgentRelay — action dispatch", () => {
     const bridge = installBridge();
     setSessionParent(CONV, "middle");
     setSessionParent("middle", "root");
-    setSessionHost("root", "arca-host");
+    setSessionHost("root", "remote-host");
     getSessionSlim.mockImplementation(async (id: string) => ({
       id,
       hostId: id === "middle" ? "other-host" : null,
@@ -445,15 +445,15 @@ describe("useBrowserAgentRelay — action dispatch", () => {
     });
     client.setQueryData(["session", "root"], {
       id: "root",
-      hostId: "arca-host",
+      hostId: "remote-host",
       parentSessionId: null,
     });
     setSessionParent(CONV, "middle");
     setSessionParent("middle", "root");
-    setSessionHost("root", "arca-host");
+    setSessionHost("root", "remote-host");
     getSessionSlim.mockImplementation(async (id: string) => ({
       id,
-      hostId: id === "root" ? "arca-host" : null,
+      hostId: id === "root" ? "remote-host" : null,
       parentSessionId: id === CONV ? "middle" : id === "middle" ? "root" : null,
     }));
     renderRelay(CONV, client);
@@ -464,7 +464,7 @@ describe("useBrowserAgentRelay — action dispatch", () => {
       CONV,
       "http://localhost:5173",
       undefined,
-      { force: true, agent: true, sourceHostId: "arca-host", sessionHostProtocol: 1 },
+      { force: true, agent: true, sourceHostId: "remote-host", sessionHostProtocol: 1 },
     );
   });
 
@@ -475,12 +475,12 @@ describe("useBrowserAgentRelay — action dispatch", () => {
       const client = new QueryClient();
       client.setQueryData(["session", "root"], {
         id: "root",
-        hostId: "arca-host",
+        hostId: "remote-host",
         parentSessionId: null,
       });
       setSessionParent(CONV, "middle");
       setSessionParent("middle", "root");
-      setSessionHost("root", "arca-host");
+      setSessionHost("root", "remote-host");
       getSessionSlim.mockImplementation(async (id: string) => {
         if (id === "middle" && failure === "lookup failure") {
           throw new Error("ancestor unavailable");
@@ -504,7 +504,7 @@ describe("useBrowserAgentRelay — action dispatch", () => {
     "does not authorize an inherited hint after the source lookup fails (%s)",
     async (url) => {
       const bridge = installBridge();
-      setSessionHost("parent", "arca-host");
+      setSessionHost("parent", "remote-host");
       setSessionParent("conv_background_A", "parent");
       getSessionSlim.mockRejectedValue(new Error("source unavailable"));
       await runAction(actionEvent("navigate", { url }), { source: "conv_background_A" });
@@ -551,7 +551,7 @@ describe("useBrowserAgentRelay — action dispatch", () => {
       await vi.waitFor(() => expect(getSessionSlim).toHaveBeenCalledWith(pendingId));
       hook.rerender({ id: "conv_visible_B" });
       setSessionHost("conv_visible_B", "local-host");
-      resolvePending({ id: pendingId, hostId: "arca-host", parentSessionId: null });
+      resolvePending({ id: pendingId, hostId: "remote-host", parentSessionId: null });
       await vi.waitFor(() =>
         expect(postedResult().result).toEqual({
           ok: true,
@@ -565,7 +565,7 @@ describe("useBrowserAgentRelay — action dispatch", () => {
         sourceId,
         "http://localhost:5173",
         undefined,
-        { force: true, agent: true, sourceHostId: "arca-host", sessionHostProtocol: 1 },
+        { force: true, agent: true, sourceHostId: "remote-host", sessionHostProtocol: 1 },
       );
       expect(authenticatedFetch.mock.calls[1][0]).toContain(
         "/v1/sessions/conv_background_A/browser/action_result/",
@@ -586,7 +586,7 @@ describe("useBrowserAgentRelay — action dispatch", () => {
     emitBrowserActionRequest(actionEvent("navigate", { url: "http://localhost:5173" }), CONV);
     await vi.waitFor(() => expect(getSessionSlim).toHaveBeenCalledWith(CONV));
     hook.unmount();
-    resolve({ id: CONV, hostId: "arca-host", parentSessionId: null });
+    resolve({ id: CONV, hostId: "remote-host", parentSessionId: null });
     await vi.waitFor(() =>
       expect(postedResult().result).toEqual({
         ok: false,

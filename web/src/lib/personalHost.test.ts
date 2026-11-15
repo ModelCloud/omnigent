@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { Host } from "@/hooks/useHosts";
-import { findConnectedArcaHost } from "./arcaHost";
+import { findConnectedPersonalHost } from "./personalHost";
 
-describe("findConnectedArcaHost", () => {
+describe("findConnectedPersonalHost", () => {
   const seeded: Host = {
     host_id: "seeded-arca",
     name: "corey's arca",
@@ -13,7 +13,7 @@ describe("findConnectedArcaHost", () => {
   const laptop: Host = { ...seeded, host_id: "laptop", name: "Corey's MacBook" };
 
   it("prefers the remembered connected Arca over a seeded name", () => {
-    expect(findConnectedArcaHost([laptop, seeded, remembered], remembered.host_id)).toBe(
+    expect(findConnectedPersonalHost([laptop, seeded, remembered], remembered.host_id)).toBe(
       remembered,
     );
   });
@@ -22,18 +22,18 @@ describe("findConnectedArcaHost", () => {
     "falls back to the connected seeded Arca when the remembered id is %s",
     (storedId) => {
       expect(
-        findConnectedArcaHost([laptop, { ...remembered, status: "offline" }, seeded], storedId),
+        findConnectedPersonalHost([laptop, { ...remembered, status: "offline" }, seeded], storedId),
       ).toBe(seeded);
     },
   );
 
   it("excludes offline Arcas, managed hosts, and ordinary connected computers", () => {
     expect(
-      findConnectedArcaHost(
+      findConnectedPersonalHost(
         [laptop, { ...seeded, status: "offline" }, { ...remembered, sandbox_provider: "arclet" }],
         remembered.host_id,
       ),
     ).toBeUndefined();
-    expect(findConnectedArcaHost([], null)).toBeUndefined();
+    expect(findConnectedPersonalHost([], null)).toBeUndefined();
   });
 });

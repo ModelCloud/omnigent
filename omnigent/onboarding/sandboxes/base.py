@@ -504,7 +504,7 @@ class SandboxLifecycle(ABC):
 
     # Package index URL exported as ``UV_INDEX_URL`` for the local wheel
     # build, or ``None`` to use ambient uv configuration. Providers tied
-    # to networks where public PyPI is unreachable (for example, Lakebox on a
+    # to networks where public PyPI is unreachable (for example, managed sandbox runtime on a
     # restricted network) override this.
     wheel_build_index_url: ClassVar[str | None] = None
 

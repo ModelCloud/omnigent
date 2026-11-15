@@ -16,7 +16,7 @@ final class ManagedConfigurationProvider: ObservableObject {
   @Published private var configuration: OmnigentManagedConfiguration = .empty
 
   var serverURLs: [URL] { configuration.serverURLs }
-  var databricksInternalFeaturesEnabled: Bool { configuration.databricksInternalFeaturesEnabled }
+  var managedFeaturesEnabled: Bool { configuration.managedFeaturesEnabled }
 
   private let defaults: UserDefaults
   private var declarativeConfiguration: OmnigentManagedConfiguration?

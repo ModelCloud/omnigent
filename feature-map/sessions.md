@@ -146,7 +146,7 @@ the header menu), and each place is a separate entry point.
   before submission, including branch clones.
 - `reconnect`: a stopped or stranded session shows a reconnect affordance and a
   dialog with the command to run; the desktop app reconnects a local host
-  itself, and starts an Arca host recognized by its saved ID or default name
+  itself, and starts a personal remote host recognized by its saved ID or default name
   from the same action (the desktop's Arca console still asks before running).
   A failed attempt opens the dialog for retry; so does an Arca connect after
   which the server still lists the session's host offline (usually because the
@@ -1059,7 +1059,7 @@ plain `uv run pytest`, which starts a private server for the test.
   `tests/e2e_ui/sessions/test_reconnect_arca_from_app.py::test_desktop_arca_reconnect_failure_offers_retry`,
   `tests/e2e_ui/sessions/test_reconnect_arca_from_app.py::test_desktop_send_reconnects_offline_arca_then_sends`
   drive the real SPA and server with an injected desktop bridge and offline host
-  responses. The Arca journeys cover a remembered host and a host that was not
+  responses. The personal remote host journeys cover a remembered host and a host that was not
   saved; they check one-action start, progress, failure and retry,
   and a message that waits for the host, not live SSH or the desktop's consent
   console.

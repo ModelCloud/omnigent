@@ -414,6 +414,9 @@ class AuthProvider(ABC):
         """
         return None
 
+    def generation_signing_key(self) -> bytes | None:
+        return None
+
 
 _CONNECTION_IDENTITY_KEY = "omnigent.account_identity"
 
@@ -577,8 +580,11 @@ class UnifiedAuthProvider(AuthProvider):
         """
         from omnigent.db.account_authority import bind_account_authority, clear_account_authority
         from omnigent.db.db_models import current_workspace_id
+        from omnigent.server.bgr_generation_auth import generation_principal
 
         clear_account_authority()
+        if generation_principal(request) is not None:
+            return None
         identity = request.scope.get(_CONNECTION_IDENTITY_KEY)
         if (
             isinstance(identity, _ConnectionIdentity)
@@ -591,6 +597,10 @@ class UnifiedAuthProvider(AuthProvider):
         if self._source in ("oidc", "accounts"):
             return self._check_cookie(request)
         return self._check_header(request)
+
+    def generation_signing_key(self) -> bytes | None:
+        config = self._oidc_config if self._source == "oidc" else self._accounts_config
+        return config.cookie_secret if self._source in ("oidc", "accounts") and config else None
 
     def mint_runner_token(self, user_id: str, ttl_seconds: int) -> str | None:
         """

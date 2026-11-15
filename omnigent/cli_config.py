@@ -45,8 +45,8 @@ if TYPE_CHECKING:
     from omnigent.onboarding.openclaw_config import OpenClawDiscovery, SourceKind
     from omnigent.onboarding.provider_config import ProviderEntry
 
-# _INTERNAL_BETA_DEFAULT_SERVER lives in omnigent.onboarding.internal_beta;
-# the --internal-beta setup branch and the sandbox CLI import it from there.
+# The managed default server setting lives in the onboarding configuration module;
+# the managed setup branch and the sandbox CLI import it from there.
 # Brand shown for an auto-configured CLI login in the credentials callout —
 # the product the login authenticates, not the CLI name (the codex CLI logs in
 # a ChatGPT subscription). Keyed by the ambient detection name; these are the

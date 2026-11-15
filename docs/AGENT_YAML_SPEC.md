@@ -659,7 +659,7 @@ os_env:
     type: linux_bwrap
     egress_rules:
       - "* pypi.org/**"                              # your other egress needs
-      - "* dbc-87654321-dcba.cloud.databricks.com/**"  # the proxied workspace
+      - "* workspace.example.test/**"  # the proxied workspace
     credential_proxy:
       - type: databricks_cli
         profiles: [dbc-87654321-dcba, oss]

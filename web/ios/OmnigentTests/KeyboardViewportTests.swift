@@ -71,7 +71,7 @@ final class KeyboardViewportTests: XCTestCase {
     let model = WebViewModel()
     let view = OmnigentWebView(
       initialURL: url, model: model, settings: SettingsStore(defaults: defaults),
-      databricksInternalFeaturesEnabled: false, loadFailed: { _, _ in }, loadSucceeded: {},
+      managedFeaturesEnabled: false, loadFailed: { _, _ in }, loadSucceeded: {},
       pushServerPicker: {}, requestSwitchServer: { _ in }, openServerSetup: {})
     let coordinator = view.makeCoordinator()
     let configuration = WKWebViewConfiguration()
@@ -125,7 +125,7 @@ final class KeyboardViewportTests: XCTestCase {
     let model = WebViewModel()
     let view = OmnigentWebView(
       initialURL: URL(string: "https://server.invalid")!, model: model,
-      settings: SettingsStore(defaults: defaults), databricksInternalFeaturesEnabled: false,
+      settings: SettingsStore(defaults: defaults), managedFeaturesEnabled: false,
       loadFailed: { _, _ in }, loadSucceeded: {}, pushServerPicker: {},
       requestSwitchServer: { _ in }, openServerSetup: {})
     let coordinator = view.makeCoordinator()

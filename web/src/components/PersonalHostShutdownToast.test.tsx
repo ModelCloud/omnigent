@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast, Toaster } from "sonner";
 import type * as SonnerModule from "sonner";
-import { ArcaShutdownToast } from "./ArcaShutdownToast";
+import { PersonalHostShutdownToast } from "./PersonalHostShutdownToast";
 import { ArcaShutdownBanner } from "./ArcaShutdownBanner";
 import { useArcaShutdownBanner } from "@/hooks/useArcaShutdownBanner";
 import {
@@ -52,7 +52,7 @@ function ToastPage({ showBanner = false }: { showBanner?: boolean }) {
   return (
     <>
       {showBanner && <BannerOnArcaHost />}
-      <ArcaShutdownToast />
+      <PersonalHostShutdownToast />
       <Toaster position="top-center" visibleToasts={100} />
     </>
   );
@@ -84,7 +84,7 @@ afterEach(() => {
   delete (window as unknown as { omnigentDesktop?: unknown }).omnigentDesktop;
 });
 
-describe("ArcaShutdownToast", () => {
+describe("PersonalHostShutdownToast", () => {
   it("dismisses the Home toast when the Arca chat banner mounts", async () => {
     const view = render(<ToastPage />);
     expect(await screen.findByText("Arca shuts down at about 6 PM")).toBeInTheDocument();
@@ -98,7 +98,7 @@ describe("ArcaShutdownToast", () => {
   it("shows the toast in terminal view, where the transcript banner is unmounted", async () => {
     render(
       <>
-        <ArcaShutdownToast />
+        <PersonalHostShutdownToast />
         <div>Terminal view</div>
         <Toaster />
       </>,
@@ -202,8 +202,8 @@ describe("ArcaShutdownToast", () => {
   it("deduplicates across two instances through the warned storage key", () => {
     const view = render(
       <>
-        <ArcaShutdownToast />
-        <ArcaShutdownToast />
+        <PersonalHostShutdownToast />
+        <PersonalHostShutdownToast />
         <Toaster />
       </>,
     );
@@ -212,8 +212,8 @@ describe("ArcaShutdownToast", () => {
     state.now = TUE_5PM;
     view.rerender(
       <>
-        <ArcaShutdownToast />
-        <ArcaShutdownToast />
+        <PersonalHostShutdownToast />
+        <PersonalHostShutdownToast />
         <Toaster />
       </>,
     );

@@ -1,5 +1,5 @@
 /**
- * Reads and renews the dbcert credential on a session's host, through the
+ * Reads and renews the machine credential on a session's host, through the
  * session's environment shell. Any host that has one can be checked.
  */
 
@@ -14,7 +14,7 @@ export const DBCERT_REFRESH_CHECK_COMMAND =
   'for c in dbcert setsid flock timeout; do command -v "$c" >/dev/null || exit 1; done';
 
 /**
- * Starts `dbcert` on the host and returns at once, because its sign-in can
+ * Starts credential renewal on the host and returns at once, because sign-in can
  * outlast the server's shell-proxy timeout. `flock` stops a second click from
  * starting a second sign-in, and `timeout` ends an abandoned one.
  */

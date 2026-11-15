@@ -109,6 +109,7 @@ from omnigent.server.background_session_titles import (
     prepare_background_session_title,
     schedule_background_child_task_summary,
 )
+from omnigent.server.bgr_input import check_bgr_session_input
 from omnigent.server.failed_status_diagnostics import (
     bound_runner_connection,
     failed_status_intake_attributes,
@@ -1359,6 +1360,12 @@ def register_events_routes(
                 "Only the session's owner can start a side chat", code=ErrorCode.FORBIDDEN
             )
         start_fire_stage("input_validation", session_id=session_id)
+        if not body.type.startswith("external_"):
+            await check_bgr_session_input(
+                request.app.state,
+                session_id,
+                restart=body.type in {"stop_session", "retry_session"},
+            )
         peer_message = body.type == "session_message"
         if peer_message:
             if not isinstance(request, Request):
@@ -1434,6 +1441,10 @@ def register_events_routes(
             # cannot flip a session to "running" even transiently.
             in_flight.enter_context(_mark_dispatch_in_flight(session_id))
         created_by = _attribution_user(user_id)
+        if isinstance(request, StartupInputContext) and not await request.binding_is_current(
+            conversation_store, session_id
+        ):
+            return {"accepted": False}
         body_created_by = _attribution_user(body.created_by)
         if body_created_by is not None:
             if not _has_runner_created_by_authority(request, conv):
@@ -1868,6 +1879,7 @@ def register_events_routes(
                 absent here but the host is live on another replica.
             """
             _app_state = request.app.state
+            await check_bgr_session_input(_app_state, session_id, restart=True)
             if wake_conv.host_id is not None and await _maybe_wake_stale_resumable_managed_sandbox(
                 session_id=session_id,
                 conv=wake_conv,
@@ -3308,6 +3320,14 @@ def register_events_routes(
                     )
             # Relaunch on the session's host after runner recovery fails.
             # An absent host needs its own grace before it can spawn a runner.
+            if (
+                runner_client is None
+                and isinstance(request, StartupInputContext)
+                and request.expected_binding is not None
+            ):
+                return {"accepted": False}
+            if runner_client is None:
+                await check_bgr_session_input(request.app.state, session_id, restart=True)
             _host_reg = getattr(request.app.state, "host_registry", None)
             if runner_client is None and _host_reg is not None:
                 _host_conn = _host_reg.get(conv.host_id)
@@ -3780,6 +3800,7 @@ def register_events_routes(
                 permission_store,
                 target_id=session_id,
             )
+        await check_bgr_session_input(request.app.state, session_id)
         start_fire_stage("prompt_prepare", session_id=session_id)
         pending_background_title = prepare_background_session_title(
             coordinator=background_title_coordinator,

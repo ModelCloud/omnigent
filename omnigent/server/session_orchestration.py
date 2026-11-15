@@ -10,7 +10,7 @@ from omnigent.runner.identity import (
     RUNNER_TUNNEL_TOKEN_HEADER,
     token_bound_runner_id,
 )
-from omnigent.server.auth import LEVEL_EDIT, LEVEL_OWNER, RESERVED_USER_LOCAL
+from omnigent.server.auth import LEVEL_EDIT, LEVEL_OWNER, LEVEL_READ, RESERVED_USER_LOCAL
 from omnigent.server.feature_flags import Feature
 from omnigent.server.schemas import SessionStartupInput
 from omnigent.server.sharing_settings import peer_session_messaging_enabled
@@ -23,12 +23,19 @@ from omnigent.stores.permission_store import PermissionStore
 from omnigent.util.session_lifecycle import is_session_closed
 
 
-def _shared_with_editors(session_id: str, user_id: str, permissions: PermissionStore) -> bool:
-    """Whether anyone besides the owner holds a stored grant that can add input."""
+def _has_disallowed_sharing(
+    session_id: str,
+    user_id: str,
+    permissions: PermissionStore,
+    *,
+    allow_read_only_sharing: bool = True,
+) -> bool:
+    """Whether another grant exceeds the caller's permitted sharing boundary."""
+    minimum_level = LEVEL_EDIT if allow_read_only_sharing else LEVEL_READ
     cursor: str | None = None
     while True:
         grants, cursor = permissions.list_for_session(session_id, after_user_id=cursor)
-        if any(g.user_id != user_id and g.level >= LEVEL_EDIT for g in grants):
+        if any(g.user_id != user_id and g.level >= minimum_level for g in grants):
             return True
         if cursor is None:
             return False
@@ -41,6 +48,7 @@ def require_owned_session(
     permissions: PermissionStore,
     *,
     private: bool = False,
+    allow_read_only_sharing: bool = True,
 ) -> Conversation:
     """Resolve actual ownership and inherited sharing, without administrator bypass."""
     session_id = normalize_uuid(identifier)
@@ -61,10 +69,16 @@ def require_owned_session(
         if private:
             # Child access comes from the root. Read-only viewers, including the
             # public grant, cannot add input, so they cannot steer other sessions.
-            if _shared_with_editors(current.id, user_id, permissions):
+            if _has_disallowed_sharing(
+                current.id, user_id, permissions, allow_read_only_sharing=allow_read_only_sharing
+            ):
                 raise OmnigentError(
-                    "Sessions shared with edit access cannot send messages, launch "
-                    "independent sessions or move other sessions",
+                    (
+                        "Sessions shared with edit access cannot send messages, launch "
+                        "independent sessions or move other sessions"
+                        if allow_read_only_sharing
+                        else "BGR requires an unshared private session"
+                    ),
                     code=ErrorCode.FORBIDDEN,
                 )
             if current.labels.get(SIDE_CHAT_LABEL_KEY) == "1":
@@ -82,6 +96,8 @@ def require_private_bound_source(
     user_id: str,
     conversations: ConversationStore,
     permissions: PermissionStore,
+    *,
+    allow_read_only_sharing: bool = True,
 ) -> Conversation:
     """Resolve the header's source as a private owned session on the caller's runner."""
     source = require_owned_session(
@@ -90,6 +106,7 @@ def require_private_bound_source(
         conversations,
         permissions,
         private=True,
+        allow_read_only_sharing=allow_read_only_sharing,
     )
     token = (request.headers.get(RUNNER_TUNNEL_TOKEN_HEADER) or "").strip()
     if not token or not source.runner_id or token_bound_runner_id(token) != source.runner_id:
@@ -125,6 +142,7 @@ def require_orchestration_source(
     permissions: PermissionStore | None,
     *,
     target_id: str | None = None,
+    allow_read_only_sharing: bool = True,
 ) -> Conversation:
     """Check the bound runner, private sender and optional same-owner destination."""
     if not request.app.state.feature_flags.enabled(Feature.SESSION_ORCHESTRATION):
@@ -135,7 +153,13 @@ def require_orchestration_source(
         raise OmnigentError("Messaging other sessions is disabled", code=ErrorCode.FORBIDDEN)
     if not user_id or permissions is None:
         raise OmnigentError("Session orchestration requires ownership", code=ErrorCode.FORBIDDEN)
-    source = require_private_bound_source(request, user_id, conversations, permissions)
+    source = require_private_bound_source(
+        request,
+        user_id,
+        conversations,
+        permissions,
+        allow_read_only_sharing=allow_read_only_sharing,
+    )
     if target_id is not None:
         target = require_owned_session(target_id, user_id, conversations, permissions)
         if source.id == target.id:

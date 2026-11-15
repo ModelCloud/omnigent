@@ -310,7 +310,7 @@ async function disconnectHost(cliCommand, serverUrl) {
  * server (via {@link module:omnigent_cli.probeServerAuth}) instead of trusting the
  * on-disk token file, which may be stale. When not authed it runs `omnigent login <url>`,
  * which is idempotent and opens the browser only for a dead grant. Hosts started
- * through `isaac omni` always log in, since a legacy token can pass the probe.
+ * through the managed CLI always log in, since a legacy token can pass the probe.
  *
  * Returns ok for an already-authed unmanaged CLI, when the server is unreachable (so the connect
  * attempt can raise its own, clearer error), or after a successful login. On

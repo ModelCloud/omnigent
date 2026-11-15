@@ -1495,6 +1495,11 @@ def test_workspace_url_skips_authed_probe_without_databricks_extra(
     assert [r["authorization"] for r in fake.requests] == [None, None]
 
 
+SYNTHETIC_WORKSPACE_URL = (
+    "https://synthetic-security-fixture-0000000000000000.cloud.databricks.com/omnigent"
+)
+
+
 # ── schemeless input + web-UI URL acceptance (user guide) ──
 
 
@@ -1503,8 +1508,8 @@ def test_workspace_url_skips_authed_probe_without_databricks_extra(
     [
         # The guide hands out the web URL without a scheme; default https.
         (
-            "dbc-12345678-abcd.cloud.databricks.com/omnigent",
-            "https://dbc-12345678-abcd.cloud.databricks.com/omnigent",
+            SYNTHETIC_WORKSPACE_URL.removeprefix("https://"),
+            SYNTHETIC_WORKSPACE_URL,
         ),
         ("example.cloud.databricks.com", "https://example.cloud.databricks.com"),
         # Loopback hosts stay http — local dev servers are plain http.

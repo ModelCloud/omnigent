@@ -155,10 +155,10 @@ function HostPickerProbe() {
 
 describe("ImportReviewGate", () => {
   it("never opens on its own for unreviewed online hosts", async () => {
-    serve([host("laptop"), host("box"), host("arca")], {
+    serve([host("laptop"), host("box"), host("remote-host")], {
       laptop: ["from-laptop"],
       box: ["from-box"],
-      arca: ["from-arca"],
+      "remote-host": ["from-remote-host"],
     });
     renderWithClient(<ImportReviewGate />);
 
@@ -194,20 +194,25 @@ describe("ImportReviewGate", () => {
 
   it.each([
     ["local", "laptop"],
-    ["remote", "arca"],
+    ["remote", "remote-host"],
   ] as const)("opens for the %s host onboarding set up", async (runner, hostId) => {
     installShell(runner);
-    serve([host("laptop"), host("arca")], { laptop: ["from-laptop"], arca: ["from-arca"] });
+    serve([host("laptop"), host("remote-host")], {
+      laptop: ["from-laptop"],
+      "remote-host": ["from-remote-host"],
+    });
     renderWithClient(<ImportReviewGate />);
 
     expect(await screen.findByText(`/from-${hostId}`)).toBeTruthy();
     expect(screen.getByText(new RegExp(`on ${hostId}-machine\\.`))).toBeTruthy();
-    expect(screen.queryByText(runner === "local" ? "/from-arca" : "/from-laptop")).toBeNull();
+    expect(
+      screen.queryByText(runner === "local" ? "/from-remote-host" : "/from-laptop"),
+    ).toBeNull();
   });
 
   it("shares the handoff with the new-session picker", async () => {
     installShell("remote");
-    serve([host("laptop"), host("arca")], { arca: ["from-arca"] });
+    serve([host("laptop"), host("remote-host")], { "remote-host": ["from-remote-host"] });
     renderWithClient(
       <>
         <ImportReviewGate />
@@ -215,8 +220,8 @@ describe("ImportReviewGate", () => {
       </>,
     );
 
-    expect(await screen.findByText("/from-arca")).toBeTruthy();
-    await waitFor(() => expect(screen.getByTestId("picker-host").textContent).toBe("arca"));
+    expect(await screen.findByText("/from-remote-host")).toBeTruthy();
+    await waitFor(() => expect(screen.getByTestId("picker-host").textContent).toBe("remote-host"));
     expect(shellTake).toHaveBeenCalledOnce();
   });
 
@@ -235,24 +240,24 @@ describe("ImportReviewGate", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       installShell("remote");
-      serve([host("laptop")], { arca: ["from-arca"] });
+      serve([host("laptop")], { "remote-host": ["from-remote-host"] });
       const { client } = renderWithClient(
         <>
           <ImportReviewGate />
           <HostPickerProbe />
         </>,
       );
-      expect(await screen.findByText("Connecting to Arca…")).toBeTruthy();
+      expect(await screen.findByText("Connecting to personal host…")).toBeTruthy();
 
-      // A slow Arca start outlasts the picker's grace period.
+      // A slow personal remote host start outlasts the picker's grace period.
       await act(async () => {
         await vi.advanceTimersByTimeAsync(ONBOARDING_RUNNER_GRACE_MS + 1_000);
       });
-      expect(screen.getByText("Connecting to Arca…")).toBeTruthy();
+      expect(screen.getByText("Connecting to personal host…")).toBeTruthy();
 
-      serve([host("laptop"), host("arca")], { arca: ["from-arca"] });
+      serve([host("laptop"), host("remote-host")], { "remote-host": ["from-remote-host"] });
       await client.invalidateQueries({ queryKey: ["hosts"] });
-      expect(await screen.findByText("/from-arca")).toBeTruthy();
+      expect(await screen.findByText("/from-remote-host")).toBeTruthy();
       // The picker's own preselect still gave up.
       expect(screen.getByTestId("picker-host").textContent).toBe("none");
     } finally {
@@ -262,13 +267,16 @@ describe("ImportReviewGate", () => {
 
   it("shows nothing when several hosts could be the remote runner", async () => {
     installShell("remote");
-    serve([host("laptop"), host("arca"), host("box")], { arca: ["from-arca"], box: ["from-box"] });
+    serve([host("laptop"), host("remote-host"), host("box")], {
+      "remote-host": ["from-remote-host"],
+      box: ["from-box"],
+    });
     renderWithClient(<ImportReviewGate />);
 
     await waitFor(() => expect(shellTake).toHaveBeenCalledOnce());
     await expectStaysClosed();
-    expect(screen.queryByText("Connecting to Arca…")).toBeNull();
-    expect(skillRequestsFor("arca")).toHaveLength(0);
+    expect(screen.queryByText("Connecting to personal host…")).toBeNull();
+    expect(skillRequestsFor("remote-host")).toHaveLength(0);
     expect(skillRequestsFor("box")).toHaveLength(0);
   });
 
@@ -276,9 +284,11 @@ describe("ImportReviewGate", () => {
     installShell("remote");
     serve([host("laptop")], {});
     const { client } = renderWithClient(<ImportReviewGate />);
-    expect(await screen.findByText("Connecting to Arca…")).toBeTruthy();
+    expect(await screen.findByText("Connecting to personal host…")).toBeTruthy();
 
-    serve([host("laptop"), host("arca"), host("box")], { arca: ["from-arca"] });
+    serve([host("laptop"), host("remote-host"), host("box")], {
+      "remote-host": ["from-remote-host"],
+    });
     await client.invalidateQueries({ queryKey: ["hosts"] });
     await waitFor(() => expect(screen.queryByText(TITLE)).toBeNull());
     await expectStaysClosed();
@@ -286,24 +296,27 @@ describe("ImportReviewGate", () => {
 
   it("keeps an identified remote host when another host comes online or it drops", async () => {
     installShell("remote");
-    serve([host("laptop"), host("arca")], { arca: ["from-arca"] });
+    serve([host("laptop"), host("remote-host")], { "remote-host": ["from-remote-host"] });
     const { client } = renderWithClient(<ImportReviewGate />);
-    expect(await screen.findByText("/from-arca")).toBeTruthy();
+    expect(await screen.findByText("/from-remote-host")).toBeTruthy();
 
-    serve([host("laptop"), host("arca"), host("box")], { arca: ["from-arca"], box: ["from-box"] });
+    serve([host("laptop"), host("remote-host"), host("box")], {
+      "remote-host": ["from-remote-host"],
+      box: ["from-box"],
+    });
     await client.invalidateQueries({ queryKey: ["hosts"] });
     await new Promise((resolve) => {
       setTimeout(resolve, 100);
     });
-    expect(screen.getByText("/from-arca")).toBeTruthy();
+    expect(screen.getByText("/from-remote-host")).toBeTruthy();
 
-    // With Arca offline, the lone online candidate is box; the review still waits for Arca.
-    serve([host("laptop"), host("arca", { status: "offline" }), host("box")], {
-      arca: ["from-arca"],
+    // With personal remote host offline, the lone online candidate is box; the review still waits for personal remote host.
+    serve([host("laptop"), host("remote-host", { status: "offline" }), host("box")], {
+      "remote-host": ["from-remote-host"],
       box: ["from-box"],
     });
     await client.invalidateQueries({ queryKey: ["hosts"] });
-    expect(await screen.findByText("Connecting to arca-machine…")).toBeTruthy();
+    expect(await screen.findByText("Connecting to remote-host-machine…")).toBeTruthy();
     expect(screen.queryByText("/from-box")).toBeNull();
     expect(skillRequestsFor("box")).toHaveLength(0);
   });
@@ -377,7 +390,7 @@ describe("ImportReviewGate with a requested host", () => {
     serve([host("other")], { target: ["t"], other: ["o"] });
     requestImportReview({ hostId: "target", runner: "remote" });
     const { client } = renderWithClient(<ImportReviewGate />);
-    expect(await screen.findByText("Connecting to Arca…")).toBeTruthy();
+    expect(await screen.findByText("Connecting to personal host…")).toBeTruthy();
 
     serve([host("other"), host("target")], { target: ["t"], other: ["o"] });
     await client.invalidateQueries({ queryKey: ["hosts"] });

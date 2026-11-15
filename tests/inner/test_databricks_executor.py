@@ -2971,7 +2971,7 @@ def test_databrickscfg_workspace_id_for_host_reads_matching_profile(
         textwrap.dedent(
             """
             [acme]
-            host = https://acme.databricks.com
+            host = https://workspace.example.test
             workspace_id = 4242424242424242
             auth_type = databricks-cli
 
@@ -2983,7 +2983,9 @@ def test_databrickscfg_workspace_id_for_host_reads_matching_profile(
     )
     monkeypatch.setenv("DATABRICKS_CONFIG_FILE", str(cfg))
 
-    assert databrickscfg_workspace_id_for_host("https://acme.databricks.com") == "4242424242424242"
+    assert (
+        databrickscfg_workspace_id_for_host("https://workspace.example.test") == "4242424242424242"
+    )
     # A profile without the field, and an unknown host, both resolve to None.
     assert databrickscfg_workspace_id_for_host("https://plain.databricks.com") is None
     assert databrickscfg_workspace_id_for_host("https://other.databricks.com") is None
@@ -3001,12 +3003,12 @@ def test_databrickscfg_workspace_id_for_profile_reads_exact_profile(
             workspace_id = default-ws
 
             [expired]
-            host = https://acme.databricks.com
+            host = https://workspace.example.test
             workspace_id = workspace-a
             auth_type = databricks-cli
 
             [fresh]
-            host = https://acme.databricks.com
+            host = https://workspace.example.test
             workspace_id = workspace-b
             auth_type = databricks-cli
             """
@@ -3025,7 +3027,7 @@ def test_databrickscfg_workspace_id_for_host_missing_file_returns_none(
 ) -> None:
     """A missing ~/.databrickscfg never raises — it resolves to None."""
     monkeypatch.setenv("DATABRICKS_CONFIG_FILE", str(tmp_path / "absent"))
-    assert databrickscfg_workspace_id_for_host("https://acme.databricks.com") is None
+    assert databrickscfg_workspace_id_for_host("https://workspace.example.test") is None
 
 
 @pytest.mark.parametrize(

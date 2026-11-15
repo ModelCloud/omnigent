@@ -994,7 +994,9 @@ async def _multidex_runtime_settings_overrides(
                     "experimental_bearer_token in config.toml"
                 )
             if has_model_selection:
-                overrides["modelProvider"] = multidex_runtime_provider_id(registration.provider)
+                overrides["modelProvider"] = multidex_runtime_provider_id(
+                    registration.provider, registration.model
+                )
             is_deepseek = (
                 registration.model in DEEPSEEK_SELECTOR_MODELS
                 or registration.model_family == "ds-v4.1-flash-1017"
@@ -1061,11 +1063,14 @@ async def _multidex_runtime_settings_overrides(
                 local_provider_names = {
                     name
                     for item in multidex.models
-                    for name in (item.provider, multidex_runtime_provider_id(item.provider))
+                    for name in (
+                        item.provider,
+                        multidex_runtime_provider_id(item.provider, item.model),
+                    )
                 } | {
                     "multidex",
                     multidex.provider,
-                    multidex_runtime_provider_id(multidex.provider),
+                    multidex_runtime_provider_id(multidex.provider, multidex.local_model),
                 }
                 if provider in local_provider_names:
                     provider = None

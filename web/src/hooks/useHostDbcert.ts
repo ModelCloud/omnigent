@@ -34,7 +34,7 @@ export function useHostDbcert(
   conversationId: string | null | undefined,
   hostId: string | null | undefined,
 ) {
-  // Only managed servers ask hosts for a dbcert.
+  // Only managed servers ask hosts for a machine credential.
   const onDatabricks = isDatabricksWorkspace();
   // Sandbox hosts are hidden from the default host list.
   const { data: hosts } = useHosts({

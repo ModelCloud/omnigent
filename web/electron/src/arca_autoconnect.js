@@ -1,9 +1,9 @@
 "use strict";
 
 /**
- * Arca auto-connect: when a window loads an eligible server, connect the user's
- * Arca instance to it as a host by running the same idempotent
- * `arca ssh … isaac omni host --background` command as the manual "Run on Arca"
+ * Personal remote host auto-connect: when a window loads an eligible server, connect the user's
+ * personal remote host instance to it as a host by running the same idempotent
+ * managed host command over SSH as the manual personal-host action
  * item, without the consent console. Runs at most once per server target
  * (including the workspace selector) per app launch. Only the main process
  * starts runs; a retry is allowed only after a failure. Whether the feature is

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { isArcaHost } from "./arcaHost";
+import { isPersonalHost } from "./personalHost";
 import {
   dateKey,
   dismissToday,
@@ -47,10 +47,10 @@ describe("Arca shutdown rules", () => {
   });
 
   it("recognizes seeded names and stored ids but excludes renamed and arclet names", () => {
-    expect(isArcaHost({ host_id: "a", name: "jackson's arca" }, null)).toBe(true);
-    expect(isArcaHost({ host_id: "a", name: "renamed" }, "a")).toBe(true);
-    expect(isArcaHost({ host_id: "a", name: "renamed" }, null)).toBe(false);
-    expect(isArcaHost({ host_id: "a", name: "jackson's arclet" }, null)).toBe(false);
+    expect(isPersonalHost({ host_id: "a", name: "user's arca" }, null)).toBe(true);
+    expect(isPersonalHost({ host_id: "a", name: "renamed" }, "a")).toBe(true);
+    expect(isPersonalHost({ host_id: "a", name: "renamed" }, null)).toBe(false);
+    expect(isPersonalHost({ host_id: "a", name: "user's arclet" }, null)).toBe(false);
   });
 
   it("uses the local date and resets daily keys at midnight", () => {

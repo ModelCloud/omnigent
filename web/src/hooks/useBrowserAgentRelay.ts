@@ -21,7 +21,7 @@ import {
 import { fetchSessionHostId } from "@/lib/fetchSessionHostId";
 import { authenticatedFetch } from "@/lib/identity";
 import { useQueryClient } from "@tanstack/react-query";
-import { isArcaHost, readArcaHostId, writeArcaHostId } from "@/lib/arcaHost";
+import { isPersonalHost, readPersonalHostId, writePersonalHostId } from "@/lib/personalHost";
 import type { Host } from "@/hooks/useHosts";
 
 /** Subset of `window.omnigentDesktop` the relay calls (typed locally, not via
@@ -121,8 +121,8 @@ async function dispatch(
   args: Record<string, unknown>,
   desktop: BrowserDesktopBridge,
   sourceHostId: string | null,
-  rememberedArcaHostId: string | null,
-  sourceIsArcaHost: boolean,
+  rememberedPersonalHostId: string | null,
+  sourceIsPersonalHost: boolean,
   readHostOptions?: BrowserHostOptions,
 ): Promise<ActionResult> {
   try {
@@ -139,18 +139,18 @@ async function dispatch(
           force: true,
           agent: true,
           ...navigationHostOptions(sourceHostId),
-          ...(rememberedArcaHostId ? { rememberedArcaHostId } : {}),
-          ...(sourceIsArcaHost ? { sourceIsArcaHost: true } : {}),
+          ...(rememberedPersonalHostId ? { rememberedArcaHostId: rememberedPersonalHostId } : {}),
+          ...(sourceIsPersonalHost ? { sourceIsArcaHost: true } : {}),
         });
         if (!r?.ok) return { ok: false, error: r?.error ?? "navigate failed" };
         if (
           isLoopbackPreview(url) &&
           sourceHostId &&
-          rememberedArcaHostId &&
-          sourceHostId !== rememberedArcaHostId
+          rememberedPersonalHostId &&
+          sourceHostId !== rememberedPersonalHostId
         ) {
           // Main only approves this after consent captures the source host.
-          writeArcaHostId(sourceHostId);
+          writePersonalHostId(sourceHostId);
         }
         return { ok: true, data: { final_url: url } };
       }
@@ -289,14 +289,15 @@ export function useBrowserAgentRelay(conversationId: string | null | undefined):
       const readHostOptions = revalidateHost
         ? { sessionHostProtocol: SESSION_HOST_PROTOCOL, sourceHostId }
         : undefined;
-      const rememberedArcaHostId = evt.action === "navigate" ? readArcaHostId() : null;
-      const sourceIsArcaHost =
+      const rememberedPersonalHostId = evt.action === "navigate" ? readPersonalHostId() : null;
+      const sourceIsPersonalHost =
         evt.action === "navigate" && sourceHostId !== null
           ? queryClient
               .getQueriesData<Host[]>({ queryKey: ["hosts"] })
               .flatMap(([, rows]) => rows ?? [])
               .some(
-                (host) => host.host_id === sourceHostId && isArcaHost(host, rememberedArcaHostId),
+                (host) =>
+                  host.host_id === sourceHostId && isPersonalHost(host, rememberedPersonalHostId),
               )
           : false;
       let result = cancelled
@@ -307,8 +308,8 @@ export function useBrowserAgentRelay(conversationId: string | null | undefined):
             evt.args,
             desktop,
             sourceHostId,
-            rememberedArcaHostId,
-            sourceIsArcaHost,
+            rememberedPersonalHostId,
+            sourceIsPersonalHost,
             readHostOptions,
           );
       if (
@@ -328,8 +329,8 @@ export function useBrowserAgentRelay(conversationId: string | null | undefined):
               evt.args,
               desktop,
               currentHostId,
-              rememberedArcaHostId,
-              sourceIsArcaHost,
+              rememberedPersonalHostId,
+              sourceIsPersonalHost,
               { sessionHostProtocol: SESSION_HOST_PROTOCOL, sourceHostId: currentHostId },
             );
       }

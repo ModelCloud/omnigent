@@ -51,7 +51,7 @@ import logging
 import os
 import re
 import shutil
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Final
 
@@ -631,6 +631,7 @@ async def bridge_tmux_control_to_websocket(
     socket_path: str,
     tmux_target: str,
     read_only: bool,
+    authorize_input: Callable[[], Awaitable[None]] | None = None,
     on_client_interaction: Callable[[], None] | None = None,
     reader_done: asyncio.Event | None = None,
     forward_done: asyncio.Event | None = None,
@@ -890,6 +891,8 @@ async def bridge_tmux_control_to_websocket(
                     on_client_interaction()
                 if msg.get("type") == "websocket.disconnect":
                     return
+                if authorize_input is not None:
+                    await authorize_input()
                 text = msg.get("text")
                 data = msg.get("bytes")
                 if text is not None:

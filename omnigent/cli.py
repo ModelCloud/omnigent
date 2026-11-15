@@ -4906,6 +4906,9 @@ def server(
     permission_store = SqlAlchemyPermissionStore(db_uri)
     scheduled_task_store = SqlAlchemyScheduledTaskStore(db_uri)
     project_store = SqlAlchemyProjectStore(db_uri)
+    from omnigent.stores.bgr_store import BgrStore
+
+    bgr_store = BgrStore(db_uri)
     preference_store = None
     if authority_id is not None:
         from omnigent.stores.preference_store.sqlalchemy_store import SqlAlchemyPreferenceStore
@@ -5124,6 +5127,7 @@ def server(
         scheduled_task_store=scheduled_task_store,
         project_store=project_store,
         preference_store=preference_store,
+        bgr_store=bgr_store,
         auth_provider=auth_provider,
         host_store=host_store,
         account_store=account_store,
@@ -12408,7 +12412,7 @@ def setup(internal_beta: bool) -> None:
         ui.print_brandmark("setup")
 
     if internal_beta:
-        # The --internal-beta defaults are not in every build. Fail loud with a
+        # The managed setup defaults are not in every build. Fail loud with a
         # clear message instead of an ImportError deep in the onboarding flow.
         try:
             import omnigent.onboarding.internal_beta  # type: ignore[import-not-found]  # noqa: F401

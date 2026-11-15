@@ -98,6 +98,182 @@ def test_fixture_source_follows_policy() -> None:
     assert not violates(Path(__file__).read_text(encoding="utf-8"))
 
 
+@pytest.mark.parametrize("host", sorted(policy.SYNTHETIC_SECURITY_HOSTS))
+@pytest.mark.parametrize("scheme", ["http", "https"])
+@pytest.mark.parametrize("multiline", [False, True])
+def test_synthetic_security_fixture_literals(host: str, scheme: str, multiline: bool) -> None:
+    url = f"{scheme}://{host}/codex/v1"
+    source = f"endpoint = {url!r}\n"
+    if multiline:
+        source = f"config = '''\nbase_url = \"{url}\"\n'''\n"
+    assert not policy._violation_lines(source, "tests/harnesses/test_gateway.py")
+    assert violates(source)
+
+
+@pytest.mark.parametrize("host", sorted(policy.SYNTHETIC_SECURITY_HOSTS))
+@pytest.mark.parametrize(
+    "path,template",
+    [
+        ("omnigent/test_gateway.py", "endpoint = {url!r}"),
+        ("docs/test_gateway.py", "endpoint = {url!r}"),
+        ("tests/fixtures/gateway.py", "endpoint = {url!r}"),
+        ("tests/test_gateway.md", "endpoint = {url!r}"),
+        ("tests/test_gateway.py", "# {url}"),
+        ("tests/test_gateway.py", '"""{url}"""'),
+        ("tests/test_gateway.py", 'def test_example():\n    """{url}"""'),
+        ("tests/test_gateway.py", 'class Example:\n    """{url}"""'),
+        ("tests/test_gateway.py", 'async def test_example():\n    """{url}"""'),
+        ("tests/test_gateway.py", "endpoint = f'{url}'"),
+        ("tests/test_gateway.py", 'endpoint = ("{url}" "extra")'),
+        ("tests/test_gateway.py", 'endpoint = ("first"\n# {url}\n"last")'),
+        ("tests/test_gateway.py", 'endpoint = "{url}" + suffix'),
+        ("tests/test_gateway.py", 'endpoint = "{url}" % values'),
+        ("tests/test_gateway.py", 'endpoint = "prefix"\nendpoint += "{url}"'),
+        ("tests/test_gateway.py", 'endpoint = "prefix %s"\nendpoint %= "{url}"'),
+        ("tests/test_gateway.py", 'endpoint = "{url}".format(path="x")'),
+        ("tests/test_gateway.py", 'endpoint = str.format("{url}", path="x")'),
+        ("tests/test_gateway.py", 'endpoint = "{url}".format_map(values)'),
+        ("tests/test_gateway.py", 'endpoint = str.format_map("{url}", values)'),
+        ("tests/test_gateway.py", 'endpoint = "{url}".replace("x", "y")'),
+        ("tests/test_gateway.py", 'endpoint = "{url}".lower()'),
+        ("tests/test_gateway.py", 'endpoint = "{url}"[1:]'),
+        ("tests/test_gateway.py", 'endpoint = format("{url}")'),
+        ("tests/test_gateway.py", 'endpoint = str("{url}")'),
+        ("tests/test_gateway.py", 'endpoint = bytes("{url}", "utf-8")'),
+        ("tests/test_gateway.py", 'endpoint = bytearray("{url}", "utf-8")'),
+        ("tests/test_gateway.py", 'endpoint = repr("{url}")'),
+        ("tests/test_gateway.py", 'endpoint = ascii("{url}")'),
+        ("tests/test_gateway.py", 'endpoint = builtins.str("{url}")'),
+        ("tests/test_gateway.py", 'endpoint = r"{url}"'),
+        ("tests/test_gateway.py", 'endpoint = u"{url}"'),
+        ("tests/test_gateway.py", 'endpoint = "/".join(["{url}"])'),
+        ("tests/test_gateway.py", 'endpoint = "{url}\\x2fextra"'),
+        ("tests/test_gateway.py", "endpoint = {url!r}\ninvalid("),
+    ],
+)
+def test_synthetic_security_rule_rejects_non_fixture_contexts(
+    host: str, path: str, template: str
+) -> None:
+    source = template.format(url=f"https://{host}/codex/v1")
+    assert policy._violation_lines(source, path)
+
+
+@pytest.mark.parametrize("host", sorted(policy.SYNTHETIC_SECURITY_HOSTS))
+def test_synthetic_security_rule_preserves_other_findings(host: str) -> None:
+    url = f"https://{host}/codex/v1"
+    source = f"endpoint = {url!r}; name = {min(policy.PROHIBITED_NAMES)!r}\n"
+    assert policy._violation_lines(source, "tests/test_gateway.py") == {1}
+    for suffix in policy.HOST_SUFFIXES:
+        for label in ["real-workspace", "example", "test", "12345678"]:
+            source = f"endpoints = [{url!r}, 'https://{label}.{suffix}/']\n"
+            assert policy._violation_lines(source, "tests/test_gateway.py") == {1}
+    for invalid_url in [
+        f"https://user@{host}/codex/v1",
+        f"https://{host}:8443/codex/v1",
+        f"https://extra.{host}/codex/v1",
+        f"ftp://{host}/codex/v1",
+        host,
+    ]:
+        assert policy._violation_lines(f"endpoint = {invalid_url!r}", "tests/test_gateway.py")
+
+
+@pytest.mark.parametrize("host", sorted(policy.SYNTHETIC_SECURITY_HOSTS))
+def test_plain_fixture_helper_argument_and_unicode_prefix(host: str) -> None:
+    source = f'fixture("https://{host}/codex/v1")\nlabel = "東京"; fixture("https://{host}/")\n'
+    assert not policy._violation_lines(source, "tests/test_gateway.py")
+
+
+@pytest.mark.parametrize(
+    "path,declaration,preamble",
+    [
+        (
+            "web/electron/test/url.test.js",
+            'const SYNTHETIC_WORKSPACE_URL = "{url}";',
+            '// fixture\n"use strict";\n',
+        ),
+        (
+            "web/android/app/src/test/example/OriginsTest.kt",
+            'private const val SYNTHETIC_WORKSPACE_URL = "{url}"',
+            "package example\n\nimport example.URI\n",
+        ),
+    ],
+)
+def test_script_workspace_fixture_declarations(path: str, declaration: str, preamble: str) -> None:
+    host = next(host for host in policy.SYNTHETIC_SECURITY_HOSTS if ".ai-gateway." not in host)
+    url = f"https://{host}/"
+    literal = declaration.format(url=url)
+    source = preamble + literal + "\n"
+    assert not policy._violation_lines(source, path)
+    assert not policy._violation_lines(preamble + literal.replace(" = ", " =\n  ") + "\n", path)
+    for invalid in [
+        "// " + literal,
+        "/*\n" + literal + "\n*/",
+        "`\n" + literal + "\n`",
+        '"""\n' + literal + '\n"""',
+        literal.replace('"' + url + '"', "`" + url + "`"),
+        literal.replace('"' + url + '"', '"' + url + '".trim()'),
+        literal.replace('"' + url + '"', '"' + url + '" + suffix'),
+        literal.replace(url, url.replace("https:", "http:")),
+        literal.replace(url, url[:-1]),
+        literal.replace(url, f"https://user@{host}/"),
+        literal.replace(url, f"https://{host}:8443/"),
+        literal.replace(url, f"https://extra.{host}/"),
+        literal.replace(url, f"https://private.{policy.HOST_SUFFIXES[0]}/"),
+        literal.replace("SYNTHETIC_WORKSPACE_URL", "OTHER_URL"),
+        "const before = 1;\n" + literal,
+    ]:
+        assert policy._violation_lines(preamble + invalid + "\n", path), invalid
+    assert policy._violation_lines(
+        source, path.replace("/test/", "/src/").replace("/src/test/", "/src/main/")
+    )
+    assert policy._violation_lines(source + min(policy.PROHIBITED_NAMES) + "\n", path)
+    assert policy._violation_lines(
+        source + f'"https://private.{policy.HOST_SUFFIXES[0]}/"\n', path
+    )
+
+
+@pytest.mark.parametrize("owner,pattern", policy.COMPATIBILITY_CONTEXTS)
+def test_compatibility_contracts_are_context_bound(owner: str, pattern: re.Pattern[str]) -> None:
+    root = Path(__file__).resolve().parents[3]
+    source = (root / owner).read_text()
+    matches = list(pattern.finditer(source))
+    assert matches, owner
+    for match in matches:
+        snippet = match.group()
+        assert not policy._violation_lines(snippet, owner), snippet
+        assert policy._violation_lines(snippet, "other/" + owner)
+        for group in pattern.groupindex:
+            token = match[group]
+            assert policy._violation_lines(token, owner)
+            assert policy._violation_lines(snippet.replace(token, token + "Private"), owner)
+            assert policy._violation_lines(snippet.replace(token, "private_" + token), owner)
+        commented = (
+            "<!--\n" + snippet + "\n-->" if owner.endswith(".md") else "/*\n" + snippet + "\n*/"
+        )
+        assert policy._violation_lines(commented, owner)
+        if not owner.endswith(".md"):
+            assert policy._violation_lines(repr(snippet), owner)
+        assert policy._violation_lines(snippet + " " + min(policy.PROHIBITED_NAMES), owner)
+        assert policy._violation_lines(
+            snippet + f" https://private.{policy.HOST_SUFFIXES[0]}/", owner
+        )
+
+
+def test_synthetic_security_rule_checks_staged_and_branch_diffs(repository: Path) -> None:
+    base = git(repository, "rev-parse", "HEAD").decode().strip()
+    path = repository / "tests/test_gateway.py"
+    path.parent.mkdir()
+    host = min(policy.SYNTHETIC_SECURITY_HOSTS)
+    path.write_text(f"endpoint = 'https://{host}/codex/v1'\n", encoding="utf-8")
+    git(repository, "add", ".")
+    assert check(repository) == []
+    git(repository, "-c", "core.hooksPath=/dev/null", "commit", "-qm", "synthetic fixture")
+    assert check(repository, base, "HEAD") == []
+    path.write_text(f"endpoint = 'https://private.{policy.HOST_SUFFIXES[0]}/'\n", encoding="utf-8")
+    git(repository, "add", ".")
+    assert check(repository) == ["tests/test_gateway.py:1: prohibited reference in added text"]
+
+
 @pytest.fixture
 def prohibited_name() -> str:
     return min(policy.PROHIBITED_NAMES)
@@ -406,3 +582,62 @@ def test_hook_and_ci_enforce_policy(repository: Path, prohibited_name: str, base
         assert result.returncode == 1
         assert "notes.txt:1: prohibited reference" in result.stdout
         assert "upstream.txt" not in result.stdout
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="The CI step runs in Bash on Linux")
+def test_ci_fetches_an_available_missing_base(repository: Path, prohibited_name: str) -> None:
+    root = Path(__file__).resolve().parents[3]
+    workflow = yaml.safe_load((root / ".github/workflows/lint.yml").read_text())
+    step = next(
+        item
+        for item in workflow["jobs"]["pre-commit"]["steps"]
+        if item.get("name") == "Check reference policy"
+    )
+    remote = repository.parent / "upstream.git"
+    git(repository, "clone", "--bare", str(repository), str(remote))
+    base = git(repository, "rev-parse", "HEAD").decode().strip()
+    fetched_base = (
+        git(
+            remote,
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit-tree",
+            f"{base}^{{tree}}",
+            "-p",
+            base,
+            "-m",
+            "upstream base",
+        )
+        .decode()
+        .strip()
+    )
+    git(remote, "update-ref", "refs/heads/main", fetched_base)
+    git(repository, "remote", "add", "origin", str(remote))
+    assert (
+        subprocess.run(
+            ["git", "cat-file", "-e", f"{fetched_base}^{{commit}}"],
+            cwd=repository,
+            capture_output=True,
+            check=False,
+        ).returncode
+        != 0
+    )
+    (repository / "notes.txt").write_text(prohibited_name + "\n")
+    git(repository, "add", ".")
+    git(repository, "-c", "core.hooksPath=/dev/null", "commit", "-qm", "change")
+    script = repository / "dev/lint/lint_reference_policy.py"
+    script.parent.mkdir(parents=True)
+    script.write_text((root / "dev/lint/lint_reference_policy.py").read_text())
+    result = subprocess.run(
+        ["bash", "-e", "-c", step["run"]],
+        cwd=repository,
+        env={**os.environ, "POLICY_BASE": fetched_base, "POLICY_HEAD": "HEAD"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert "notes.txt:1: prohibited reference" in result.stdout
+    git(repository, "cat-file", "-e", f"{fetched_base}^{{commit}}")

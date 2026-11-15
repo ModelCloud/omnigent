@@ -65,14 +65,14 @@ forces V2.
 
 When `databricksInternalFeaturesEnabled` is `true` **and** the window is
 connected to an eligible HTTPS server, the new-session host picker offers
-**Run on Arca**, which connects the user's Arca instance to the current server
+**the personal-host action**, which connects the user's personal remote host instance to the current server
 as a host. On any other server
-the Arca option is disabled. Selecting it opens a connect console that shows the
+the personal remote host option is disabled. Selecting it opens a connect console that shows the
 exact command. After confirmation, the command's live output streams into an
 embedded terminal pane. A connect already in flight is re-surfaced (console
 focused, outcome shared) rather than refused, and the run has a hard timeout so
 a stalled connection always settles. Once connected, the option disappears and
-the box's host row is tagged **Arca instance** (recognized by the host id
+the box's host row is tagged **personal remote host instance** (recognized by the host id
 remembered at connect time). Like the server list, the flag is read from macOS
 on demand, so profile changes apply without a restart.
 
@@ -83,7 +83,7 @@ SSH field stays.
 
 Remote hosts need their own renewable **Omnigent** OAuth grant. Desktop browser
 sign-in does not replace it. During explicit runner setup, an
-authentication-required result starts `isaac omni login <server-url>` on Arca
+authentication-required result starts the managed CLI's interactive login on the remote host
 and retries the noninteractive host command once after sign-in. The connect
 console does the same after the same consent click. Tokens and login output are
 not forwarded to the desktop renderer. Closing the sign-in console cancels the

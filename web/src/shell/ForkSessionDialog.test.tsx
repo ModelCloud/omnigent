@@ -540,10 +540,10 @@ describe("MultiDex fork model selection", () => {
 describe("ForkSessionDialog", () => {
   it.each([
     ["managed snapshot", null, true],
-    ["Arclet host", "arclet", true],
+    ["Managed sandbox host", "arclet", true],
     ["Databricks Sandbox host", "lakebox", true],
     ["managed snapshot", null, false],
-    ["Arclet host", "arclet", false],
+    ["Managed sandbox host", "arclet", false],
     ["Databricks Sandbox host", "lakebox", false],
   ])("offers supported destinations to a %s source (%s, reuse: %s)", (source, provider, reuse) => {
     useSessionMock.mockReturnValue({
@@ -2360,7 +2360,7 @@ describe("ForkSessionDialog", () => {
           isLoading: false,
           error: null,
         } as unknown as ReturnType<typeof useSession>);
-        // The source Arclet and another machine are both valid targets.
+        // The source managed sandbox and another machine are both valid targets.
         setHosts([
           host({ sandbox_provider: "arclet" }),
           host({ host_id: "host_2", name: "laptop" }),

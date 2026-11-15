@@ -500,7 +500,7 @@ sequenceDiagram
 
 Sessions running on this desktop machine can open HTTP(S) `localhost`,
 `127.0.0.1`, `[::1]`, and `*.localhost` subdomains such as
-`spog.dev.localhost` through the address bar, opted-in chat/file links, and
+`service.dev.localhost` through the address bar, opted-in chat/file links, and
 the agent's browser tools. Start the app locally, open **+** > **Browser**,
 and enter its URL. `localhost` and its subdomains always name the desktop
 machine; the page still receives the subdomain in its `Host` header.
@@ -541,7 +541,7 @@ session's agent browser view and are not targeted by the agent relay.
 The verified Arca exception also applies to the address bar and chat/file links.
 The remote app's port must be forwarded to the desktop first.
 
-On a managed server with the managed features enabled, an Arca session's agent
+On a managed server with the managed features enabled, a personal remote host session's agent
 can open and inspect an app through a forwarded port using the existing browser
 tools and tool approval or autoapproval policy.
 Provide the actual forwarded URL to the agent; its local port may differ from
@@ -654,7 +654,7 @@ including the address bar, chat links, and agent actions, enforces this policy.
   through its partition before sending, including GET/HEAD subresources and
   WebSockets. IP literals use the URL check without DNS. Loopback names
   (`localhost`, `127.0.0.1`, `[::1]`, and `*.localhost`) remain available to
-  eligible Arca and this-machine sessions without DNS. A `*.localhost` request
+  eligible personal remote host and this-machine sessions without DNS. A `*.localhost` request
   is cancelled before sending unless the partition's proxy lookup returns
   `DIRECT` alone, and its response must come from a loopback address on a
   route that is still direct, since a local proxy also answers from loopback.

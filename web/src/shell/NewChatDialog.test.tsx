@@ -3768,7 +3768,7 @@ describe("desktop Arclet credential preflight", () => {
   });
 });
 
-describe("Run on Arca (flag-gated)", () => {
+describe("the personal-host action (flag-gated)", () => {
   beforeEach(() => {
     setupLandingMocks();
     mockHosts([]);
@@ -3797,7 +3797,7 @@ describe("Run on Arca (flag-gated)", () => {
     fireEvent.click(chip);
   }
 
-  it("offers the Arca option only when the desktop shell reports the flag", async () => {
+  it("offers the personal remote host option only when the desktop shell reports the flag", async () => {
     renderLanding();
     await openHostMenu();
     expect(await screen.findByTestId("new-chat-landing-run-on-arca")).toBeTruthy();
@@ -3812,7 +3812,7 @@ describe("Run on Arca (flag-gated)", () => {
     expect(screen.queryByTestId("new-chat-landing-run-on-arca")).toBeNull();
   });
 
-  it("lists the remembered online host under My machines and hides Run on Arca", async () => {
+  it("lists the remembered online host under My machines and hides Connect personal host", async () => {
     // The row is recognized by the host id remembered at connect time — a
     // host's name (machine hostname) is deliberately not matched against
     // anything from `arca status`.
@@ -3822,7 +3822,7 @@ describe("Run on Arca (flag-gated)", () => {
     await openHostMenu();
 
     const row = await screen.findByTestId("new-chat-landing-host-arca-1");
-    expect(row.textContent).toContain("Arca instance");
+    expect(row.textContent).toContain("Personal host");
     // As in the browser picker: a My machines row with a status dot, not a
     // Cloud row with the cloud icon.
     expect(
@@ -3837,7 +3837,7 @@ describe("Run on Arca (flag-gated)", () => {
     await waitFor(() => expect(localStorage.getItem("omnigent:last-host-choice")).toBe("arca-1"));
   });
 
-  it("keeps Run on Arca visible in an older shell without preview recovery", async () => {
+  it("keeps Connect personal host visible in an older shell without preview recovery", async () => {
     vi.mocked(getDesktopFeatures).mockResolvedValue({ databricksInternalFeatures: true });
     localStorage.setItem("omnigent:arca-host-id", "arca-1");
     mockHosts([{ host_id: "arca-1", name: "remote-box", owner: "me", status: "online" }]);
@@ -3845,7 +3845,7 @@ describe("Run on Arca (flag-gated)", () => {
     await openHostMenu();
 
     expect(await screen.findByTestId("new-chat-landing-run-on-arca")).toHaveTextContent(
-      /^Run on Arca$/,
+      /^Connect personal host$/,
     );
     // The host row itself still lists under My machines.
     const row = await screen.findByTestId("new-chat-landing-host-arca-1");
@@ -3865,7 +3865,7 @@ describe("Run on Arca (flag-gated)", () => {
     });
     renderLanding();
     await openHostMenu();
-    fireEvent.click(await screen.findByText("Run on Arca"));
+    fireEvent.click(await screen.findByText("Connect personal host"));
     await waitFor(() =>
       expect(localStorage.getItem("omnigent:last-host-choice")).toBe("actual-arca"),
     );
@@ -3880,20 +3880,20 @@ describe("Run on Arca (flag-gated)", () => {
     vi.mocked(connectArcaHost).mockResolvedValue({
       ok: false,
       shownInConsole: true,
-      error: "Couldn't reach the Arca instance.",
+      error: "Couldn't reach the Personal host.",
     });
     renderLanding();
     await openHostMenu();
-    fireEvent.click(await screen.findByText("Run on Arca"));
+    fireEvent.click(await screen.findByText("Connect personal host"));
     await waitFor(() => expect(connectArcaHost).toHaveBeenCalledTimes(1));
     await openHostMenu();
-    fireEvent.click(await screen.findByText("Run on Arca"));
+    fireEvent.click(await screen.findByText("Connect personal host"));
     await waitFor(() => expect(connectArcaHost).toHaveBeenCalledTimes(2));
     expect(localStorage.getItem("omnigent:last-host-choice")).toBe("arca-1");
   });
 
   it.each(["missing", "offline"] as const)(
-    "shows Run on Arca when the remembered host is %s",
+    "shows Connect personal host when the remembered host is %s",
     async (status) => {
       localStorage.setItem("omnigent:arca-host-id", "arca-1");
       mockHosts(
@@ -3905,19 +3905,19 @@ describe("Run on Arca (flag-gated)", () => {
       await openHostMenu();
 
       expect(await screen.findByTestId("new-chat-landing-run-on-arca")).toHaveTextContent(
-        /^Run on Arca$/,
+        /^Connect personal host$/,
       );
-      // A stopped instance is reached through Run on Arca, not a dead Cloud row.
+      // A stopped instance is reached through Connect personal host, not a dead Cloud row.
       expect(screen.queryByTestId("new-chat-landing-host-arca-1")).toBeNull();
     },
   );
 
-  it("shows a plain Run on Arca item (no status line) while not connected", async () => {
+  it("shows a plain Connect personal host item (no status line) while not connected", async () => {
     renderLanding();
     await openHostMenu();
 
     const item = await screen.findByTestId("new-chat-landing-run-on-arca");
-    expect(item).toHaveTextContent(/^Run on Arca$/);
+    expect(item).toHaveTextContent(/^Connect personal host$/);
     expect(screen.queryByTestId("new-chat-landing-arca-subtitle")).toBeNull();
   });
 
@@ -3944,21 +3944,21 @@ describe("Run on Arca (flag-gated)", () => {
     await expectNoArcaError({
       ok: false,
       shownInConsole: true,
-      error: "Couldn't reach the Arca instance.",
+      error: "Couldn't reach the Personal host.",
     });
   });
 
   it("surfaces a gate failure (no console shown) with a retry", async () => {
     vi.mocked(connectArcaHost).mockResolvedValue({
       ok: false,
-      error: "Couldn't reach the Arca instance.",
+      error: "Couldn't reach the Personal host.",
     });
     renderLanding();
     await openHostMenu();
     fireEvent.click(await screen.findByTestId("new-chat-landing-run-on-arca"));
 
     const err = await screen.findByTestId("new-chat-landing-arca-error");
-    expect(err.textContent).toContain("Couldn't reach the Arca instance.");
+    expect(err.textContent).toContain("Couldn't reach the Personal host.");
     expect(vi.mocked(connectArcaHost)).toHaveBeenCalledTimes(1);
 
     // Retry re-invokes the connect.
@@ -6804,7 +6804,12 @@ describe("NewChatLandingScreen", () => {
   it.each([
     ["the browser", undefined, null, false],
     ["a desktop app without SSH connect", { kind: "electron" }, null, false],
-    ["a window that offers Run on Arca", sshDesktop, { databricksInternalFeatures: true }, false],
+    [
+      "a window that offers Connect personal host",
+      sshDesktop,
+      { databricksInternalFeatures: true },
+      false,
+    ],
     ["a desktop app with SSH connect", sshDesktop, null, true],
   ])("offers SSH connect in %s only when it can", async (_name, desktop, features, shown) => {
     (window as { omnigentDesktop?: unknown }).omnigentDesktop = desktop;
@@ -9604,7 +9609,7 @@ describe("NewChatLandingScreen skills menu", () => {
     typeMessage("/arc");
     expect(screen.queryByTestId("slash-menu-item-arca-review")).not.toBeInTheDocument();
     expect(
-      screen.getByText("Connect your Arca to discover skills before the sandbox starts."),
+      screen.getByText("Connect your personal host to discover skills before the sandbox starts."),
     ).toBeInTheDocument();
     expect(useSkills).toHaveBeenLastCalledWith({ target: null, enabled: false, starting: false });
   });

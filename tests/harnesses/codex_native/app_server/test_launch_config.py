@@ -36,7 +36,10 @@ from tests.harnesses.codex_native.app_server._support import (
     "source_url,expected_agent",
     [
         ("https://source.example.test/v1", None),
-        ("https://ws.cloud.databricks.com/ai-gateway/codex/v1", "codex"),
+        (
+            "https://synthetic-security-fixture-0000000000000000.cloud.databricks.com/ai-gateway/codex/v1",
+            "codex",
+        ),
     ],
     ids=["generic", "gateway"],
 )

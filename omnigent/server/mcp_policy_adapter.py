@@ -10,6 +10,7 @@ from fastapi import HTTPException, Request, Response
 
 from omnigent.entities import Conversation
 from omnigent.server.auth import LEVEL_EDIT, AuthProvider
+from omnigent.server.bgr_input import check_bgr_session_input
 from omnigent.server.mcp_gateway import gateway_backend
 from omnigent.server.mcp_identity import mcp_policy_actor
 from omnigent.server.mcp_registry import McpRegistry, McpService
@@ -54,6 +55,7 @@ class McpPolicyAdapter:
         await require_access(
             caller, session_id, LEVEL_EDIT, self.permission_store, self.conversation_store
         )
+        await check_bgr_session_input(request.app.state, session_id)
         conv = await asyncio.to_thread(self.conversation_store.get_conversation, session_id)
         if conv is None or conv.archived:
             raise HTTPException(404, "MCP session is unavailable")

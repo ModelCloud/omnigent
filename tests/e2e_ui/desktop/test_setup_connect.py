@@ -198,11 +198,10 @@ def test_shared_url_module_defaults_scheme_in_browser(page: Page) -> None:
     # the main process then probes and appends the canonical /omnigent mount.
     assert (
         page.evaluate(
-            """() => window.omnigentUrl.normalizeUrl(
-              'dbc-x.cloud.databricks.com/omnigent?ignored=yes&o=4242424242424242#page'
-            )"""
+            r"(url) => window.omnigentUrl.normalizeUrl(url.replace(/^https:\/\//, ''))",
+            "https://synthetic-security-fixture-0000000000000000.cloud.databricks.com/omnigent?ignored=yes&o=4242424242424242#page",
         )
-        == "https://dbc-x.cloud.databricks.com/?o=4242424242424242"
+        == "https://synthetic-security-fixture-0000000000000000.cloud.databricks.com/?o=4242424242424242"
     )
     # Loopback stays http for local dev.
     assert (

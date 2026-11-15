@@ -6,14 +6,16 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
+private const val SYNTHETIC_WORKSPACE_URL = "https://synthetic-security-fixture-0000000000000000.cloud.databricks.com/"
+
 /** Bare Databricks workspace roots resolve to the `/omnigent` mount. */
 @RunWith(RobolectricTestRunner::class)
 class OriginsWorkspaceUiUrlTest {
     @Test
     fun `expands a bare workspace root`() {
         assertEquals(
-            "https://dbc-12345678-abcd.cloud.databricks.com/omnigent",
-            databricksWorkspaceUiUrl("https://dbc-12345678-abcd.cloud.databricks.com"),
+            SYNTHETIC_WORKSPACE_URL + "omnigent",
+            databricksWorkspaceUiUrl(SYNTHETIC_WORKSPACE_URL.removeSuffix("/")),
         )
         assertEquals(
             "https://gtm-ai-agent.cloud.databricks.com/omnigent",

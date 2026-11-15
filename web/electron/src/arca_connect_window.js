@@ -1,8 +1,8 @@
 "use strict";
 
 /**
- * The Arca connect console: a modal window owned by the shell, used in place of
- * a native consent dialog. It shows the exact `arca ssh` command that will run
+ * The personal remote host connect console: a modal window owned by the shell, used in place of
+ * a native consent dialog. It shows the exact remote SSH command that will run
  * and, after the user confirms, streams its live stdout/stderr into an embedded
  * terminal pane.
  *

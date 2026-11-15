@@ -3,7 +3,7 @@ import { toast } from "sonner";
 
 import { fetchHosts } from "@/hooks/useHosts";
 import { onRunnerHealthPolled, refreshRunnerHealth } from "@/hooks/useRunnerHealth";
-import { isArcaHost, readArcaHostId, writeArcaHostId } from "@/lib/arcaHost";
+import { isPersonalHost, readPersonalHostId, writePersonalHostId } from "@/lib/personalHost";
 import {
   connectArcaHost,
   controlHost,
@@ -114,7 +114,8 @@ export function useSessionReconnect({
   );
   const isSessionArcaHost = useCallback(
     () =>
-      hostId !== null && isArcaHost({ host_id: hostId, name: hostName ?? "" }, readArcaHostId()),
+      hostId !== null &&
+      isPersonalHost({ host_id: hostId, name: hostName ?? "" }, readPersonalHostId()),
     [hostId, hostName],
   );
   const runsArcaConnect = useCallback(
@@ -162,7 +163,7 @@ export function useSessionReconnect({
         setDialogOpen(true);
         return;
       }
-      if (result.identity) writeArcaHostId(result.identity.hostId);
+      if (result.identity) writePersonalHostId(result.identity.hostId);
       // The connect starts whichever Arca the user has now, which may not be this
       // session's host, so only the server's view of this host decides success.
       const hosts = await fetchHosts(false).catch(() => null);

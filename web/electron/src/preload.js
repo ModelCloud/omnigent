@@ -243,7 +243,7 @@ contextBridge.exposeInMainWorld("omnigentDesktop", {
    */
   getDesktopFeatures: () => ipcRenderer.invoke("omnigent:get-desktop-features"),
   /**
-   * Connect the user's Arca instance to the window's
+   * Connect the user's personal remote host instance to the window's
    * server as a host, via `arca ssh`. Native consent is asked in the main
    * process. Resolves a `{ ok, error?, authError? }` result.
    */
@@ -262,10 +262,10 @@ contextBridge.exposeInMainWorld("omnigentDesktop", {
   /** Extend the local Arca instance with one of the main process's approved modes. */
   extendArca: (mode) => ipcRenderer.invoke("omnigent:arca-extend", mode),
   /**
-   * Renew this machine's dbcert. Resolves a `{ ok, error? }` result.
+   * Renew this machine's credential. Resolves a `{ ok, error? }` result.
    */
   refreshDbcert: (options) => ipcRenderer.invoke("omnigent:dbcert-refresh", options),
-  /** Check this machine's dbcert without starting sign-in. */
+  /** Check this machine's credential without starting sign-in. */
   checkDbcert: () => ipcRenderer.invoke("omnigent:dbcert-check"),
 
   /**

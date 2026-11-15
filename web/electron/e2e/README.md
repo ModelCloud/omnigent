@@ -124,7 +124,7 @@ into the nearby floating editor, and confirm the field remains `W41`. Escape
 should close only the editor. Reopen it and use Send or Enter to submit an
 instruction to chat. No instruction bar should appear below the browser URL.
 
-## Arclet credentials
+## managed sandbox credentials
 
 `desktop_dbcert_preflight.e2e.js` drives New Session → Arclet Sandbox through
 the real SPA, preload, main process, CLI subprocess, and local server. It checks
@@ -145,12 +145,12 @@ OMNIGENT_PYTHON=/path/to/venv/bin/python \
 ```
 
 Human check: use the updated desktop shell and web bundle on a managed server.
-With expired or missing local credentials, submit a task to Arclet Sandbox.
+With expired or missing local credentials, submit a task to managed sandbox Sandbox.
 Confirm a yellow banner appears, the draft stays, and no browser or sandbox
-opens. Click Refresh dbcert, finish browser sign-in, and confirm the banner
+opens. Click the credential refresh action, finish browser sign-in, and confirm the banner
 clears without launching anything. Submit again to launch the original task.
 Prelaunch refresh waits only for local renewal and validation. Repeat with a
-valid dbcert and confirm no sign-in opens.
+valid machine credential and confirm no sign-in opens.
 Dismiss the warning while the cert is invalid and submit again: the warning
 must return without creating an Arclet. A canceled or failed refresh should
 leave the draft and offer a retry.
