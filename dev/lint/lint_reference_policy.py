@@ -253,16 +253,29 @@ def _synthetic_fixture_spans(text: str, path: str | None) -> set[tuple[int, int,
         transformed = isinstance(node, (ast.JoinedStr, ast.BinOp, ast.Subscript, ast.Attribute))
         if isinstance(node, ast.Call):
             transformed = (
-                isinstance(node.func, ast.Name) and node.func.id in {"str", "bytes", "format"}
+                isinstance(node.func, ast.Name)
+                and node.func.id in {"str", "bytes", "bytearray", "repr", "ascii", "format"}
             ) or (
                 isinstance(node.func, ast.Attribute)
                 and (
                     node.func.attr
-                    in {"format", "format_map", "replace", "join", "substitute", "safe_substitute"}
+                    in {
+                        "str",
+                        "bytes",
+                        "bytearray",
+                        "repr",
+                        "ascii",
+                        "format",
+                        "format_map",
+                        "replace",
+                        "join",
+                        "substitute",
+                        "safe_substitute",
+                    }
                     or isinstance(node.func.value, ast.Constant)
                     or (
                         isinstance(node.func.value, ast.Name)
-                        and node.func.value.id in {"str", "bytes"}
+                        and node.func.value.id in {"str", "bytes", "bytearray"}
                     )
                 )
             )

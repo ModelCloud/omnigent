@@ -176,10 +176,11 @@ The `reference-policy` hook checks added text and paths. Security tests that nee
 the production trusted-origin shape may use only the two exact
 `SYNTHETIC_SECURITY_HOSTS` declared in `dev/lint/lint_reference_policy.py`.
 In `tests/**/test_*.py`, the exception covers HTTP/HTTPS URLs in standalone,
-unescaped string literals, including multiline fixture configurations and
+unprefixed, unescaped string literals, including multiline fixture configurations and
 ordinary fixture-helper arguments. It excludes docstrings, f-strings, adjacent
-literals, operators, subscripting, literal receiver methods, and built-in
-string conversion/formatting and known string-transformation calls.
+literals, binary operators, subscripting, literal receiver methods, and calls
+to `str`, `bytes`, `bytearray`, `repr`, `ascii`, `format`, `format_map`, `replace`,
+`join`, `substitute` or `safe_substitute` (including qualified calls).
 Desktop `web/electron/test/**/*.test.js` and Android
 `web/android/app/src/test/**/*Test.kt` tests may instead declare
 `SYNTHETIC_WORKSPACE_URL` as their first top-level declaration (after comments,
