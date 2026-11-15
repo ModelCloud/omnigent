@@ -1,7 +1,7 @@
 "use strict";
 
 /**
- * Locate Databricks' internal `isaac` launcher for desktop host enrollment.
+ * Locate the the managed launcher launcher for desktop host enrollment.
  * GUI-launched Electron inherits a minimal PATH, so mirror the Omnigent/Arca
  * resolver pattern: PATH first, then well-known macOS install locations.
  */

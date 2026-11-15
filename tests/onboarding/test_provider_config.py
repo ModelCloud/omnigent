@@ -164,7 +164,7 @@ model_provider = "Databricks"
 
 [model_providers.Databricks]
 name = "Databricks Unity Gateway"
-base_url = "https://1965859176160743.ai-gateway.cloud.databricks.com/codex/v1"
+base_url = "https://synthetic-security-fixture-0000000000000000.ai-gateway.cloud.databricks.com/codex/v1"
 wire_api = "responses"
 
 [model_providers.Databricks.auth]

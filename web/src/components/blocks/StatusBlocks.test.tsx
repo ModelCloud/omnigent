@@ -1,5 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type * as SessionsApiModule from "@/lib/sessionsApi";
 import { copyText } from "@/lib/clipboard";
 import { getSessionSignInLink } from "@/lib/sessionsApi";
 import { useChatStore } from "@/store/chatStore";
@@ -8,7 +9,10 @@ import { ForkDialogContextProvider } from "@/shell/ForkDialogContext";
 import { ErrorBanner, RoutingDecisionCard } from "./StatusBlocks";
 
 vi.mock("@/lib/clipboard", () => ({ copyText: vi.fn(() => Promise.resolve()) }));
-vi.mock("@/lib/sessionsApi", () => ({ getSessionSignInLink: vi.fn() }));
+vi.mock("@/lib/sessionsApi", async (importOriginal) => ({
+  ...(await importOriginal<typeof SessionsApiModule>()),
+  getSessionSignInLink: vi.fn(),
+}));
 
 afterEach(cleanup);
 
@@ -528,6 +532,40 @@ describe("ErrorBanner", () => {
     fireEvent.click(screen.getByRole("button", { name: "Dismiss error message" }));
     expect(screen.queryByTestId("error-headline")).toBeNull();
     expect(screen.getByText("Unrelated transcript content")).toBeInTheDocument();
+  });
+
+  it("keeps a dismissed historical error hidden after remount", () => {
+    const itemId = "err_persisted_terminal_failure";
+    const storageKey = `omnigent:dismissed-error:${itemId}`;
+    const originalStorageDescriptor = Object.getOwnPropertyDescriptor(window, "localStorage");
+    const stored = new Map<string, string>();
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: (key: string) => stored.get(key) ?? null,
+        setItem: (key: string, value: string) => stored.set(key, value),
+        removeItem: (key: string) => stored.delete(key),
+      },
+    });
+    window.localStorage.removeItem(storageKey);
+    const props = {
+      itemId,
+      message: "Old terminal launch failed",
+      source: "execution",
+      code: "native_terminal_start_failed",
+    };
+    const first = render(<ErrorBanner {...props} />);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss error message" }));
+    first.unmount();
+    render(<ErrorBanner {...props} />);
+    expect(screen.queryByText("Old terminal launch failed")).toBeNull();
+    expect(window.localStorage.getItem(storageKey)).toBe("1");
+    window.localStorage.removeItem(storageKey);
+    if (originalStorageDescriptor) {
+      Object.defineProperty(window, "localStorage", originalStorageDescriptor);
+    } else {
+      Reflect.deleteProperty(window, "localStorage");
+    }
   });
 
   it("toggles from the pill body but not from nested action buttons", async () => {
@@ -1402,5 +1440,28 @@ describe("ErrorBanner — info level", () => {
     render(<ErrorBanner message="boom" source="execution" code="runner_error" />);
     expect(screen.getByTestId("error-pill")).toHaveAttribute("data-level", "error");
     expect(screen.getByTestId("error-headline")).toHaveClass("text-destructive");
+  });
+});
+
+describe("ErrorBanner sign-in notice", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("reloads the page from its Reload page action", () => {
+    const reload = vi.fn();
+    vi.stubGlobal("location", { reload });
+    render(
+      <ErrorBanner
+        message="Reload the page to sign in again."
+        source=""
+        code="sign_in_expired"
+        title="Your sign-in expired"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Reload page" }));
+
+    expect(reload).toHaveBeenCalledOnce();
   });
 });

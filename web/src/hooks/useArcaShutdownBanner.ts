@@ -2,7 +2,7 @@ import { useEffect, useReducer } from "react";
 import { toast } from "sonner";
 import { useHosts } from "@/hooks/useHosts";
 import { useNowSelector } from "@/hooks/useNow";
-import { isArcaHost, readArcaHostId } from "@/lib/arcaHost";
+import { isPersonalHost, readPersonalHostId } from "@/lib/personalHost";
 import {
   ARCA_WARNING_PREFERENCES_CHANGED,
   dateKey,
@@ -56,11 +56,11 @@ export function useArcaShutdownBanner() {
       if (!enabled || !hostId || !warningDay || isDismissedToday(new Date())) {
         return false;
       }
-      const storedId = readArcaHostId();
+      const storedId = readPersonalHostId();
       return Boolean(
         hosts?.some(
           (host) =>
-            host.host_id === hostId && host.status === "online" && isArcaHost(host, storedId),
+            host.host_id === hostId && host.status === "online" && isPersonalHost(host, storedId),
         ),
       );
     },

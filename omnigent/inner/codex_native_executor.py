@@ -27,7 +27,11 @@ from omnigent.harnesses.codex_native.app_server import (
     CodexParams,
     _is_openai_vendor_model,
     client_for_transport,
+    codex_resume_current_model_provider,
+    codex_resume_unconfigured_model_provider,
+    input_too_large_limits,
     is_compaction_steer_refusal,
+    is_project_hooks_config_refusal,
     is_server_draining_error,
     is_stale_active_turn_error,
     resolve_codex_effort_for_model,
@@ -58,7 +62,7 @@ from omnigent.harnesses.codex_native.bridge import (
     read_mcp_startup,
     read_unmirrored_codex_settings,
     reconcile_shell_command_state,
-    update_active_turn_id,
+    record_acknowledged_turn_id,
 )
 from omnigent.harnesses.codex_native.shell_input import (
     native_shell_command_is_authorized,
@@ -124,6 +128,22 @@ _CODEX_COMPACTING_FAILURE = CodexStartupFailure(
     title="Codex is compacting",
     remediation="Wait for compaction to finish, then send your message again.",
 )
+_CODEX_PROVIDER_CHANGED_FAILURE = CodexStartupFailure(
+    message="Codex rejected this message because the conversation's model provider "
+    "differs from, or is missing in, its current configuration.",
+    code="codex_provider_changed",
+    title="Codex provider configuration changed",
+    remediation="Select and configure the intended provider, restart the session terminal, "
+    "then retry this message.",
+)
+_CODEX_PROJECT_CONFIG_INVALID_FAILURE = CodexStartupFailure(
+    message="Codex could not read this project's hooks configuration, so this message "
+    "was not delivered.",
+    code="codex_project_config_invalid",
+    title="Codex project configuration needs attention",
+    remediation="Check that the project's .codex path is a directory and its config.toml "
+    "is readable, then retry this message.",
+)
 _CODEX_DELIVERY_UNCONFIRMED_FAILURE = CodexStartupFailure(
     message="Codex did not confirm this message. It may already be running.",
     code="codex_delivery_unconfirmed",
@@ -138,6 +158,21 @@ _CODEX_SHELL_AUTHORIZATION_REQUIRED = CodexStartupFailure(
     remediation="Update the Omnigent server and runner, then send the command again "
     "as the session owner.",
 )
+
+
+def _input_too_large_failure(actual_chars: int, max_chars: int) -> CodexStartupFailure:
+    """Describe Codex refusing a message over its input limit."""
+    sizes = (
+        f" ({actual_chars:,} characters; the limit is {max_chars:,})"
+        if actual_chars and max_chars
+        else ""
+    )
+    return CodexStartupFailure(
+        message=f"This message is too long for Codex{sizes}, so it was not delivered.",
+        code="codex_input_too_large",
+        title="Message too long",
+        remediation="Shorten the message or attach large content as a file, then send it again.",
+    )
 
 
 class _CodexNativeInputUndelivered(RuntimeError):
@@ -447,6 +482,8 @@ async def _native_delivery_request_once(
             outcome = "rpc_rejected_draining"
         elif isinstance(exc, CodexAppServerResponseError) and is_compaction_steer_refusal(exc):
             outcome = "rpc_rejected_compacting"
+        elif isinstance(exc, CodexAppServerResponseError) and input_too_large_limits(exc):
+            outcome = "rpc_rejected_input_too_large"
         log_input_event(
             _logger,
             "codex_native_delivery_finished",
@@ -591,8 +628,13 @@ async def _start_codex_turn(
     turn = _json_object(result.get("turn")) if result is not None else None
     turn_id = turn.get("id") if turn is not None else None
     if isinstance(turn_id, str) and turn_id:
-        update_active_turn_id(bridge_dir, turn_id)
-        _logger.info("Codex native started turn: turn_id=%s", turn_id)
+        if record_acknowledged_turn_id(bridge_dir, state, turn_id):
+            _logger.info("Codex native started turn: turn_id=%s", turn_id)
+        else:
+            _logger.info(
+                "Codex native turn start acknowledged after the active turn changed: turn_id=%s",
+                turn_id,
+            )
 
 
 async def _steer_codex_turn(
@@ -618,8 +660,13 @@ async def _steer_codex_turn(
     result = _json_object(response.get("result")) if response is not None else None
     turn_id = result.get("turnId") if result is not None else None
     if isinstance(turn_id, str) and turn_id:
-        update_active_turn_id(bridge_dir, turn_id)
-        _logger.info("Codex native steered active turn: turn_id=%s", turn_id)
+        if record_acknowledged_turn_id(bridge_dir, state, turn_id):
+            _logger.info("Codex native steered active turn: turn_id=%s", turn_id)
+        else:
+            _logger.info(
+                "Codex native steer acknowledged after the active turn changed: turn_id=%s",
+                turn_id,
+            )
 
 
 # Bound reconciliation after shell submission before releasing the injection lock.
@@ -897,12 +944,12 @@ async def _multidex_runtime_settings_overrides(
     """Attach a freshly-discovered MultiDex context budget to a new turn.
 
     MultiDex deployments can change their serving context window without a
-    client upgrade.  Query only when the target is the configured local model;
-    the app-server uses this runtime value for pre-turn compaction instead of
-    trusting bundled metadata. Official Codex models never read this
-    MultiDex-specific session file, so their routing and limits stay intact.
+    client upgrade. Query the local model's capacity for every DeepSeek
+    provider variant so switching providers keeps one context and compaction
+    budget. Official Codex models never read this session file.
     """
     from omnigent.harnesses.multidex_native.config import (
+        DEEPSEEK_SELECTOR_MODELS,
         MULTIDEX_MODEL,
         clear_multidex_runtime_capabilities,
         fetch_multidex_runtime_capabilities,
@@ -950,16 +997,24 @@ async def _multidex_runtime_settings_overrides(
                 overrides["modelProvider"] = multidex_runtime_provider_id(
                     registration.provider, registration.model
                 )
-            if registration.discover_capabilities or registration.model == MULTIDEX_MODEL:
+            is_deepseek = (
+                registration.model in DEEPSEEK_SELECTOR_MODELS
+                or registration.model_family == "ds-v4.1-flash-1017"
+            )
+            selected_config = None
+            if is_deepseek:
+                selected_config = multidex
+            elif registration.discover_capabilities:
                 selected_config = dataclasses.replace(
                     multidex,
                     local_model=registration.model,
                     provider=registration.provider,
                     base_url=registration.base_url,
                 )
+            if selected_config is not None:
                 try:
                     capabilities = await fetch_multidex_runtime_capabilities(selected_config)
-                except RuntimeError:
+                except (RuntimeError, ValueError):
                     clear_multidex_runtime_capabilities(Path(state.codex_home))
                     _logger.warning(
                         "MultiDex capability discovery failed; using conservative fallback"
@@ -1427,6 +1482,17 @@ class CodexNativeExecutor(Executor):
                             startup_failure = exc.failure
                             undelivered = True
                             preserve_session = exc.preserve_session
+                        elif (
+                            codex_resume_current_model_provider(exc) is not None
+                            or codex_resume_unconfigured_model_provider(exc) is not None
+                        ):
+                            startup_failure = _CODEX_PROVIDER_CHANGED_FAILURE
+                            undelivered = True
+                            preserve_session = True
+                        elif is_project_hooks_config_refusal(exc):
+                            startup_failure = _CODEX_PROJECT_CONFIG_INVALID_FAILURE
+                            undelivered = True
+                            preserve_session = True
                         elif isinstance(
                             exc, CodexAppServerResponseError
                         ) and is_server_draining_error(exc):
@@ -1437,6 +1503,13 @@ class CodexNativeExecutor(Executor):
                         ) and is_compaction_steer_refusal(exc):
                             startup_failure = _CODEX_COMPACTING_FAILURE
                             undelivered = True
+                        elif isinstance(exc, CodexAppServerResponseError) and (
+                            limits := input_too_large_limits(exc)
+                        ):
+                            # Codex validated and refused the input; the session is unaffected.
+                            startup_failure = _input_too_large_failure(*limits)
+                            undelivered = True
+                            preserve_session = True
                         _logger.exception(
                             "Codex native turn injection failed",
                             extra=with_input_attributes(

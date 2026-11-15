@@ -14,10 +14,11 @@ from tests.db.test_migration_conversation_metadata_pull_requests import _migrate
 from tests.db.test_migration_conversation_metadata_pull_requests import database as database
 
 _BGR_HEAD = "d9e4c3b2a167"
-_MAIN_HEAD = "f1c7a9e2b406"
+_PR_HEAD = "e0b6d4f2a135"
+_MAIN_HEAD = "a7d4c2e9f610"
 
 
-@pytest.mark.parametrize("starting_revision", ["base", _BGR_HEAD, _MAIN_HEAD])
+@pytest.mark.parametrize("starting_revision", ["base", _BGR_HEAD, _PR_HEAD, _MAIN_HEAD])
 def test_bgr_upgrade_downgrade_and_model_parity(database, starting_revision):
     uri, engine = database
     script = ScriptDirectory.from_config(_build_alembic_config(uri))
@@ -79,6 +80,14 @@ def test_bgr_upgrade_downgrade_and_model_parity(database, starting_revision):
     assert "family_id" in {
         column["name"] for column in inspector.get_columns("omnigent_conversation_metadata")
     }
+    tables = set(inspector.get_table_names())
+    _migrate(uri, engine, "downgrade", _PR_HEAD)
+    with engine.connect() as connection:
+        assert set(
+            connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalars()
+        ) == {_PR_HEAD, _MAIN_HEAD}
+    assert set(sa.inspect(engine).get_table_names()) == tables
+    _migrate(uri, engine, "upgrade", "head")
     _migrate(uri, engine, "downgrade", _BGR_HEAD)
     with engine.connect() as connection:
         assert set(

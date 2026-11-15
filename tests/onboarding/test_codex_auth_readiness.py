@@ -9,6 +9,7 @@ import pytest
 from omnigent.onboarding.codex_auth_readiness import (
     codex_config_effective_auth,
     effective_codex_model_provider,
+    effective_self_sufficient_builtin_provider,
     load_codex_config,
     provider_table_auth_token,
     provider_table_has_self_contained_auth,
@@ -45,7 +46,7 @@ model_provider = "profile-provider"
     assert effective_codex_model_provider(parsed) == "profile-provider"
 
 
-@pytest.mark.parametrize("provider", ["openrouter", "lithos"])
+@pytest.mark.parametrize("provider", ["openrouter", "lithos", "wafer"])
 @pytest.mark.parametrize("with_table", [False, True])
 @pytest.mark.parametrize("value", [None, "test-key"])
 def test_builtin_gateway_needs_a_config_toml_credential(
@@ -62,9 +63,10 @@ def test_builtin_gateway_needs_a_config_toml_credential(
     path = _config(tmp_path, body)
     env = {} if value is None else {"PROVIDER_TOKEN": value}
     assert codex_config_effective_auth(path, env=env) == "provider-auth-missing"
+    assert effective_self_sufficient_builtin_provider(load_codex_config(path) or {}) is None
 
 
-@pytest.mark.parametrize("provider", ["openrouter", "lithos"])
+@pytest.mark.parametrize("provider", ["openrouter", "lithos", "wafer"])
 def test_builtin_gateway_bearer_token_is_ready(tmp_path: Path, provider: str) -> None:
     path = _config(
         tmp_path,
@@ -72,6 +74,7 @@ def test_builtin_gateway_bearer_token_is_ready(tmp_path: Path, provider: str) ->
         'experimental_bearer_token = "token"\n',
     )
     assert codex_config_effective_auth(path, env={}) == "provider-ready"
+    assert effective_self_sufficient_builtin_provider(load_codex_config(path) or {}) == provider
 
 
 def test_openrouter_builtin_auth_command_does_not_require_env_key(tmp_path: Path) -> None:

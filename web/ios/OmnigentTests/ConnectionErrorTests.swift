@@ -52,7 +52,7 @@ final class ConnectionErrorTests: XCTestCase {
     var failures: [(URL, String?)] = []
     let view = OmnigentWebView(
       initialURL: url, model: WebViewModel(), settings: SettingsStore(defaults: defaults),
-      databricksInternalFeaturesEnabled: false,
+      managedFeaturesEnabled: false,
       loadFailed: { failures.append(($0, $1)) }, loadSucceeded: {}, pushServerPicker: {},
       requestSwitchServer: { _ in }, openServerSetup: {})
     let coordinator = view.makeCoordinator()
@@ -70,7 +70,7 @@ final class ConnectionErrorTests: XCTestCase {
     for enabled in [true, false] {
       coordinator.parent = OmnigentWebView(
         initialURL: url, model: view.model, settings: view.settings,
-        databricksInternalFeaturesEnabled: enabled,
+        managedFeaturesEnabled: enabled,
         loadFailed: view.loadFailed, loadSucceeded: {}, pushServerPicker: {},
         requestSwitchServer: { _ in }, openServerSetup: {})
       coordinator.webView(webView, didFailProvisionalNavigation: nil, withError: error)
@@ -93,7 +93,7 @@ final class ConnectionErrorTests: XCTestCase {
 
   private func message(for error: Error, enabled: Bool) -> String {
     OmnigentWebView.connectionErrorMessage(
-      for: error, databricksInternalFeaturesEnabled: enabled)
+      for: error, managedFeaturesEnabled: enabled)
   }
 }
 

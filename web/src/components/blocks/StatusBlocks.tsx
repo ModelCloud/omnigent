@@ -37,7 +37,7 @@ import { shortModelName } from "@/components/CostRoutingControl";
 import { DisabledActionTooltip } from "@/components/DisabledActionTooltip";
 import { useScopedConversationId } from "@/components/chat/conversationScope";
 import { copyText } from "@/lib/clipboard";
-import { getSessionSignInLink } from "@/lib/sessionsApi";
+import { getSessionSignInLink, SIGN_IN_EXPIRED_CODE } from "@/lib/sessionsApi";
 import { useChatStore } from "@/store/chatStore";
 import { useForkDialog } from "@/shell/ForkDialogContext";
 import type { RelatedRenderError, RenderErrorDetails } from "@/lib/renderItems";
@@ -287,6 +287,18 @@ function ErrorForkAction({
 }
 
 /**
+ * Reload the top frame, so a sign-in that expired inside an embed is renewed by
+ * the page that owns it. Falls back to this frame when the top is cross-origin.
+ */
+function reloadTopLevelPage(): void {
+  try {
+    (window.top ?? window).location.reload();
+  } catch {
+    window.location.reload();
+  }
+}
+
+/**
  * Centered destructive pill for `error` blocks: a truncated headline row over
  * a dashed rule; the whole pill toggles the expanded message body.
  *
@@ -366,7 +378,24 @@ export function ErrorBanner({
   const [signInBusy, setSignInBusy] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
-  const [dismissed, setDismissed] = useState(false);
+  const dismissalKey = itemId ? `omnigent:dismissed-error:${itemId}` : null;
+  const [dismissed, setDismissed] = useState(() => {
+    try {
+      return dismissalKey !== null && window.localStorage.getItem(dismissalKey) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const dismiss = () => {
+    if (dismissalKey !== null) {
+      try {
+        window.localStorage.setItem(dismissalKey, "1");
+      } catch {
+        // Closing the banner still works when browser storage is unavailable.
+      }
+    }
+    setDismissed(true);
+  };
   const copyResetRef = useRef<number>(0);
   const retryInFlightRef = useRef(false);
   const dismissButtonRef = useRef<HTMLButtonElement>(null);
@@ -473,7 +502,7 @@ export function ErrorBanner({
     setRetryError(null);
     try {
       await onRetry(actionableError);
-      setDismissed(true);
+      dismiss();
     } catch (error) {
       retryInFlightRef.current = false;
       setRetryError(
@@ -571,13 +600,28 @@ export function ErrorBanner({
             aria-label={notice ? "Dismiss notice" : "Dismiss error message"}
             onClick={(event) => {
               event.stopPropagation();
-              setDismissed(true);
+              dismiss();
             }}
             className="size-6 shrink-0 rounded-[var(--control-radius,var(--radius-lg))] text-muted-foreground hover:bg-muted hover:text-foreground"
           >
             <XIcon className="size-4" aria-hidden="true" />
           </Button>
         </div>
+        {code === SIGN_IN_EXPIRED_CODE ? (
+          <div className="mx-[4px] mt-[8px] flex">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={(event) => {
+                event.stopPropagation();
+                reloadTopLevelPage();
+              }}
+            >
+              Reload page
+            </Button>
+          </div>
+        ) : null}
         {workspaceMissing ? (
           <ErrorForkAction
             label="Continue in another directory…"

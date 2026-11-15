@@ -991,15 +991,21 @@ def build_native_controls(
             )
         return JSONResponse(status_code=200, content={"approval_mode": preset.value})
 
-    async def _codex_native_model_options(conv_id: str) -> list[_JsonObject]:
+    async def _codex_native_model_options(
+        conv_id: str, *, retry_unreachable: bool = True
+    ) -> list[_JsonObject]:
         from omnigent.harnesses.codex_native.app_server import (
             client_for_transport,
             list_codex_model_options,
             mark_launch_default,
         )
-        from omnigent.harnesses.codex_native.bridge import read_codex_home_config_model
+        from omnigent.harnesses.codex_native.bridge import (
+            bridge_dir_for_codex_home,
+            read_codex_home_config_model,
+        )
+        from omnigent.runner.native.orchestration import _AUTO_CODEX_APP_SERVERS
 
-        state = await _codex_native_bridge_state_for_session(
+        state, bridge_dir = await _codex_native_bridge_state_and_dir_for_session(
             conv_id,
             action="model options",
             missing_state_log_level=logging.DEBUG,
@@ -1007,12 +1013,41 @@ def build_native_controls(
         if state is None:
             raise _CodexNativeModelOptionsNotReady("Codex-native model options are not ready yet.")
 
+        # Idle reaping closes the native pane and its app-server, but the bridge
+        # file can still name the old listener. Recreate the pane before using
+        # that address. The readiness helper serializes with the idle reaper.
+        registry = resource_registry.terminal_registry
+        if registry is not None and registry.get(conv_id, "codex", "main") is None:
+            state = await _ready_codex_bridge_for_settings(conv_id)
+            if state is None:
+                raise _CodexNativeModelOptionsNotReady(
+                    "Codex-native model options are not ready yet."
+                )
+            bridge_dir = bridge_dir_for_codex_home(Path(state.codex_home))
+
         codex_client = client_for_transport(
             state.socket_path,
             client_name="omnigent-codex-native-runner",
         )
+        failed_backend = _AUTO_CODEX_APP_SERVERS.get(conv_id)
         try:
-            await codex_client.connect()
+            try:
+                await codex_client.connect()
+            except (ConnectionRefusedError, FileNotFoundError):
+                if not retry_unreachable:
+                    raise
+                # Only retire the same stopped, owned launch. Its replacement and
+                # the one catalog retry share a single recovery budget.
+                async with asyncio.timeout(_CODEX_SETTINGS_READY_TIMEOUT_S):
+                    if not await _close_unreachable_owned_codex(
+                        conv_id, state, bridge_dir, failed_backend
+                    ):
+                        raise
+                    if await _ready_codex_bridge_for_settings(conv_id) is None:
+                        raise _CodexNativeModelOptionsNotReady(
+                            "Codex-native model options are not ready yet."
+                        ) from None
+                    return await _codex_native_model_options(conv_id, retry_unreachable=False)
             rows = await list_codex_model_options(codex_client)
         finally:
             with contextlib.suppress(Exception):

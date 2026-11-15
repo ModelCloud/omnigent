@@ -1,3 +1,6 @@
+const SYNTHETIC_WORKSPACE_URL =
+  "https://synthetic-security-fixture-0000000000000000.cloud.databricks.com/";
+
 // Tests for the shared desktop URL helpers (src/url.js), run with
 // `node --test` (no extra deps). Covers the scheme-defaulting that lets a
 // pasted workspace URL (including paths copied from the browser) connect, the
@@ -44,8 +47,8 @@ describe("defaultSchemeFor", () => {
 describe("normalizeUrl", () => {
   it("defaults a schemeless workspace URL to https and removes its path", () => {
     assert.equal(
-      normalizeUrl("dbc-a5d4177a-49dc.cloud.databricks.com/omnigent"),
-      "https://dbc-a5d4177a-49dc.cloud.databricks.com/",
+      normalizeUrl(`${new URL(SYNTHETIC_WORKSPACE_URL).host}/omnigent`),
+      SYNTHETIC_WORKSPACE_URL,
     );
   });
 

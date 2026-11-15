@@ -15,7 +15,7 @@ import ManagedApp
 /// code below, so treat them as API.
 struct OmnigentManagedConfiguration: Decodable, Equatable {
   private(set) var serverURLs: [URL]
-  private(set) var databricksInternalFeaturesEnabled: Bool
+  private(set) var managedFeaturesEnabled: Bool
 
   static let empty = OmnigentManagedConfiguration(serverURLs: [])
 
@@ -28,15 +28,15 @@ struct OmnigentManagedConfiguration: Decodable, Equatable {
     case databricksInternalFeaturesEnabled
   }
 
-  init(serverURLs: [URL], databricksInternalFeaturesEnabled: Bool = false) {
+  init(serverURLs: [URL], managedFeaturesEnabled: Bool = false) {
     self.serverURLs = serverURLs
-    self.databricksInternalFeaturesEnabled = databricksInternalFeaturesEnabled
+    self.managedFeaturesEnabled = managedFeaturesEnabled
   }
 
   init(from decoder: Decoder) throws {
     let values = try decoder.container(keyedBy: CodingKeys.self)
     // Only a boolean true opts in; malformed flags must not discard valid servers.
-    databricksInternalFeaturesEnabled =
+    managedFeaturesEnabled =
       (try? values.decode(Bool.self, forKey: .databricksInternalFeaturesEnabled)) ?? false
 
     // The key is optional: a configuration that sets nothing is valid and
@@ -83,7 +83,7 @@ struct OmnigentManagedConfiguration: Decodable, Equatable {
     Self(
       serverURLs: ManagedServers.resolve(
         declarative: declarative?.serverURLs ?? [], legacy: legacy.serverURLs),
-      databricksInternalFeaturesEnabled: (declarative ?? legacy).databricksInternalFeaturesEnabled
+      managedFeaturesEnabled: (declarative ?? legacy).managedFeaturesEnabled
     )
   }
 

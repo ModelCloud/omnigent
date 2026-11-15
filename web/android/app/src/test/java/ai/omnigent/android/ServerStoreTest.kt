@@ -14,6 +14,8 @@ import org.robolectric.annotation.Config
 import org.robolectric.shadow.api.Shadow
 import org.robolectric.shadows.ShadowRestrictionsManager
 
+private const val SYNTHETIC_WORKSPACE_URL = "https://synthetic-security-fixture-0000000000000000.cloud.databricks.com/"
+
 /** Precedence between a user's stored server and organization presets. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
@@ -93,15 +95,15 @@ class ServerStoreTest {
     fun `a databricks workspace connects to its omnigent mount`() {
         val store = storeWithPresets()
 
-        store.connect("https://dbc-a5d4177a-49dc.cloud.databricks.com")
+        store.connect(SYNTHETIC_WORKSPACE_URL.removeSuffix("/"))
 
         assertEquals(
-            "https://dbc-a5d4177a-49dc.cloud.databricks.com/omnigent",
+            SYNTHETIC_WORKSPACE_URL + "omnigent",
             store.currentServerUrl(),
         )
         // The offered entry stays what the user typed.
         assertEquals(
-            listOf("https://dbc-a5d4177a-49dc.cloud.databricks.com"),
+            listOf(SYNTHETIC_WORKSPACE_URL.removeSuffix("/")),
             store.recentServers(),
         )
     }

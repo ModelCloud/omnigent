@@ -31,6 +31,7 @@ CODEX_BUILTIN_PROVIDERS = frozenset(
         "lmstudio",
         "openrouter",
         "lithos",
+        "wafer",
     }
 )
 _CODEX_AUTH_HEADER_NAMES = frozenset({"authorization", "api-key", "x-api-key"})
@@ -93,7 +94,7 @@ def effective_self_sufficient_builtin_provider(config: dict[str, object]) -> str
     """Return the selected built-in provider id when Codex needs no login for it.
 
     Every built-in provider except ``openai`` (Bedrock, Ollama, LM Studio,
-    OpenRouter, Lithos) authenticates itself, mirroring
+    OpenRouter, Lithos, Wafer) authenticates itself, mirroring
     :func:`codex_config_effective_auth`. The gateway providers need a
     configured credential: with no ``experimental_bearer_token`` (or other
     self-contained auth) in their table they serve no authenticated requests.
@@ -101,7 +102,7 @@ def effective_self_sufficient_builtin_provider(config: dict[str, object]) -> str
     provider_id = effective_codex_model_provider(config)
     if provider_id not in CODEX_BUILTIN_PROVIDERS or provider_id == "openai":
         return None
-    if provider_id in {"openrouter", "lithos"}:
+    if provider_id in {"openrouter", "lithos", "wafer"}:
         providers = config.get("model_providers")
         table = providers.get(provider_id) if isinstance(providers, dict) else None
         if not isinstance(table, dict) or not provider_table_has_self_contained_auth(table):
@@ -221,9 +222,9 @@ def codex_config_effective_auth(
       considers provider-specific auth sufficient or unnecessary.
 
     Built-in provider definitions in ``[model_providers]`` are ignored here,
-    matching Codex's catalog merge, except OpenRouter/Lithos credential
-    overrides and Bedrock's endpoint/auth overrides. For example, Ollama needs no
-    credential; Bedrock may still fail later if its AWS credential chain is
+    matching Codex's catalog merge, except gateway credentials and Bedrock's
+    endpoint/auth overrides. For example, Ollama needs no credential; Bedrock
+    may still fail later if its AWS credential chain is
     unavailable, which is intentionally outside this local status check.
 
     ``requires_openai_auth`` intentionally wins over ``env_key`` when both are
@@ -244,13 +245,17 @@ def codex_config_effective_auth(
     # Configured entries cannot replace the built-in OpenAI, Ollama, or LM
     # Studio providers. Bedrock accepts only limited endpoint/auth overrides;
     # none changes whether it requires Codex login.
-    if provider_id in CODEX_BUILTIN_PROVIDERS and provider_id not in {"openrouter", "lithos"}:
+    if provider_id in CODEX_BUILTIN_PROVIDERS and provider_id not in {
+        "openrouter",
+        "lithos",
+        "wafer",
+    }:
         return "codex-login" if provider_id == "openai" else "provider-ready"
 
     providers = config.get("model_providers")
     configured_table = providers.get(provider_id) if isinstance(providers, dict) else None
     table = configured_table if isinstance(configured_table, dict) else None
-    if provider_id in {"openrouter", "lithos"}:
+    if provider_id in {"openrouter", "lithos", "wafer"}:
         table = dict(table or {})
         if provider_table_has_self_contained_auth(table):
             return "provider-ready"

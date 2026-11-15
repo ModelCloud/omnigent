@@ -54,13 +54,42 @@ def test_canonical_models_materialize_the_native_alias_table(model, expected_id)
     tables = tomllib.loads(multidex_provider_config_overrides(config)[0])["model_providers"]
     assert set(tables) == {expected_id}
     assert tables[expected_id]["base_url"] == registration.base_url
-    if expected_id in {"openrouter", "lithos"}:
+    if expected_id == "wafer":
+        assert set(tables[expected_id]) == {"base_url", "experimental_bearer_token"}
+        assert tables[expected_id]["experimental_bearer_token"] == "test-token"
+        assert multidex_provider_env_keys(config) == ()
+    elif expected_id in {"openrouter", "lithos"}:
         assert set(tables[expected_id]) <= MULTIDEX_BUILTIN_PROVIDER_OVERRIDE_FIELDS
         assert tables[expected_id]["auth"]["args"][-1] == "printf %s test-token"
         assert multidex_provider_env_keys(config) == (f"{expected_id.upper()}_API_KEY",)
     else:
         assert tables[expected_id]["experimental_bearer_token"] == "test-token"
         assert tables[expected_id]["supports_responses_continuation"] is True
+
+
+def test_wafer_registers_one_standard_deepseek_model_with_speed(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "[model_providers.wafer]\n"
+        'base_url = "https://us.pass.wafer.ai/v1"\n'
+        'experimental_bearer_token = "test-token"\n',
+        encoding="utf-8",
+    )
+    models_path = tmp_path / "models.toml"
+    models_path.write_text("[models]\n", encoding="utf-8")
+    config = load_multidex_config(config_path, models_path=models_path)
+    rows = with_multidex_model_picker_row([], config)
+    assert len(rows) == 1
+    assert rows[0]["id"] == "DeepSeek-V4.1-Flash-1017"
+    assert rows[0]["modelFamily"] == "ds-v4.1-flash-1017"
+    assert rows[0]["providerId"] == "wafer"
+    assert rows[0]["variant"] == "regular"
+    assert rows[0]["speed"] == 1.0
+    provider = tomllib.loads(multidex_provider_config_overrides(config)[0])["model_providers"][
+        "wafer"
+    ]
+    assert provider["experimental_bearer_token"] == "test-token"
+    assert set(provider) == {"base_url", "experimental_bearer_token"}
 
 
 @pytest.mark.parametrize("explicit_fast", [False, True])
