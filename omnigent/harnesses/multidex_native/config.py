@@ -24,20 +24,34 @@ from urllib.parse import quote, urlparse
 
 import httpx
 
-from omnigent.models.model_fallbacks import MULTIDEX_DEEPSEEK_LITHOS, MULTIDEX_DEEPSEEK_OPENROUTER
+from omnigent.models.model_fallbacks import (
+    MULTIDEX_DEEPSEEK_DEEPINFRA,
+    MULTIDEX_DEEPSEEK_LITHOS,
+    MULTIDEX_DEEPSEEK_OPENROUTER,
+)
 
 MULTIDEX_CONFIG_ROOT = Path.home() / ".local" / "share" / "multidex"
 MULTIDEX_CONFIG_PATH = MULTIDEX_CONFIG_ROOT / "config.toml"
 MULTIDEX_MODELS_PATH = MULTIDEX_CONFIG_ROOT / "models.toml"
 MULTIDEX_BINARY = Path.home() / ".local" / "bin" / "codex"
 
+# Codex counts the parent in V2's total. V1 counts only child agents.
+MULTIDEX_SUBAGENT_CONFIG_OVERRIDES = (
+    "features.multi_agent_v2.max_concurrent_threads_per_session=9",
+    "agents.max_concurrent_threads_per_session=8",
+)
+
 MULTIDEX_MODEL = "DS v4.1 Flash 1017"
 WAFER_MODEL = "DeepSeek-V4.1-Flash-1017"
 WAFER_US_BASE_URL = "https://us.pass.wafer.ai/v1"
+DEEPINFRA_BASE_URL = "https://api.deepinfra.com/v1/openai"
+DEEPINFRA_FLEX_MODEL, DEEPINFRA_PRIORITY_MODEL = MULTIDEX_DEEPSEEK_DEEPINFRA.model_ids
 DEEPSEEK_MODEL_LABEL = "DeepSeek v4.1 Flash"
 DEEPSEEK_SELECTOR_MODELS = {
     MULTIDEX_MODEL: ("multidex", "regular"),
     WAFER_MODEL: ("wafer", "regular"),
+    DEEPINFRA_FLEX_MODEL: ("deepinfra", "flex"),
+    DEEPINFRA_PRIORITY_MODEL: ("deepinfra", "priority"),
     **dict.fromkeys(MULTIDEX_DEEPSEEK_OPENROUTER.model_ids, ("openrouter", "regular")),
     **{
         model: ("lithos", variant)
@@ -74,7 +88,7 @@ MULTIDEX_BUILTIN_PROVIDER_OVERRIDE_FIELDS = frozenset(
 )
 
 # Built-in gateway providers accept only the limited override fields above.
-MULTIDEX_BUILTIN_PROVIDER_IDS = frozenset({"openrouter", "lithos", "wafer"})
+MULTIDEX_BUILTIN_PROVIDER_IDS = frozenset({"openrouter", "lithos", "wafer", "deepinfra"})
 
 # The variable older MultiDex builds read a built-in gateway's bearer from.
 #
@@ -130,11 +144,13 @@ def multidex_model_picker_row(
     }
     if model.model not in DEEPSEEK_SELECTOR_MODELS and model.model_family != "ds-v4.1-flash-1017":
         return row
-    if model.model == WAFER_MODEL:
+    if model.model == WAFER_MODEL or model.model == DEEPINFRA_FLEX_MODEL:
         row["speed"] = 1.0
+    elif model.model == DEEPINFRA_PRIORITY_MODEL:
+        row["speed"] = 1.1
     row.update(
         {
-            "defaultReasoningEffort": "max",
+            "defaultReasoningEffort": "high",
             "supportedReasoningEfforts": [
                 {
                     "reasoningEffort": "none",
@@ -155,6 +171,14 @@ def multidex_model_picker_row(
             ],
         }
     )
+    if model.provider == "deepinfra":
+        levels = row["supportedReasoningEfforts"]
+        assert isinstance(levels, list)
+        levels[0] = {"reasoningEffort": "none", "description": "Disable thinking"}
+        levels.insert(
+            2,
+            {"reasoningEffort": "medium", "description": "Balanced reasoning depth"},
+        )
     return row
 
 
@@ -197,17 +221,22 @@ def with_multidex_model_picker_row(
             row["displayName"] = item.display_name
         if family == "ds-v4.1-flash-1017" and config is not None:
             fallback = multidex_model_picker_row(config, item)
-            if item.model == MULTIDEX_MODEL:
+            if item.model == MULTIDEX_MODEL or item.provider == "deepinfra":
                 row.update(fallback)
             else:
                 for key, value in fallback.items():
                     row.setdefault(key, value)
+        if family == "ds-v4.1-flash-1017":
+            # Host catalogs from older MultiDex builds may still say Max.
+            row["defaultReasoningEffort"] = "high"
         if item.model == MULTIDEX_MODEL:
             row["isDefault"] = True
         if family == "ds-v4.1-flash-1017":
             row["displayName"] = DEEPSEEK_MODEL_LABEL
-        if item.model == WAFER_MODEL:
+        if item.model == WAFER_MODEL or item.model == DEEPINFRA_FLEX_MODEL:
             row["speed"] = 1.0
+        elif item.model == DEEPINFRA_PRIORITY_MODEL:
+            row["speed"] = 1.1
         if any(
             source.get("isDefault") is True
             and (source.get("id") == item.model or source.get("model") == item.model)
@@ -233,8 +262,11 @@ def with_multidex_model_picker_row(
                     "variant": variant,
                 }
             )
-            if model_id == WAFER_MODEL:
+            if model_id in (WAFER_MODEL, DEEPINFRA_FLEX_MODEL):
                 row["speed"] = 1.0
+            elif model_id == DEEPINFRA_PRIORITY_MODEL:
+                row["speed"] = 1.1
+            row["defaultReasoningEffort"] = "high"
     if any(row.get("isDefault") is True for row in registered_rows):
         for row in remaining_rows:
             row.pop("isDefault", None)
@@ -407,7 +439,7 @@ def multidex_provider_config_overrides(config: MultiDexConfig) -> tuple[str, ...
             # token through a command and drop every other non-default field.
             # Older builds still resolve their default ``env_key`` first; the
             # launcher forwards that variable alongside this table.
-            if runtime_id == "wafer":
+            if runtime_id in {"wafer", "deepinfra"}:
                 provider_config.pop("auth", None)
                 provider_config.pop("wire_api", None)
                 provider_config.pop("requires_openai_auth", None)
@@ -500,6 +532,20 @@ def load_multidex_config(
                 "variant": "regular",
             },
         )
+    if isinstance(providers.get("deepinfra"), dict):
+        for model_id, variant in (
+            (DEEPINFRA_FLEX_MODEL, "flex"),
+            (DEEPINFRA_PRIORITY_MODEL, "priority"),
+        ):
+            declared_models.setdefault(
+                model_id,
+                {
+                    "provider": "deepinfra",
+                    "model_family": "ds-v4.1-flash-1017",
+                    "model_label": DEEPSEEK_MODEL_LABEL,
+                    "variant": variant,
+                },
+            )
     if not declared_models:
         raise ValueError("MultiDex models.toml requires [models.<model-id>] entries")
 
@@ -526,6 +572,13 @@ def load_multidex_config(
         if provider_name == "wafer" and (provider is None or isinstance(provider, dict)):
             provider = {
                 "base_url": WAFER_US_BASE_URL,
+                "wire_api": "responses",
+                "requires_openai_auth": False,
+                **(provider or {}),
+            }
+        if provider_name == "deepinfra" and (provider is None or isinstance(provider, dict)):
+            provider = {
+                "base_url": DEEPINFRA_BASE_URL,
                 "wire_api": "responses",
                 "requires_openai_auth": False,
                 **(provider or {}),
@@ -561,6 +614,8 @@ def load_multidex_config(
             raise ValueError(f"MultiDex provider {provider_name!r} base_url must be HTTP(S)")
         if provider_name == "wafer" and base_url.rstrip("/") != WAFER_US_BASE_URL:
             raise ValueError("MultiDex Wafer provider must use the US endpoint")
+        if provider_name == "deepinfra" and base_url.rstrip("/") != DEEPINFRA_BASE_URL:
+            raise ValueError("MultiDex DeepInfra provider must use the DeepInfra API endpoint")
         parsed = urlparse(base_url)
         if (
             parsed.scheme not in {"http", "https"}

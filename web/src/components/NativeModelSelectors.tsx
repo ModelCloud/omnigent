@@ -16,11 +16,14 @@ const labels: Record<string, string> = {
   multidex: "Local",
   openrouter: "OpenRouter",
   wafer: "Wafer",
+  deepinfra: "DeepInfra",
   lithos: "Lithos",
   openai: "OpenAI",
   regular: "Regular",
   fast: "Fast",
   ultra: "Ultra",
+  flex: "Flex",
+  priority: "Priority",
   off: "Off",
   none: "Off",
   low: "Low",
@@ -111,7 +114,7 @@ export function NativeModelSelectors({
   ];
   const family = effectiveSelected ? familyId(effectiveSelected) : undefined;
   const familyRows = options.filter((row) => familyId(row) === family);
-  const providerOrder = ["multidex", "wafer", "openrouter", "lithos"];
+  const providerOrder = ["multidex", "wafer", "deepinfra", "openrouter", "lithos"];
   const providers = [...new Set(familyRows.map(providerId))].sort((a, b) => {
     const rank = (id: string) => {
       const index = providerOrder.indexOf(id);
@@ -232,7 +235,7 @@ export function NativeModelSelectors({
         "Provider",
         provider,
         providers.map((v) => [v, labels[v] ?? v]),
-        (v) => family && choose(family, v),
+        (v) => family && choose(family, v, v === "deepinfra" ? "flex" : undefined),
         healthByProvider,
         speedByProvider,
       )}

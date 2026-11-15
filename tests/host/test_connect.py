@@ -8754,7 +8754,7 @@ async def test_handle_model_options_serves_multidex_from_the_native_codex_catalo
     assert result.models[0]["model"] == "DS v4.1 Flash 1017"
     assert result.models[0]["displayName"] == "DeepSeek v4.1 Flash"
     assert result.models[0]["isDefault"] is True
-    assert result.models[0]["defaultReasoningEffort"] == "max"
+    assert result.models[0]["defaultReasoningEffort"] == "high"
     assert result.models[0]["supportedReasoningEfforts"][0]["reasoningEffort"] == "none"
     assert result.routable_models == ["DS v4.1 Flash 1017", "gpt-5.6"]
     _cleanup_host(host)

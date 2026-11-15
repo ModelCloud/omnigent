@@ -94,6 +94,7 @@ def test_preload_codex_thread_for_resume_manages_subscription(
                 'approvals_reviewer="auto_review"',
             ],
             retain_client=retain_client,
+            model="DS v4.1 Flash 1017",
             model_provider=model_provider,
         )
     )
@@ -105,6 +106,7 @@ def test_preload_codex_thread_for_resume_manages_subscription(
             {
                 "threadId": "019e96aa-0be2-7343-8d3b-6f914d60936b",
                 "excludeTurns": True,
+                "model": "DS v4.1 Flash 1017",
                 "permissions": ":danger-full-access",
                 "approvalPolicy": "never",
                 "approvalsReviewer": "auto_review",

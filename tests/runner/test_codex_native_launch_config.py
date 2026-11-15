@@ -338,6 +338,50 @@ async def test_complete_envelope_avoids_timed_out_metadata_read(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("use_envelope", [False, True])
+async def test_cold_resume_uses_last_reported_model_with_its_variant(
+    use_envelope: bool,
+) -> None:
+    """The native terminal's confirmed pick survives a host restart."""
+    snapshot = {
+        "workspace": "/tmp/repo",
+        "model_override": "gpt-6-sol",
+        "reported_model": "deepinfra/deepseek-v4.1-flash-1017-priority",
+        "reasoning_effort": "high",
+        "external_session_id": "thread_prior",
+    }
+    client = _Client(_Resp(200, snapshot))
+    envelope = parse_runner_session_init_envelope(_init_payload(snapshot))
+    cfg = await _codex_native_launch_config(
+        session_id="conv_1",
+        server_client=client,
+        session_init=envelope if use_envelope else None,
+    )
+    assert cfg.model_override == "deepinfra/deepseek-v4.1-flash-1017-priority"
+    assert cfg.reasoning_effort == "high"
+    assert cfg.external_session_id == "thread_prior"
+
+
+@pytest.mark.asyncio
+async def test_fresh_session_keeps_requested_model_over_old_report() -> None:
+    """A fresh launch uses the explicit web pick, not an unrelated old report."""
+    cfg = await _run(
+        _Client(
+            _Resp(
+                200,
+                {
+                    "workspace": "/tmp/repo",
+                    "model_override": "DS v4.1 Flash 1017",
+                    "reported_model": "gpt-6-sol",
+                    "external_session_id": None,
+                },
+            )
+        )
+    )
+    assert cfg.model_override == "DS v4.1 Flash 1017"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "missing",
     [
@@ -346,6 +390,7 @@ async def test_complete_envelope_avoids_timed_out_metadata_read(
         "workspace",
         "terminal_launch_args",
         "model_override",
+        "reported_model",
         "external_session_id",
         "reasoning_effort",
         "labels",

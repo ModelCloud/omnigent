@@ -716,6 +716,11 @@ async def test_multidex_install_preserves_nonlocal_codex_launch(
     assert 'model_provider="multidex"' not in build["extra_config_overrides"]
     assert "show_raw_agent_reasoning=true" in build["extra_config_overrides"]
     assert 'model_reasoning_summary="auto"' in build["extra_config_overrides"]
+    assert (
+        "features.multi_agent_v2.max_concurrent_threads_per_session=9"
+        in build["extra_config_overrides"]
+    )
+    assert "agents.max_concurrent_threads_per_session=8" in build["extra_config_overrides"]
     # The registered MultiDex key is available for an in-session model switch;
     # ordinary Codex routing remains on the resolved gateway provider.
     assert build["isolated_env_keys"] == ()
@@ -759,6 +764,11 @@ async def test_multidex_model_passes_only_declared_bearer_key(
     assert 'model_provider="multidex"' in build["extra_config_overrides"]
     assert "show_raw_agent_reasoning=true" in build["extra_config_overrides"]
     assert 'model_reasoning_summary="none"' in build["extra_config_overrides"]
+    assert (
+        "features.multi_agent_v2.max_concurrent_threads_per_session=9"
+        in build["extra_config_overrides"]
+    )
+    assert "agents.max_concurrent_threads_per_session=8" in build["extra_config_overrides"]
     assert 'model_reasoning_summary="auto"' not in build["extra_config_overrides"]
 
 

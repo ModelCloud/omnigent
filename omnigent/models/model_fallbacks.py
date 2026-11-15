@@ -42,6 +42,20 @@ MULTIDEX_DEEPSEEK_LITHOS = StaticModelFallback(
     discovery_gap="Lithos lists IDs without family, revision, speed or reasoning metadata",
 )
 
+MULTIDEX_DEEPSEEK_DEEPINFRA = StaticModelFallback(
+    model_ids=(
+        "deepinfra/deepseek-v4.1-flash-1017-flex",
+        "deepinfra/deepseek-v4.1-flash-1017-priority",
+    ),
+    owner="MultiDex native provider selector",
+    provenance=(
+        "DeepInfra /models and Responses probes for the 1017 checkpoint; MultiDex service-tier IDs"
+    ),
+    discovery_gap=(
+        "the wire catalog lists one checkpoint but does not identify selectable service tiers"
+    ),
+)
+
 
 # The gateway catalog does not yet describe whether thinking can be disabled.
 PI_ANTHROPIC_THINKING_REQUIRED = StaticModelFallback(

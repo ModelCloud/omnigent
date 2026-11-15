@@ -32,6 +32,7 @@ CODEX_BUILTIN_PROVIDERS = frozenset(
         "openrouter",
         "lithos",
         "wafer",
+        "deepinfra",
     }
 )
 _CODEX_AUTH_HEADER_NAMES = frozenset({"authorization", "api-key", "x-api-key"})
@@ -94,7 +95,7 @@ def effective_self_sufficient_builtin_provider(config: dict[str, object]) -> str
     """Return the selected built-in provider id when Codex needs no login for it.
 
     Every built-in provider except ``openai`` (Bedrock, Ollama, LM Studio,
-    OpenRouter, Lithos, Wafer) authenticates itself, mirroring
+    OpenRouter, Lithos, Wafer, DeepInfra) authenticates itself, mirroring
     :func:`codex_config_effective_auth`. The gateway providers need a
     configured credential: with no ``experimental_bearer_token`` (or other
     self-contained auth) in their table they serve no authenticated requests.
@@ -102,7 +103,7 @@ def effective_self_sufficient_builtin_provider(config: dict[str, object]) -> str
     provider_id = effective_codex_model_provider(config)
     if provider_id not in CODEX_BUILTIN_PROVIDERS or provider_id == "openai":
         return None
-    if provider_id in {"openrouter", "lithos", "wafer"}:
+    if provider_id in {"openrouter", "lithos", "wafer", "deepinfra"}:
         providers = config.get("model_providers")
         table = providers.get(provider_id) if isinstance(providers, dict) else None
         if not isinstance(table, dict) or not provider_table_has_self_contained_auth(table):
@@ -249,13 +250,14 @@ def codex_config_effective_auth(
         "openrouter",
         "lithos",
         "wafer",
+        "deepinfra",
     }:
         return "codex-login" if provider_id == "openai" else "provider-ready"
 
     providers = config.get("model_providers")
     configured_table = providers.get(provider_id) if isinstance(providers, dict) else None
     table = configured_table if isinstance(configured_table, dict) else None
-    if provider_id in {"openrouter", "lithos", "wafer"}:
+    if provider_id in {"openrouter", "lithos", "wafer", "deepinfra"}:
         table = dict(table or {})
         if provider_table_has_self_contained_auth(table):
             return "provider-ready"

@@ -1671,6 +1671,15 @@ def materialize_codex_provider_config(
             os.chmod(config_path, 0o600)
         return argv_overrides
 
+    if any(name == "multidex" or name.startswith("omnigent-multidex-") for name in providers):
+        # The provider-aware spawn and model resolver live on MultiAgent V2.
+        # Enable them only in the session-owned copy for a MultiDex registration.
+        features = document.get("features")
+        if features is None:
+            features = tomlkit.table()
+            document["features"] = features
+        features.setdefault("multi_agent_v2", True)
+
     for provider_name, effective_provider in gateway_providers.items():
         if provider_name in CODEX_BUILTIN_PROVIDERS:
             continue
@@ -1686,7 +1695,7 @@ def materialize_codex_provider_config(
     for provider_name, provider_config in list(providers.items()):
         if not isinstance(provider_config, MutableMapping):
             continue
-        if provider_name == "wafer":
+        if provider_name in {"wafer", "deepinfra"}:
             # Remove fields stamped into older private homes before Codex reads them.
             for key in tuple(provider_config):
                 if key not in {"base_url", "auth", "http_headers", "experimental_bearer_token"}:

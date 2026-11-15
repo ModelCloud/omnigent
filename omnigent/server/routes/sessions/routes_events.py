@@ -310,7 +310,7 @@ from omnigent.server.schemas import (
 from omnigent.server.session_live_state import handoff_count, last_liveness_stamp
 from omnigent.server.session_metadata_logging import log_session_metadata
 from omnigent.server.session_orchestration import require_orchestration_source
-from omnigent.server.startup_inputs import StartupDispatch, StartupInputContext
+from omnigent.server.startup_inputs import EventAck, StartupDispatch, StartupInputContext
 from omnigent.server.subagent_activity import (
     native_subagent_terminal_status,
     record_subagent_activity,
@@ -1063,7 +1063,7 @@ def register_events_routes(
         request: Request,
         session_id: str,
         body: SessionEventInput | list[SessionEventInput],
-    ) -> dict[str, Any] | list[dict[str, Any]]:
+    ) -> EventAck | list[EventAck]:
         """
         Route entry for :func:`_post_event_impl`.
 
@@ -1092,7 +1092,7 @@ def register_events_routes(
                 # per-append overhead outlasts that. Each run of batchable entries is
                 # authorized once and appended in one store call; every other entry
                 # keeps the per-entry path, in order.
-                acks: list[dict[str, Any]] = []
+                acks: list[EventAck] = []
                 for batchable, run in itertools.groupby(body, key=_is_batchable_external_item):
                     if not batchable:
                         for event in run:
@@ -1219,7 +1219,7 @@ def register_events_routes(
         session_id: str,
         body: SessionEventInput,
         in_flight: contextlib.ExitStack | None = None,
-    ) -> dict[str, Any]:
+    ) -> EventAck:
         """
         Submit a session event (input message, tool output,
         approval, or interrupt).

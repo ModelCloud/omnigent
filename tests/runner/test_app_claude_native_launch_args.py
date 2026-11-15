@@ -30,6 +30,7 @@ from omnigent.runner.app import _build_claude_native_base_args, _claude_terminal
 from omnigent.runner.identity import RUNNER_AUTH_SECRET_ENV_VARS
 from omnigent.runner.native.orchestration import (
     _ROUTED_SPAWN_ALLOWED_TOOLS,
+    _claude_launch_args_for_host_user,
     _claude_launch_metadata_from_envelope,
     _claude_launch_permission_mode,
     _load_claude_launch_metadata,
@@ -750,6 +751,36 @@ def test_claude_launch_permission_mode_logs_only_known_values(
     args: list[str], expected: str | None
 ) -> None:
     assert _claude_launch_permission_mode(args) == expected
+
+
+@pytest.mark.parametrize(
+    ("uid", "args", "expected"),
+    [
+        (0, ["--permission-mode", "bypassPermissions"], ["--permission-mode", "auto"]),
+        (
+            0,
+            ["--model", "opus", "--dangerously-skip-permissions"],
+            ["--model", "opus", "--permission-mode", "auto"],
+        ),
+        (0, ["--permission-mode", "auto"], ["--permission-mode", "auto"]),
+        (0, ["--permission-mode=bypassPermissions"], ["--permission-mode", "auto"]),
+        (0, ["--", "--dangerously-skip-permissions"], ["--", "--dangerously-skip-permissions"]),
+        (
+            1000,
+            ["--permission-mode", "bypassPermissions"],
+            ["--permission-mode", "bypassPermissions"],
+        ),
+        (0, None, None),
+    ],
+)
+def test_root_claude_launch_uses_supported_permission_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    uid: int,
+    args: list[str] | None,
+    expected: list[str] | None,
+) -> None:
+    monkeypatch.setattr(os, "geteuid", lambda: uid)
+    assert _claude_launch_args_for_host_user(args) == expected
 
 
 async def test_claude_launch_metadata_log_includes_permission_mode(

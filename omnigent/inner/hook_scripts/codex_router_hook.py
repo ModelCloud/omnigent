@@ -12,8 +12,8 @@ Stdlib-only and short-lived: ``PreToolUse`` blocks the spawn.
 The spawn ``message`` arrives in the hook payload in plaintext and is the
 only real routing signal — this codex's ``spawn_agent`` has no task-name
 field, so without it every spawn scores the same placeholder and lands the
-router's default arm. An explicit ``model`` in the spawn arguments is
-forwarded as ``requested_model`` so the server can honor an in-family ask.
+router's default arm. An explicit ``provider`` or ``model`` keeps the native
+MultiDex selection; independent reviewers also bypass Smart Routing.
 
 A rewrite echoes the rest of ``tool_input`` back untouched, but ``model``
 and ``reasoning_effort`` are both rewritten: codex validates each against
@@ -84,6 +84,15 @@ def is_spawn_agent_tool(tool_name: Any) -> bool:  # type: ignore[explicit-any]  
     if not isinstance(tool_name, str):
         return False
     return tool_name.strip().lower().endswith(SPAWN_AGENT_TOOL_SUFFIX)
+
+
+def should_route_spawn(tool_input: dict[str, Any]) -> bool:  # type: ignore[explicit-any]
+    """Preserve explicit model choices and independent review requests."""
+    explicitly_selected = any(
+        isinstance(tool_input.get(key), str) and tool_input[key].strip()
+        for key in ("provider", "model")
+    )
+    return not (explicitly_selected or tool_input.get("agent_type") == "reviewer")
 
 
 def spawn_model_translator(
@@ -188,6 +197,7 @@ def _payload_model(payload: dict[str, Any]) -> str | None:  # type: ignore[expli
 #: the ask is forwarded verbatim.
 ROUTE_SEAMS: dict[str, Any] = {  # type: ignore[explicit-any]  # route_pre_tool_use seams
     "tool_matcher": is_spawn_agent_tool,
+    "should_route": should_route_spawn,
     "task_keys": ("task_name", "agent_name"),
     "include_prompt": True,
     "prompt_keys": ("message",),

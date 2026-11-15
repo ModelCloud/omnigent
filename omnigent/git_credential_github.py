@@ -171,8 +171,9 @@ def configure_host_git(server_url: str, host_id: str) -> None:
     runs in every executor and holds ``$OMNIGENT_HOST_TOKEN``. When the owner has
     GitHub connected (the per-user Connect model), makes the broker the
     authoritative github.com ``credential.helper`` (fetching the owner's token
-    from the server per git op; never written to disk) and sets the commit author
-    to them. Best-effort: never raises (git may be absent, or GitHub not
+    from the server per git op; never written to disk). Commit identity remains
+    under the repository's local or user's global Git configuration. Best-effort:
+    never raises (git may be absent, or GitHub not
     configured on the server).
 
     Connected-gated, mirroring :func:`configure_clone_credentials`: a confirmed
@@ -202,11 +203,6 @@ def configure_host_git(server_url: str, host_id: str) -> None:
         _git_config("--unset-all", "credential.https://github.com.helper")
         return
     _install_broker_helper(server_url, host_id, token)
-    owner = str((data or {}).get("owner") or "")
-    if data and data.get("connected") and "@" in owner:
-        _git_config("user.email", owner)
-        login = data.get("login")
-        _git_config("user.name", str(login) if login else owner.split("@", 1)[0])
 
 
 def _gh_config_dir() -> Path:

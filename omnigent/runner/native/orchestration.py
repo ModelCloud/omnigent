@@ -1402,6 +1402,7 @@ async def _codex_native_launch_config(
         "workspace",
         "terminal_launch_args",
         "model_override",
+        "reported_model",
         "external_session_id",
         "reasoning_effort",
         "labels",
@@ -1443,6 +1444,22 @@ async def _codex_native_launch_config(
         not isinstance(external_session_id, str) or not external_session_id
     ):
         raise RuntimeError(f"Invalid external_session_id for Codex session {session_id!r}.")
+    # A model selected inside the native terminal is reported back to the
+    # server, but does not change the web pick (model_override). On a cold
+    # resume the last confirmed runtime model wins over that older pick and
+    # over the agent spec's default. A new session still uses the requested
+    # override, since no native thread has run yet.
+    reported_model = snapshot.get("reported_model")
+    if external_session_id is not None and isinstance(reported_model, str) and reported_model:
+        try:
+            model_override = validate_model_override(reported_model)
+        except ValueError:
+            _logger.warning(
+                "Ignoring invalid reported_model %r for Codex session %s",
+                reported_model,
+                session_id,
+                extra={"session_id": session_id},
+            )
     from omnigent.harnesses.codex_native.bridge import CODEX_NATIVE_BRIDGE_ID_LABEL_KEY
     from omnigent.util.reasoning_effort import CODEX_NATIVE_EFFORTS, validate_effort
 
@@ -5508,6 +5525,7 @@ async def _auto_create_codex_terminal(
     from omnigent.harnesses.multidex_native.config import (
         MULTIDEX_BINARY,
         MULTIDEX_MODEL,
+        MULTIDEX_SUBAGENT_CONFIG_OVERRIDES,
         load_multidex_config,
         multidex_model_for_selection,
         multidex_model_selected,
@@ -6139,6 +6157,11 @@ async def _auto_create_codex_terminal(
         ),
         extra_config_overrides=[
             *_multidex_provider_overrides,
+            *(
+                MULTIDEX_SUBAGENT_CONFIG_OVERRIDES
+                if _codex_cli_path == str(MULTIDEX_BINARY)
+                else ()
+            ),
             *_codex_launch.config_overrides,
             *_codex_reasoning_trace_overrides,
             *mcp_overrides,
@@ -6229,6 +6252,7 @@ async def _auto_create_codex_terminal(
                         launch_config.external_session_id,
                         terminal_launch_args=launch_config.terminal_launch_args,
                         cwd=Path(workspace),
+                        model=_codex_launch.model,
                         model_provider=(
                             _session_meta_provider
                             if native_codex_launch_pins_model_provider(_codex_launch)
@@ -9319,6 +9343,44 @@ def _claude_launch_permission_mode(args: list[str] | None) -> str | None:
     return candidate if candidate in _CLAUDE_LAUNCH_PERMISSION_MODES else None
 
 
+def _claude_launch_args_for_host_user(args: list[str] | None) -> list[str] | None:
+    """Use Claude's supported automatic mode when a root host requests bypass.
+
+    Claude Code exits before its terminal becomes interactive if root launches
+    with either bypass spelling. Preserve every other argument and let the
+    terminal's initial permission observation update the stored session mode.
+    """
+    options = list(args or ())
+    if "--" in options:
+        options = options[: options.index("--")]
+    if (
+        getattr(os, "geteuid", lambda: -1)() != 0
+        or _claude_launch_permission_mode(options) != "bypassPermissions"
+    ):
+        return args
+    source = list(args or ())
+    safe: list[str] = []
+    index = 0
+    while index < len(source):
+        arg = source[index]
+        if arg == "--":
+            safe.extend(source[index:])
+            break
+        if arg == "--dangerously-skip-permissions":
+            index += 1
+            continue
+        if arg == "--permission-mode" and index + 1 < len(source):
+            index += 2
+            continue
+        if arg.startswith("--permission-mode="):
+            index += 1
+            continue
+        safe.append(arg)
+        index += 1
+    _logger.warning("Claude Code rejects bypassPermissions under root; launching in auto mode")
+    return [*safe, "--permission-mode", "auto"]
+
+
 def _routed_spawn_launch_args(
     auto_harness: bool, *, router_started: bool = True
 ) -> tuple[str | None, tuple[str, ...]]:
@@ -9779,7 +9841,7 @@ async def _auto_create_claude_terminal(
     timings.mark("launch_metadata")
     session_effort = launch_metadata.reasoning_effort
     session_model_override = launch_metadata.model_override
-    session_launch_args = launch_metadata.terminal_launch_args
+    session_launch_args = _claude_launch_args_for_host_user(launch_metadata.terminal_launch_args)
     session_external_id = launch_metadata.external_session_id
     fork_source_external_id = launch_metadata.fork_source_external_id
     fork_carry_history = launch_metadata.fork_carry_history
