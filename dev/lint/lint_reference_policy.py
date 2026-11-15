@@ -250,7 +250,9 @@ def _synthetic_fixture_spans(text: str, path: str | None) -> set[tuple[int, int,
         return set()
     excluded = set()
     for node in ast.walk(tree):
-        transformed = isinstance(node, (ast.JoinedStr, ast.BinOp, ast.Subscript, ast.Attribute))
+        transformed = isinstance(
+            node, (ast.JoinedStr, ast.BinOp, ast.AugAssign, ast.Subscript, ast.Attribute)
+        )
         if isinstance(node, ast.Call):
             transformed = (
                 isinstance(node.func, ast.Name)

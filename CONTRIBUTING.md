@@ -178,7 +178,7 @@ the production trusted-origin shape may use only the two exact
 In `tests/**/test_*.py`, the exception covers HTTP/HTTPS URLs in standalone,
 unprefixed, unescaped string literals, including multiline fixture configurations and
 ordinary fixture-helper arguments. It excludes docstrings, f-strings, adjacent
-literals, binary operators, subscripting, literal receiver methods, and calls
+literals, binary operators, augmented assignments, subscripting, literal receiver methods, and calls
 to `str`, `bytes`, `bytearray`, `repr`, `ascii`, `format`, `format_map`, `replace`,
 `join`, `substitute` or `safe_substitute` (including qualified calls).
 Desktop `web/electron/test/**/*.test.js` and Android

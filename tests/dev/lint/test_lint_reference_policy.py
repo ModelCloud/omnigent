@@ -128,6 +128,8 @@ def test_synthetic_security_fixture_literals(host: str, scheme: str, multiline: 
         ("tests/test_gateway.py", 'endpoint = ("first"\n# {url}\n"last")'),
         ("tests/test_gateway.py", 'endpoint = "{url}" + suffix'),
         ("tests/test_gateway.py", 'endpoint = "{url}" % values'),
+        ("tests/test_gateway.py", 'endpoint = "prefix"\nendpoint += "{url}"'),
+        ("tests/test_gateway.py", 'endpoint = "prefix %s"\nendpoint %= "{url}"'),
         ("tests/test_gateway.py", 'endpoint = "{url}".format(path="x")'),
         ("tests/test_gateway.py", 'endpoint = str.format("{url}", path="x")'),
         ("tests/test_gateway.py", 'endpoint = "{url}".format_map(values)'),
