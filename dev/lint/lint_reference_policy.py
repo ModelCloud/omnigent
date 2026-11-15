@@ -297,7 +297,11 @@ def _synthetic_fixture_spans(text: str, path: str | None) -> set[tuple[int, int,
     literal_tokens = set()
     try:
         for token in tokenize.generate_tokens(io.StringIO(text).readline):
-            if token.type != tokenize.STRING or "\\" in token.string:
+            if (
+                token.type != tokenize.STRING
+                or "\\" in token.string
+                or not token.string.startswith(("'", '"'))
+            ):
                 continue
             first = (
                 token.start[0],
