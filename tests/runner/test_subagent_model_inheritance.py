@@ -161,6 +161,7 @@ async def test_child_inherits_confirmed_provider_variant_after_parent_switch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A stale web pick must not replace the native parent's live selection."""
+    _stub_worker_launchable(monkeypatch)
     bodies = await _dispatch_without_model(
         monkeypatch,
         agent_spec=_spec_with_worker("codex-native"),
