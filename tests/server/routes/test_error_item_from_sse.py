@@ -120,8 +120,8 @@ def test_response_failed_keeps_title_cause_and_remediation() -> None:
             "response": {
                 "error": {
                     "code": "databricks_sign_in_pending",
-                    "message": "Codex is waiting for a sign-in in this session's terminal.",
-                    "title": "Codex can't start until you sign in to Databricks",
+                    "message": "MultiDex is waiting for a sign-in in this session's terminal.",
+                    "title": "MultiDex can't start until you sign in to Databricks",
                     "remediation": (
                         "Open https://signin.example.com/device and enter code HQ7M-2KPD."
                     ),
@@ -133,7 +133,7 @@ def test_response_failed_keeps_title_cause_and_remediation() -> None:
     )
     assert item is not None
     assert isinstance(item.data, ErrorData)
-    assert item.data.title == "Codex can't start until you sign in to Databricks"
+    assert item.data.title == "MultiDex can't start until you sign in to Databricks"
     assert item.data.remediation is not None
     assert "HQ7M-2KPD" in item.data.remediation
     assert item.data.cause is None

@@ -7399,7 +7399,9 @@ def create_runner_app(
                     status_code=503,
                     content={
                         "error": "codex_side_chat_no_bridge",
-                        "detail": "Codex /side follow-up requires a loaded parent Codex bridge.",
+                        "detail": (
+                            "MultiDex /side follow-up requires a loaded parent MultiDex bridge."
+                        ),
                     },
                 )
             _side_client = client_for_transport(
@@ -7466,7 +7468,7 @@ def create_runner_app(
                     status_code=503,
                     content={
                         "error": "codex_side_chat_unavailable",
-                        "detail": "The Codex app-server connection was lost; try again.",
+                        "detail": "The MultiDex app-server connection was lost; try again.",
                     },
                 )
             finally:

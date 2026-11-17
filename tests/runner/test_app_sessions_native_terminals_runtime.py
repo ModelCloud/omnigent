@@ -798,7 +798,7 @@ async def test_auto_create_codex_terminal_uses_persisted_resume_launch_config(
                 id="terminal_codex_main",
                 type="terminal",
                 session_id=session_id,
-                name="Codex",
+                name="MultiDex",
             )
 
     published_events: list[dict[str, Any]] = []
@@ -1273,7 +1273,7 @@ async def test_auto_create_codex_terminal_fork_clones_rollout_and_resumes(
                 id="terminal_codex_main",
                 type="terminal",
                 session_id=session_id,
-                name="Codex",
+                name="MultiDex",
             )
 
     forward_calls: list[dict[str, Any]] = []
@@ -1572,7 +1572,7 @@ async def test_auto_create_codex_terminal_fork_builds_rollout_from_items_and_res
                 id="terminal_codex_main",
                 type="terminal",
                 session_id=session_id,
-                name="Codex",
+                name="MultiDex",
             )
 
     forward_calls: list[dict[str, Any]] = []
@@ -1849,7 +1849,7 @@ async def test_auto_create_codex_terminal_uses_worktree_workspace_not_bundle_dir
                 id="terminal_codex_main",
                 type="terminal",
                 session_id=session_id,
-                name="Codex",
+                name="MultiDex",
             )
 
     monkeypatch.setattr(
@@ -2069,7 +2069,7 @@ async def test_auto_create_codex_terminal_fresh_launch_loads_relaunch_graph(
                 id="terminal_codex_main",
                 type="terminal",
                 session_id=kwargs["session_id"],
-                name="Codex",
+                name="MultiDex",
             )
 
     async def _fake_discover_thread_and_forward(**kwargs: Any) -> None:
@@ -2322,7 +2322,7 @@ async def test_auto_create_codex_terminal_starts_relay_at_session_creation(
                 id="terminal_codex_main",
                 type="terminal",
                 session_id=session_id,
-                name="Codex",
+                name="MultiDex",
             )
 
     discover_calls: list[dict[str, Any]] = []
@@ -4199,7 +4199,7 @@ async def test_codex_known_thread_forwarder_marks_its_pane_for_replacement(
                 await operation
         slot_after = orchestration._AUTO_CODEX_APP_SERVERS.get(session_id)
         view = SessionResourceView(
-            id="terminal_codex_main", type="terminal", session_id=session_id, name="Codex"
+            id="terminal_codex_main", type="terminal", session_id=session_id, name="MultiDex"
         )
         reusable = orchestration._is_runner_owned_codex_terminal(_CodexPaneRegistry(), view)  # type: ignore[arg-type]
     finally:
@@ -4440,9 +4440,9 @@ async def test_codex_discover_thread_and_forward_records_accurate_startup_error(
             "dbexec: launcher 1.2.3\nSign in to continue:\n"
             "  https://signin.example.com/device\n  code: HQ7M-2KPD\nwaiting for sign-in...\n",
             "databricks_sign_in_pending",
-            "Codex can't start until you sign in to Databricks",
+            "MultiDex can't start until you sign in to Databricks",
         ),
-        ("Loading configuration...\n", "agent_startup_pending", "Codex is still starting"),
+        ("Loading configuration...\n", "agent_startup_pending", "MultiDex is still starting"),
     ],
 )
 @pytest.mark.asyncio
@@ -4758,7 +4758,7 @@ def test_codex_terminal_reuse_requires_a_live_backend_after_a_startup_failure(
             return CODEX_NATIVE_TERMINAL_ROLE if role == "codex-native" else None
 
     view = SessionResourceView(
-        id="terminal_codex_main", type="terminal", session_id=session_id, name="Codex"
+        id="terminal_codex_main", type="terminal", session_id=session_id, name="MultiDex"
     )
     if backend_alive:
         _AUTO_CODEX_APP_SERVERS[session_id] = object()  # type: ignore[assignment]
@@ -4863,7 +4863,7 @@ async def test_codex_discover_thread_and_forward_persists_workspace_as_bridge_cw
     _AUTO_CODEX_APP_SERVERS[session_id] = _AppServer()
     try:
         with (
-            pytest.raises(RuntimeError, match="Could not enable Codex Plan mode")
+            pytest.raises(RuntimeError, match="Could not enable MultiDex Plan mode")
             if plan_rejected
             else contextlib.nullcontext()
         ):
@@ -5230,7 +5230,7 @@ async def test_auto_create_codex_terminal_default_pin_requires_a_fresh_catalog(
                 id="terminal_codex_main",
                 type="terminal",
                 session_id=session_id,
-                name="Codex",
+                name="MultiDex",
             )
 
     monkeypatch.setattr(
@@ -5451,7 +5451,7 @@ async def test_auto_create_codex_terminal_accepts_gateway_spelled_override(
                 id="terminal_codex_main",
                 type="terminal",
                 session_id=session_id,
-                name="Codex",
+                name="MultiDex",
             )
 
     monkeypatch.setattr(
@@ -5546,7 +5546,7 @@ async def test_codex_tui_recovery_preserves_live_control_plane(
     cancel = AsyncMock()
     monkeypatch.setattr(native, "_cancel_auto_forwarder_task", cancel)
     fake_view = SessionResourceView(
-        id="terminal_codex_main", type="terminal", session_id=session_id, name="Codex"
+        id="terminal_codex_main", type="terminal", session_id=session_id, name="MultiDex"
     )
     launch_result = _CodexNativeTuiLaunch(fake_view, None, None)
     launch = AsyncMock(

@@ -127,7 +127,7 @@ def test_start_failure_log_row_is_blocking_with_derived_category(
     """Every start failure blocks; its owner comes from the exception, and an
     unrecognized one stays unknown rather than guessed."""
     with caplog.at_level(logging.WARNING, logger=orchestration._logger.name):
-        _native_terminal_start_error_payload(exc, "Codex", session_id="conv_1")
+        _native_terminal_start_error_payload(exc, "MultiDex", session_id="conv_1")
 
     [record] = [
         r
@@ -148,12 +148,12 @@ def test_generic_cause_names_errno_without_free_form_text() -> None:
     """
     payload = _native_terminal_start_error_payload(
         OSError(28, "No space left on device"),
-        "Codex",
+        "MultiDex",
         session_id="conv_1",
     )
 
     assert (
-        "Native Codex terminal failed to start (OSError errno 28 ENOSPC); "
+        "Native MultiDex terminal failed to start (OSError errno 28 ENOSPC); "
         "see the runner log for details:"
     ) in payload["message"]
     assert "No space left on device" not in payload["message"]
@@ -228,10 +228,10 @@ def test_codex_early_exit_with_unknown_status_does_not_invent_one(
     monkeypatch.setattr(instance, "last_exit_text", read_output)
 
     payload = _native_terminal_start_error_payload(
-        TerminalExitedDuringLaunch(instance), "Codex", session_id="conv_1"
+        TerminalExitedDuringLaunch(instance), "MultiDex", session_id="conv_1"
     )
 
-    assert "Codex terminal exited before becoming available." in payload["message"]
+    assert "MultiDex terminal exited before becoming available." in payload["message"]
     assert "with status" not in payload["message"]
     assert "Codex startup terminal output:" not in payload["message"]
     assert _ERROR_ID_RE.search(payload["message"]) is not None
@@ -253,10 +253,12 @@ def test_codex_early_exit_diagnostic_failure_preserves_exit_cause(
     monkeypatch.setattr(instance, "last_exit_text", read_output)
 
     payload = _native_terminal_start_error_payload(
-        TerminalExitedDuringLaunch(instance), "Codex", session_id="conv_1"
+        TerminalExitedDuringLaunch(instance), "MultiDex", session_id="conv_1"
     )
 
-    assert "Codex terminal exited with status 2 before becoming available." in payload["message"]
+    assert (
+        "MultiDex terminal exited with status 2 before becoming available." in payload["message"]
+    )
     assert "Codex startup terminal output:" not in payload["message"]
     assert "private diagnostic failure detail" not in payload["message"]
     read_output.assert_called_once_with()
@@ -295,9 +297,9 @@ def test_outdated_pi_cli_surfaces_its_actionable_message() -> None:
             ),
             "Claude",
         ),
-        (CodexTransportArgsError("app-server"), "Codex"),
-        (CodexModelProviderMissingError("Databricks", Path("/codex/config.toml")), "Codex"),
-        (_MODEL_OUTSIDE_ALLOWLIST, "Codex"),
+        (CodexTransportArgsError("app-server"), "MultiDex"),
+        (CodexModelProviderMissingError("Databricks", Path("/codex/config.toml")), "MultiDex"),
+        (_MODEL_OUTSIDE_ALLOWLIST, "MultiDex"),
     ],
 )
 def test_host_setup_error_surfaces_its_remedy(
@@ -440,7 +442,7 @@ def test_startup_failure_diagnostics_belong_to_failing_child(
     events: list[dict[str, object]] = []
     with caplog.at_level(logging.WARNING, logger="omnigent.runner.app"):
         payload = _publish_native_terminal_start_error(
-            lambda _session_id, event: events.append(event), "child-session", "Codex", exc
+            lambda _session_id, event: events.append(event), "child-session", "MultiDex", exc
         )
 
     assert len(events) == 1
@@ -458,7 +460,7 @@ def test_startup_failure_diagnostics_belong_to_failing_child(
     assert isinstance(attributes, dict)
     assert attributes["error_id"] == payload["error_id"]
     assert attributes["code"] == payload["code"]
-    assert attributes["runtime"] == "Codex"
+    assert attributes["runtime"] == "MultiDex"
     assert attributes["exception_type"] == type(exc).__name__
     assert private_detail not in str(attributes)
     assert private_detail not in payload["message"]
@@ -495,7 +497,7 @@ def test_ensure_response_and_diagnostic_share_error_and_session_ids(
     """The HTTP error's opaque ID locates its cause on the requested session."""
     with caplog.at_level(logging.WARNING, logger="omnigent.runner.app"):
         response = _native_terminal_start_error_response(
-            OSError("private launch path"), "Codex", session_id="ensured-session"
+            OSError("private launch path"), "MultiDex", session_id="ensured-session"
         )
 
     payload = json.loads(response.body)["error"]
@@ -548,7 +550,7 @@ def test_codex_pin_outside_model_allowlist_names_the_allowed_models() -> None:
             resolve_native_codex_launch(model=pinned_model)
 
     assert rejected.value.code == ErrorCode.INVALID_INPUT
-    payload = _native_terminal_start_error_payload(rejected.value, "Codex", session_id="conv_1")
+    payload = _native_terminal_start_error_payload(rejected.value, "MultiDex", session_id="conv_1")
     assert payload["code"] == ErrorCode.HARNESS_NOT_CONFIGURED
     assert payload["message"].startswith(
         f"Model {pinned_model!r} is not in the configured model list for 'codex-native'. "
@@ -575,7 +577,7 @@ def test_model_outside_allowlist_lists_models_that_fit_the_error_label(
 ) -> None:
     """The allowed list is shortened so the persisted label keeps the error ID."""
     exc = ModelNotAllowedError("system.ai.gpt-6-astra", "codex-native", allowed_models)
-    payload = _native_terminal_start_error_payload(exc, "Codex", session_id="conv_1")
+    payload = _native_terminal_start_error_payload(exc, "MultiDex", session_id="conv_1")
 
     assert payload["message"].startswith(
         f"{exc.message}. Allowed models: {expected_list}. Error ID: "
@@ -596,7 +598,7 @@ def test_model_outside_allowlist_message_keeps_its_start_up_to_the_label_width(
     )
     assert unpadded is not None
     exc = ModelNotAllowedError("x" * (message_len - len(unpadded)), "codex-native", ("model-a",))
-    message = _native_terminal_start_error_payload(exc, "Codex", session_id="conv_1")["message"]
+    message = _native_terminal_start_error_payload(exc, "MultiDex", session_id="conv_1")["message"]
 
     assert len(message) == payload_len
     assert message.startswith(kept_start)
@@ -625,7 +627,7 @@ def test_oversized_model_id_keeps_the_error_id_in_the_persisted_label(
 ) -> None:
     """An oversized model ID gives up the message's start, not its remedy or error ID."""
     exc = ModelNotAllowedError(rejected_model, "codex-native", allowed_models)
-    message = _native_terminal_start_error_payload(exc, "Codex", session_id="conv_1")["message"]
+    message = _native_terminal_start_error_payload(exc, "MultiDex", session_id="conv_1")["message"]
 
     assert _truncate_error_message_label(message) == message
     assert message.startswith("…")

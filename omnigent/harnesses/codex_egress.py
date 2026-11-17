@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from omnigent.harnesses.diagnostics import sanitize_diagnostic_text
 
 CERTIFICATE_FAILURE_CODE = "model_endpoint_certificate_rejected"
-CERTIFICATE_FAILURE_TITLE = "Codex can't reach its model endpoint"
+CERTIFICATE_FAILURE_TITLE = "MultiDex can't reach its model endpoint"
 CERTIFICATE_REMEDIATION = (
     "Renew the TLS certificate used to reach the model endpoint (on a Databricks "
     "laptop, run dbcert), then send your message again."
@@ -162,7 +162,7 @@ def connection_retry_detail(params: Mapping[str, object]) -> str:
         details = str(error.get("additionalDetails") or "").strip()
     text = ": ".join(part for part in (message, details) if part) or "no detail reported"
     text = " ".join(sanitize_diagnostic_text(text).split())[:_EVIDENCE_LIMIT]
-    return f"Codex is reconnecting to its model endpoint ({text})"
+    return f"MultiDex is reconnecting to its model endpoint ({text})"
 
 
 def certificate_failure_message(
@@ -182,9 +182,9 @@ def certificate_failure_message(
     """
     target = f" for {model}" if model else ""
     message = (
-        f"Codex could not connect to its model endpoint{target}: "
+        f"MultiDex could not connect to its model endpoint{target}: "
         f"{failure.cause} (stderr: {failure.evidence})."
     )
     if codex_error:
-        message = f"{message} Codex reported: {codex_error}"
+        message = f"{message} MultiDex reported: {codex_error}"
     return message

@@ -794,7 +794,7 @@ async def test_codex_subagent_child_routes_like_its_parent_across_replicas(
                 "type": "external_codex_subagent_start",
                 "data": {
                     "thread_id": "thr_worker_1",
-                    "agent_nickname": "Codex",
+                    "agent_nickname": "MultiDex",
                     "agent_role": "worker",
                     "prompt": "Investigate the flaky test",
                 },

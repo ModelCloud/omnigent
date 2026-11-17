@@ -1446,7 +1446,7 @@ def test_codex_legacy_databricks_profile_fails_without_broker_policy(
     _write_config(config_home, {})
     spec = _make_spec(harness="codex", model="some-model", profile="legacy-profile")
 
-    with pytest.raises(OmnigentError, match="ucode Codex state"):
+    with pytest.raises(OmnigentError, match="configured provider authentication state"):
         _build_codex_spawn_env(spec, workdir=None)
 
 
@@ -1462,7 +1462,7 @@ def test_legacy_profile_still_suppresses_global_default_provider(config_home: Pa
     _write_config(config_home, _openai_default_config())  # global default exists
     spec = _make_spec(harness="codex", model="some-model", profile="legacy-profile")
 
-    with pytest.raises(OmnigentError, match="ucode Codex state"):
+    with pytest.raises(OmnigentError, match="configured provider authentication state"):
         _build_codex_spawn_env(spec, workdir=None)
 
 

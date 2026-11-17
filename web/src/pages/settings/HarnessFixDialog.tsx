@@ -845,7 +845,9 @@ function DeviceCodeState({
       <div className="flex gap-3">
         <StepNumber>1</StepNumber>
         <div className="flex min-w-0 flex-1 flex-col gap-2">
-          <p className="text-sm">Open the ChatGPT sign-in page and choose the account for Codex.</p>
+          <p className="text-sm">
+            Open the ChatGPT sign-in page and choose the account for MultiDex.
+          </p>
           <div className="flex flex-wrap gap-2">
             <Button asChild size="sm">
               <a href={login.verification_url} target="_blank" rel="noreferrer">
@@ -879,7 +881,7 @@ function DeviceCodeState({
           </span>
         </p>
       </div>
-      <p className="sr-only">Signing in to Codex on {hostName}</p>
+      <p className="sr-only">Signing in to MultiDex on {hostName}</p>
     </div>
   );
 }
@@ -898,7 +900,7 @@ function DeviceLoginResumeState({ hostName }: { hostName: string }) {
 function DeviceCodeError({ error, hostName }: { error: string; hostName: string }) {
   return (
     <>
-      <DialogDescription>Codex is still signed out on {hostName}.</DialogDescription>
+      <DialogDescription>MultiDex is still signed out on {hostName}.</DialogDescription>
       <div className="rounded-xl border border-destructive/30 bg-destructive/5 px-3.5 py-2.5 text-sm text-destructive">
         {error || "The sign-in did not complete."}
       </div>

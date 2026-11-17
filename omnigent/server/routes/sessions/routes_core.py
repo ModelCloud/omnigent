@@ -316,7 +316,7 @@ def _require_attachment_compatible_history(
         if native is None or native.harness not in FILESYSTEM_ATTACHMENT_HARNESSES:
             raise OmnigentError(
                 f"This history includes '{filename}', which requires "
-                "Claude Code or Codex. Choose one of those harnesses, "
+                "Claude Code or MultiDex. Choose one of those harnesses, "
                 "or fork from before the attachment was sent.",
                 code=ErrorCode.INVALID_INPUT,
             )

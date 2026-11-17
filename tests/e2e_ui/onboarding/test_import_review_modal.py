@@ -122,7 +122,7 @@ async def _drive(base_url: str) -> None:
             await expect(dialog.get_by_role("list", name="Plugins")).to_contain_text("toolkit")
             await expect(dialog.get_by_role("list", name="Plugins")).to_contain_text("2 skills")
 
-            await dialog.get_by_role("tab", name="Codex").click()
+            await dialog.get_by_role("tab", name="MultiDex").click()
             await expect(assets.get_by_role("tab")).to_have_text(["MCPs 1", "Skills 1"])
             await assets.get_by_role("tab", name="Skills").click()
             await expect(dialog.get_by_role("list", name="Skills")).to_contain_text("fix-ci")

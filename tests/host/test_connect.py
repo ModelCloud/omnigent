@@ -297,7 +297,7 @@ async def test_host_skills_distinguishes_empty_and_failure(
     from omnigent.spec.skill_sources import SkillSourceContext
     from omnigent.spec.types import SkillSpec
 
-    warning = "Codex plugin skills unavailable: `codex plugin list` exited 1"
+    warning = "MultiDex plugin skills unavailable: `codex plugin list` exited 1"
 
     def incomplete(ctx: SkillSourceContext, _harness: str) -> list[SkillSpec]:
         assert ctx.warnings is not None

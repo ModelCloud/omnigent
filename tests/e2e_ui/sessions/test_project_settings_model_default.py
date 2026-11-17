@@ -108,7 +108,7 @@ def _session_effort(base_url: str, session_id: str) -> str | None:
     ("builtin_name", "display_name"),
     [
         pytest.param("claude-native-ui", "Claude Code", id="claude-code"),
-        pytest.param("codex-native-ui", "Codex", id="codex"),
+        pytest.param("codex-native-ui", "MultiDex", id="codex"),
     ],
 )
 def test_project_settings_offers_model_default_for_native_harness(

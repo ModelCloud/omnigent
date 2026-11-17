@@ -4266,7 +4266,7 @@ async def test_native_policy_notice_logs_its_persisted_cause_once(
     conversation = store.create_conversation()
     published = Mock()
     monkeypatch.setattr(helpers, "_publish_error_event", published)
-    reason = "Codex policy hook could not be trusted: provider name must not be empty"
+    reason = "MultiDex policy hook could not be trusted: provider name must not be empty"
 
     with capture_debug_rows("server") as rows:
         await helpers._persist_native_policy_notice(conversation.id, store, reason)

@@ -168,9 +168,9 @@ class CodexStartupFailure:
 #: What a turn reports when its session's app-server is gone, and the record
 #: :func:`record_app_server_stopped` leaves so the next terminal ensure replaces the pane.
 CODEX_APP_SERVER_STOPPED = CodexStartupFailure(
-    message="Codex's app-server for this session stopped, so this message was not delivered.",
+    message="MultiDex's app-server for this session stopped, so this message was not delivered.",
     code="codex_app_server_stopped",
-    title="Codex stopped unexpectedly",
+    title="MultiDex stopped unexpectedly",
     remediation="Send your message again. If it keeps failing, start a new session.",
 )
 

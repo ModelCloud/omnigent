@@ -99,7 +99,7 @@ def _require_codex_goal_runner_payload(
         return _codex_goal_error(
             503,
             detail=(
-                f"Could not {action} Codex goal: no live Codex runner is available "
+                f"Could not {action} MultiDex goal: no live MultiDex runner is available "
                 f"for session {session_id!r}. Reconnect the session and try again."
             ),
         )
@@ -113,7 +113,7 @@ def _require_codex_goal_runner_payload(
         return _codex_goal_error(
             502,
             detail=(
-                f"Could not {action} Codex goal: runner returned malformed "
+                f"Could not {action} MultiDex goal: runner returned malformed "
                 f"error response with status {runner_result.status_code} "
                 f"for session {session_id!r}."
             ),
@@ -124,12 +124,12 @@ def _require_codex_goal_runner_payload(
         del exc
         return _codex_goal_error(
             502,
-            detail=f"Could not {action} Codex goal: runner returned a malformed response.",
+            detail=f"Could not {action} MultiDex goal: runner returned a malformed response.",
         )
     if not isinstance(payload, dict):
         return _codex_goal_error(
             502,
-            detail=f"Could not {action} Codex goal: runner returned a malformed response.",
+            detail=f"Could not {action} MultiDex goal: runner returned a malformed response.",
         )
     return payload
 
@@ -527,7 +527,7 @@ def register_codex_session_routes(
             del exc
             return _codex_goal_error(
                 502,
-                detail="Could not read Codex goal: runner returned a malformed response.",
+                detail="Could not read MultiDex goal: runner returned a malformed response.",
             )
 
     @router.put(
@@ -598,7 +598,7 @@ def register_codex_session_routes(
             del exc
             return _codex_goal_error(
                 502,
-                detail="Could not set Codex goal: runner returned a malformed response.",
+                detail="Could not set MultiDex goal: runner returned a malformed response.",
             )
 
     @router.patch(
@@ -659,7 +659,9 @@ def register_codex_session_routes(
             del exc
             return _codex_goal_error(
                 502,
-                detail="Could not update Codex goal status: runner returned a malformed response.",
+                detail=(
+                    "Could not update MultiDex goal status: runner returned a malformed response."
+                ),
             )
 
     @router.delete(
@@ -712,5 +714,5 @@ def register_codex_session_routes(
             del exc
             return _codex_goal_error(
                 502,
-                detail="Could not clear Codex goal: runner returned a malformed response.",
+                detail="Could not clear MultiDex goal: runner returned a malformed response.",
             )

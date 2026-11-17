@@ -261,7 +261,7 @@ def _pi_account(*, deadline: float, cancel_event: threading.Event | None) -> Har
     labels = {
         "anthropic": "Anthropic",
         "openai": "OpenAI",
-        "openai-codex": "OpenAI Codex",
+        "openai-codex": "OpenAI subscription",
     }
     for provider_id, label in labels.items():
         return_code, payload = _run_json_command(

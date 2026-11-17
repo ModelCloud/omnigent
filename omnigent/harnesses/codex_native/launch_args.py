@@ -162,8 +162,8 @@ class CodexTransportArgsError(OmnigentError, ValueError):
 
     def __init__(self, token: str) -> None:
         super().__init__(
-            f"terminal_launch_args may not contain the runner-owned Codex transport "
-            f"token {token!r}. Start a new Codex session without that argument; "
+            f"terminal_launch_args may not contain the runner-owned MultiDex transport "
+            f"token {token!r}. Start a new MultiDex session without that argument; "
             "Omnigent starts the app-server and attaches the terminal automatically.",
             code=ErrorCode.HARNESS_NOT_CONFIGURED,
         )
@@ -225,10 +225,10 @@ def codex_config_profile(args: Sequence[str]) -> str | None:
             break
         if arg in {"--profile", "-p"}:
             if profile is not None or index + 1 == len(canonical):
-                raise ValueError("Codex requires exactly one value for --profile")
+                raise ValueError("MultiDex requires exactly one value for --profile")
             profile = canonical[index + 1]
             if not re.fullmatch(r"[A-Za-z0-9_-]+", profile):
-                raise ValueError("Invalid Codex config profile name")
+                raise ValueError("Invalid MultiDex config profile name")
         if arg in _CODEX_VALUE_FLAGS:
             index += 1
         index += 1
@@ -264,7 +264,7 @@ def codex_workspace_roots(args: Sequence[str], cwd: Path) -> tuple[Path, list[st
             break
         if arg in {"--add-dir", "--cd", "-C"}:
             if index + 1 == len(canonical) or canonical[index + 1].startswith("-"):
-                raise ValueError(f"Codex requires a directory for {arg}")
+                raise ValueError(f"MultiDex requires a directory for {arg}")
             if arg == "--add-dir":
                 roots.append(canonical[index + 1])
             else:
@@ -366,19 +366,19 @@ def read_codex_mcp_servers(
         except FileNotFoundError:
             if optional:
                 return {}
-            raise ValueError(f"Missing Codex MCP config: {path}") from None
+            raise ValueError(f"Missing MultiDex MCP config: {path}") from None
         except OSError as error:
             reason = error.strerror or type(error).__name__
-            raise ValueError(f"Cannot read Codex MCP config: {path} ({reason})") from None
+            raise ValueError(f"Cannot read MultiDex MCP config: {path} ({reason})") from None
         except ParseError as error:
             # Parser messages can contain config values; expose the location and kind only.
             raise ValueError(
-                f"Invalid Codex MCP config: {path} "
+                f"Invalid MultiDex MCP config: {path} "
                 f"({type(error).__name__} at line {error.line}, column {error.col})"
             ) from None
         except (TOMLKitError, UnicodeError) as error:
             raise ValueError(
-                f"Invalid Codex MCP config: {path} ({type(error).__name__})"
+                f"Invalid MultiDex MCP config: {path} ({type(error).__name__})"
             ) from None
 
     def inventory(config: dict[str, Any], path: Path) -> dict[str, Any]:
@@ -386,7 +386,7 @@ def read_codex_mcp_servers(
         if not isinstance(servers, dict) or any(
             not isinstance(server, dict) for server in servers.values()
         ):
-            raise ValueError(f"Invalid mcp_servers table in Codex config: {path}")
+            raise ValueError(f"Invalid mcp_servers table in MultiDex config: {path}")
         return copy.deepcopy(servers)
 
     source_path = source_home / "config.toml"
@@ -409,7 +409,7 @@ def read_codex_mcp_servers(
             profiles = source.get("profiles", {})
             overlay = profiles.get(profile) if isinstance(profiles, dict) else None
             if not isinstance(overlay, dict):
-                raise ValueError(f"Codex config profile {profile!r} does not exist")
+                raise ValueError(f"MultiDex config profile {profile!r} does not exist")
         _merge_tables(servers, inventory(overlay, profile_path))
     return servers
 
@@ -418,9 +418,9 @@ def _profile_base(state_path: Path, current: dict[str, Any]) -> dict[str, Any]:
     try:
         state = tomlkit.parse(state_path.read_text()).unwrap()
     except TOMLKitError as error:
-        raise ValueError(f"Invalid Codex profile state: {state_path}") from error
+        raise ValueError(f"Invalid MultiDex profile state: {state_path}") from error
     if not all(isinstance(state.get(key), dict) for key in ("base", "applied")):
-        raise ValueError(f"Invalid Codex profile state: {state_path}")
+        raise ValueError(f"Invalid MultiDex profile state: {state_path}")
     for key in ("base", "applied", "pending"):
         value = state.get(key)
         if isinstance(value, dict):
@@ -428,10 +428,10 @@ def _profile_base(state_path: Path, current: dict[str, Any]) -> dict[str, Any]:
     base = state["base"]
     if "pending" in state:
         if not isinstance(state["pending"], dict):
-            raise ValueError(f"Invalid Codex profile state: {state_path}")
+            raise ValueError(f"Invalid MultiDex profile state: {state_path}")
         if current not in (state["applied"], state["pending"]):
             raise ValueError(
-                f"Codex config changed during an incomplete profile update: {state_path}"
+                f"MultiDex config changed during an incomplete profile update: {state_path}"
             )
     else:
         _carry_config_edits(base, state["applied"], current)
@@ -468,7 +468,7 @@ def materialize_codex_config_profile(
     if profile is None and not state_path.exists():
         return
     if codex_home.resolve() == source_home.resolve():
-        raise ValueError("Codex profiles require a private CODEX_HOME")
+        raise ValueError("MultiDex profiles require a private CODEX_HOME")
     config_path = codex_home / "config.toml"
     current = (
         tomlkit.parse(config_path.read_text()) if config_path.exists() else tomlkit.document()
@@ -479,13 +479,13 @@ def materialize_codex_config_profile(
     merged = copy.deepcopy(base)
     if profile is not None:
         if codex_config_profile(["--profile", profile]) != profile:
-            raise ValueError("Invalid Codex config profile name")
+            raise ValueError("Invalid MultiDex config profile name")
         if codex_version is None or codex_version >= (0, 134, 0):
             overlay = tomlkit.parse((source_home / f"{profile}.config.toml").read_text()).unwrap()
         else:
             overlay = base.get("profiles", {}).get(profile)
             if not isinstance(overlay, dict):
-                raise ValueError(f"Codex config profile {profile!r} does not exist")
+                raise ValueError(f"MultiDex config profile {profile!r} does not exist")
         overlay = copy.deepcopy(overlay)
         profile_instructions = overlay.pop("developer_instructions", _MISSING)
         _resolve_profile_paths(overlay, source_home)

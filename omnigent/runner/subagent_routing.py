@@ -124,7 +124,7 @@ _PROMPT_CAP = 4000
 #: Mirrors ucode PR 251's ``default_task_label`` ("Codex subagent task").
 #: Every unnamed spawn scores the same string, so they share one (floor)
 #: arm — a cheap default, not per-spawn intelligence.
-_PLACEHOLDER_TASK = "Codex subagent task"
+_PLACEHOLDER_TASK = "MultiDex subagent task"
 #: Agent-authored, so bounded before it is stored or echoed anywhere.
 _TASK_NAME_CAP = 200
 #: Ledger entries kept per session; a long-running session can spawn

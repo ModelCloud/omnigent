@@ -197,7 +197,7 @@ def _select_codex(page: Page, agent_id: str) -> None:
     if picker.get_attribute("aria-expanded") == "true":
         page.keyboard.press("Escape")
     expect(picker).to_have_attribute("aria-expanded", "false")
-    expect(picker).to_have_attribute("aria-label", re.compile("Codex"))
+    expect(picker).to_have_attribute("aria-label", re.compile("MultiDex"))
 
 
 def _open_selected_models(page: Page, agent_id: str) -> None:

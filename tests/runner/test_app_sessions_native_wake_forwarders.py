@@ -1090,7 +1090,7 @@ async def test_auto_create_codex_terminal_recovers_without_restarting_healthy_se
                 id="terminal_codex_main",
                 type="terminal",
                 session_id=session_id,
-                name="Codex",
+                name="MultiDex",
             )
 
     monkeypatch.setattr(
@@ -1622,7 +1622,7 @@ async def test_auto_create_codex_terminal_retries_refused_resume_on_same_thread(
                 id="terminal_codex_main",
                 type="terminal",
                 session_id=session_id,
-                name="Codex",
+                name="MultiDex",
             )
 
     monkeypatch.setattr(
@@ -1885,7 +1885,7 @@ async def test_auto_create_codex_terminal_unreadable_thread_starts_fresh(
                 id="terminal_codex_main",
                 type="terminal",
                 session_id=session_id,
-                name="Codex",
+                name="MultiDex",
             )
 
     runs: list[_ForwarderRun] = []
@@ -1948,7 +1948,7 @@ async def test_auto_create_codex_terminal_unreadable_thread_starts_fresh(
         assert notice["data"]["item_data"]["code"] == "codex_thread_reset"
         assert notice["data"]["item_data"]["level"] == "info"
         # The body names codex as the source and quotes its own error text.
-        assert "Codex could not load" in notice["data"]["item_data"]["message"]
+        assert "MultiDex could not load" in notice["data"]["item_data"]["message"]
         assert expected_error_substring in notice["data"]["item_data"]["message"]
         assert connected == ["omnigent-codex-native-auto"], (
             "the fresh-thread path must connect the discovery listener"

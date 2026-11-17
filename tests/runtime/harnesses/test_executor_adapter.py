@@ -581,9 +581,9 @@ def test_build_error_detail_keeps_inner_executor_error_fields() -> None:
 
     adapter = ExecutorAdapter(executor_factory=lambda: _StubExecutor())
     error = InnerExecutorError(
-        "Codex is waiting for a sign-in in this session's terminal.",
+        "MultiDex is waiting for a sign-in in this session's terminal.",
         code="databricks_sign_in_pending",
-        title="Codex can't start until you sign in to Databricks",
+        title="MultiDex can't start until you sign in to Databricks",
         remediation="Open https://signin.example.com/device and enter code HQ7M-2KPD.",
         undelivered=True,
     )
@@ -592,8 +592,8 @@ def test_build_error_detail_keeps_inner_executor_error_fields() -> None:
     assert detail.code == "databricks_sign_in_pending"
     # The relay settles the queued message only on a failure before delivery.
     assert detail.undelivered is True
-    assert detail.message == "Codex is waiting for a sign-in in this session's terminal."
-    assert detail.title == "Codex can't start until you sign in to Databricks"
+    assert detail.message == "MultiDex is waiting for a sign-in in this session's terminal."
+    assert detail.title == "MultiDex can't start until you sign in to Databricks"
     assert detail.remediation is not None
     assert "HQ7M-2KPD" in detail.remediation
 
@@ -620,9 +620,9 @@ async def test_coded_executor_error_is_raised_with_its_code() -> None:
     executor.enqueue_events(
         [
             ExecutorError(
-                message="Codex is waiting for a sign-in in this session's terminal.",
+                message="MultiDex is waiting for a sign-in in this session's terminal.",
                 code="databricks_sign_in_pending",
-                title="Codex can't start until you sign in to Databricks",
+                title="MultiDex can't start until you sign in to Databricks",
                 remediation="Open https://signin.example.com/device and enter code HQ7M-2KPD.",
                 undelivered=True,
             )
@@ -637,9 +637,9 @@ async def test_coded_executor_error_is_raised_with_its_code() -> None:
     with pytest.raises(InnerExecutorError) as raised:
         await adapter.run_turn(request, ctx)
 
-    assert str(raised.value) == "Codex is waiting for a sign-in in this session's terminal."
+    assert str(raised.value) == "MultiDex is waiting for a sign-in in this session's terminal."
     assert raised.value.code == "databricks_sign_in_pending"
-    assert raised.value.title == "Codex can't start until you sign in to Databricks"
+    assert raised.value.title == "MultiDex can't start until you sign in to Databricks"
     assert raised.value.remediation is not None
     assert "HQ7M-2KPD" in raised.value.remediation
     assert raised.value.undelivered is True

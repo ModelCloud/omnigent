@@ -102,7 +102,7 @@ class SysScheduledTaskCreateTool(Tool):
                             "description": (
                                 "Optional permission mode for native coding agents that "
                                 "support one. Use the selected harness's vocabulary: "
-                                "Claude Code (e.g. 'acceptEdits'), Codex ('default', "
+                                "Claude Code (e.g. 'acceptEdits'), MultiDex ('default', "
                                 "'ask-for-approval', 'approve-for-me', 'read-only'), "
                                 "Cursor (e.g. 'auto-review'), "
                                 "Antigravity ('default', 'skip'), or Devin (e.g. 'smart'). "
@@ -290,7 +290,7 @@ class SysScheduledTaskUpdateTool(Tool):
                             "type": ["string", "null"],
                             "description": (
                                 "New permission mode using the selected harness's vocabulary: "
-                                "Claude Code (e.g. 'acceptEdits'), Codex (e.g. 'read-only'), "
+                                "Claude Code (e.g. 'acceptEdits'), MultiDex (e.g. 'read-only'), "
                                 "Cursor (e.g. 'auto-review'), Antigravity ('default', 'skip'), "
                                 "or Devin (e.g. 'smart'). Other harnesses, such as "
                                 "claude-sdk, have no automation permission modes. Send JSON "

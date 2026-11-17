@@ -498,7 +498,7 @@ Available harnesses and their models:
 Harness descriptions:
 - claude-sdk / claude-native: Claude Code harness; best for multi-file
   refactors, test writing, and deep reasoning chains.
-- codex / codex-native: Codex harness; best for narrow, well-scoped
+- codex / codex-native: MultiDex harness; best for narrow, well-scoped
   code changes.
 - pi: Multi-model headless harness; can run both Claude and GPT models;
   best for read-only exploration, review, and cross-vendor verification.

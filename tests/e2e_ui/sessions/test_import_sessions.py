@@ -115,7 +115,7 @@ def test_settings_import_panel_imports_one_session_by_id(
     page.get_by_test_id("import-mode-select").click()
     page.get_by_role("option", name="Session by ID").click()
     page.get_by_test_id("import-source-select").click()
-    page.get_by_role("option", name="Codex").click()
+    page.get_by_role("option", name="MultiDex").click()
     page.get_by_test_id("import-session-id").fill("session-exact")
     page.get_by_test_id("import-submit").click()
 

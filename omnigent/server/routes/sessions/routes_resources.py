@@ -242,12 +242,10 @@ def _unsupported_attachment_detail(content_type: str, policy: FilesystemAttachme
         f"Unsupported attachment type '{content_type}'. Attach images, PDF, or text/code files"
     )
     if policy == DEFAULT_FILESYSTEM_ATTACHMENT_POLICY:
-        return (
-            f"{detail}, or use Claude Code or Codex for archives, Office documents, and databases."
-        )
+        return f"{detail}, or use Claude Code or MultiDex for archives, Office documents, and databases."
     if policy.extensions:
         extensions = ", ".join(sorted(policy.extensions))
-        return f"{detail}, or use Claude Code or Codex for {extensions} files."
+        return f"{detail}, or use Claude Code or MultiDex for {extensions} files."
     return f"{detail}."
 
 

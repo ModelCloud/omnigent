@@ -5903,7 +5903,9 @@ def test_forwarder_declines_codex_command_when_approval_hook_rejects_request(
             json={
                 "error": {
                     "code": "invalid_input",
-                    "message": ("Codex execpolicy amendment must be a non-empty list of strings."),
+                    "message": (
+                        "MultiDex execpolicy amendment must be a non-empty list of strings."
+                    ),
                 }
             },
         )
@@ -9009,7 +9011,7 @@ def test_wrapper_spec_startup_instructions_resolves_prompt(tmp_path: Path) -> No
     spec_path = codex_native._materialize_codex_agent_spec(tmp_path, model=None)
     result = codex_native._wrapper_spec_startup_instructions(spec_path)
     assert result is not None
-    assert "Codex is running in the session terminal" in result
+    assert "MultiDex is running in the session terminal" in result
     assert result.endswith(WORKSPACE_IMAGE_INSTRUCTION)
 
 
@@ -9134,7 +9136,7 @@ async def test_prepare_codex_terminal_closes_resources_when_cleanup_is_interrupt
         await close_resource("server")
 
     def progress(_progress: object, message: str) -> None:
-        if message == "Codex terminal ready.":
+        if message == "MultiDex terminal ready.":
             raise error("startup failed")
 
     client = SimpleNamespace(close=close_client)
@@ -9248,7 +9250,7 @@ def test_run_with_local_server_threads_raw_instructions_to_prepare_terminal_fres
         )
 
     assert captured.get("developer_instructions") is not None
-    assert "Codex is running in the session terminal" in captured["developer_instructions"]
+    assert "MultiDex is running in the session terminal" in captured["developer_instructions"]
 
 
 def test_run_with_local_server_threads_raw_instructions_to_prepare_terminal_resume(
@@ -9330,7 +9332,7 @@ def test_run_with_local_server_threads_raw_instructions_to_prepare_terminal_resu
         )
 
     assert captured.get("developer_instructions") is not None
-    assert "Codex is running in the session terminal" in captured["developer_instructions"]
+    assert "MultiDex is running in the session terminal" in captured["developer_instructions"]
 
 
 @pytest.mark.asyncio
@@ -9467,11 +9469,11 @@ async def test_prepare_codex_terminal_via_daemon_creates_runner_and_ensures_term
         {"terminal": "codex", "session_key": "main", "ensure_native_terminal": True},
     ) in calls
     assert progress_updates == [
-        "Creating Codex session...",
+        "Creating MultiDex session...",
         "Starting runner...",
         "Waiting for runner...",
-        "Starting Codex terminal...",
-        "Codex terminal ready.",
+        "Starting MultiDex terminal...",
+        "MultiDex terminal ready.",
     ]
 
     events = [r.attributes for r in caplog.records if r.name == "omnigent.startup"]
@@ -9700,7 +9702,7 @@ async def test_prepare_codex_terminal_via_daemon_live_resume_skips_config_patch(
     assert ("GET", "/v1/sessions/conv_live/items", None) not in calls
     assert not any(method == "PATCH" for method, _path, _body in calls)
     assert live_rollout.read_bytes() == before
-    assert "Ignoring Codex launch args/model" in capsys.readouterr().err
+    assert "Ignoring MultiDex launch args/model" in capsys.readouterr().err
 
 
 @pytest.mark.asyncio
@@ -9902,7 +9904,7 @@ async def test_find_running_codex_terminal_unexpected_error_still_raises() -> No
         with pytest.raises(click.ClickException) as excinfo:
             await codex_native._find_running_codex_terminal(client, "conv_abc")
 
-    assert "Failed to fetch Codex terminal (500)" in excinfo.value.message
+    assert "Failed to fetch MultiDex terminal (500)" in excinfo.value.message
     assert "database unavailable" in excinfo.value.message
 
 
@@ -9936,7 +9938,7 @@ async def test_find_running_codex_terminal_generic_errors_still_raise(
         with pytest.raises(click.ClickException) as excinfo:
             await codex_native._find_running_codex_terminal(client, "conv_abc")
 
-    assert f"Failed to fetch Codex terminal ({status_code})" in excinfo.value.message
+    assert f"Failed to fetch MultiDex terminal ({status_code})" in excinfo.value.message
     assert "database unavailable" in excinfo.value.message
 
 
@@ -10450,7 +10452,7 @@ def test_attach_terminal_resource_runner_owned_missing_socket_fails_loud(
         )
 
     message = str(exc_info.value)
-    assert "Runner-owned Codex terminal requires direct tmux attach" in message
+    assert "Runner-owned MultiDex terminal requires direct tmux attach" in message
     assert str(tmp_path / "missing.sock") in message
     assert "WebSocket" not in message
 
@@ -10499,7 +10501,7 @@ def test_attach_with_forwarder_falls_back_when_tmux_socket_is_not_local(
         """
         attach_url = kwargs["attach_url"]
         assert isinstance(attach_url, str)
-        assert kwargs["session_name"] == "Codex"
+        assert kwargs["session_name"] == "MultiDex"
         active_session_id_reader = kwargs["active_session_id_reader"]
         assert callable(active_session_id_reader)
         assert active_session_id_reader() == "conv_rotated"
@@ -12848,7 +12850,7 @@ async def test_ensure_local_codex_resume_rollout_rejects_unsafe_thread_id(
 
     transport = httpx.MockTransport(handler)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        with pytest.raises(click.ClickException, match="not a safe Codex rollout id"):
+        with pytest.raises(click.ClickException, match="not a safe MultiDex rollout id"):
             await codex_native._ensure_local_codex_resume_rollout(
                 client,
                 session_id="conv_codex",
@@ -13381,7 +13383,7 @@ def test_codex_event_msg_record_reports_non_string_text_cleanly() -> None:
     """Malformed block text produces a user-facing CLI error."""
     with pytest.raises(
         click.ClickException,
-        match="Codex message content text must be a string",
+        match="MultiDex message content text must be a string",
     ):
         codex_native._codex_event_msg_record_for_message(
             {

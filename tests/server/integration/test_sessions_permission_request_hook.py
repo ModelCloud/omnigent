@@ -2993,7 +2993,7 @@ async def test_codex_plan_mode_final_prompt_round_trip(
 
     event = await drain_task
     params = event["params"]
-    assert params["message"] == "Codex needs input"
+    assert params["message"] == "MultiDex needs input"
     question = params["ask_user_question"]["questions"][0]
     assert question["id"] == "plan_decision"
     assert question["question"] == "Implement this plan?"
@@ -3058,7 +3058,7 @@ async def test_codex_command_approval_hook_accept_round_trip(
 
     event = await drain_task
     params = event["params"]
-    assert params["message"] == "Codex wants to run **date**"
+    assert params["message"] == "MultiDex wants to run **date**"
     assert params["command"] == "date"
     assert params["cwd"] == "/tmp/workspace"
     assert params["reason"] == "test command approval"
@@ -3244,7 +3244,7 @@ async def test_codex_permissions_approval_hook_grants_requested_profile(
 
     event = await drain_task
     params = event["params"]
-    assert params["message"] == "Codex requests additional permissions"
+    assert params["message"] == "MultiDex requests additional permissions"
     assert params["cwd"] == "/tmp/workspace"
     assert params["reason"] == "need network"
     assert params["permissions"] == payload["params"]["permissions"]

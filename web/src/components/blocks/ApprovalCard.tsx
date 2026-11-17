@@ -95,7 +95,7 @@ const AUTO_RESOLVED_DETAIL =
 
 const QUESTION_TITLES = [
   ["agy_", "Antigravity needs your input"],
-  ["codex_", "Codex needs input"],
+  ["codex_", "MultiDex needs input"],
   ["cursor_", "Cursor has questions"],
   ["pi_", "Pi needs your input"],
   ["devin_", "Devin needs your input"],
@@ -992,7 +992,7 @@ export function ApprovalCard({
           />
         ) : isCodexCommandApproval ? (
           <>
-            <span>Codex wants to run this command.</span>
+            <span>MultiDex wants to run this command.</span>
             {codexCommand.reason && <span className="text-foreground">{codexCommand.reason}</span>}
             <pre className="overflow-x-auto rounded bg-muted px-2 py-1 font-mono text-sm text-foreground whitespace-pre-wrap">
               {codexCommand.command}

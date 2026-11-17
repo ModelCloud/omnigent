@@ -470,7 +470,7 @@ def register_resource_routes(
                     session_id, view
                 )
                 _ensure_conflict = (
-                    "Existing codex terminal is not a runner-owned Codex TUI "
+                    "Existing codex terminal is not a runner-owned MultiDex TUI "
                     "and could not be closed."
                 )
 

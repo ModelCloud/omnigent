@@ -8241,13 +8241,13 @@ def _codex_side_chat_runner_error(resp: httpx.Response) -> OmnigentError:
         code = ErrorCode.NOT_FOUND
     elif resp.status_code == 409:
         code = ErrorCode.CONFLICT
-        detail = detail or "Codex rejected this message."
+        detail = detail or "MultiDex rejected this message."
         if "multi-agent v2" in detail:
-            detail = f"This Codex sub-agent cannot take direct input ({detail})."
+            detail = f"This MultiDex sub-agent cannot take direct input ({detail})."
     else:
         code = ErrorCode.RUNNER_UNAVAILABLE
     return OmnigentError(
-        detail or "The Codex side chat could not accept this message right now.",
+        detail or "The MultiDex side chat could not accept this message right now.",
         code=code,
     )
 
@@ -8425,7 +8425,7 @@ async def _dispatch_session_event_to_runner_impl(
             and not host_registry.host_supports_codex_side_chat(conv.host_id)
         ):
             raise OmnigentError(
-                "This session's host is too old to open a Codex side chat. Update "
+                "This session's host is too old to open a MultiDex side chat. Update "
                 "omnigent on the host (>= 0.15.0) and reconnect it, then try again.",
                 code=ErrorCode.INVALID_INPUT,
             )

@@ -140,7 +140,7 @@ async def test_session_catalog_needs_no_runner_and_allows_shared_editors(
             frame.agent_version,
             frame.sub_agent_name,
         ) == (conv.id, conv.workspace, agent.id, str(agent.version), "child")
-        warning = "Codex plugin skills unavailable: `codex plugin list` exited 1"
+        warning = "MultiDex plugin skills unavailable: `codex plugin list` exited 1"
         conn.pending_skills[frame.request_id].set_result(
             HostSkillsResultFrame(
                 frame.request_id,

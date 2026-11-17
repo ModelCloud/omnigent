@@ -128,7 +128,7 @@ def _node_dependency_problem() -> str | None:
     """
     node = shutil.which("node")
     if node is None:
-        return f"node not found — Claude, Codex, and Pi need {_NODE_MIN_VERSION_HINT}."
+        return f"node not found — Claude, MultiDex, and Pi need {_NODE_MIN_VERSION_HINT}."
     # Probe the exact API the bundled undici calls. Exit 0 ⇒ capability
     # present; exit 1 ⇒ too old; we treat any other failure as inconclusive.
     probe = (
@@ -148,7 +148,9 @@ def _node_dependency_problem() -> str | None:
         return None
     version = _node_version(node)
     detected = f" (detected {version})" if version else ""
-    return f"Node.js is too old{detected} — Claude, Codex, and Pi need {_NODE_MIN_VERSION_HINT}."
+    return (
+        f"Node.js is too old{detected} — Claude, MultiDex, and Pi need {_NODE_MIN_VERSION_HINT}."
+    )
 
 
 def _tmux_dependency_problem() -> str | None:
@@ -169,13 +171,13 @@ def _tmux_dependency_problem() -> str | None:
     """
     tmux = shutil.which("tmux")
     if tmux is None:
-        return "tmux not found — native Claude/Codex need tmux (macOS: `brew install tmux`)."
+        return "tmux not found — native Claude/MultiDex need tmux (macOS: `brew install tmux`)."
     version = tmux_version(tmux)
     if version is None or version >= MIN_TMUX_VERSION:
         return None
     detected = f"{version[0]}.{version[1]}"
     return (
-        f"tmux is too old (detected tmux {detected}) — native Claude/Codex need "
+        f"tmux is too old (detected tmux {detected}) — native Claude/MultiDex need "
         f"tmux {MIN_TMUX_VERSION_HINT} or newer (macOS: `brew upgrade tmux`)."
     )
 
@@ -658,7 +660,7 @@ def _configure_harness_add(family: str | None = None) -> str | None:
     options = options + [
         AddOption(
             label=f"\N{GEAR}\N{VARIATION SELECTOR-16} {d.display_name or d.name} — "
-            "from your Codex config",
+            "from your MultiDex config",
             description=(
                 f"Use the {str(d.model_provider)!r} provider your ~/.codex/config.toml "
                 "defines and authenticates."
@@ -908,8 +910,8 @@ def _configure_harness_add(family: str | None = None) -> str | None:
             surface_choice = select(
                 "Which harnesses can this gateway drive?",
                 [
-                    "Both Claude and Codex",
-                    "Codex / OpenAI only (codex, openai-agents)",
+                    "Both Claude and MultiDex",
+                    "MultiDex / OpenAI only (codex, openai-agents)",
                     "Claude only (claude-sdk, native-claude)",
                 ],
                 default=0,
@@ -953,7 +955,7 @@ def _configure_harness_add(family: str | None = None) -> str | None:
         models: dict[str, str] = {}
         if OPENAI_FAMILY in families:
             models[OPENAI_FAMILY] = prompt_text(
-                "Default model for the Codex / OpenAI surface",
+                "Default model for the MultiDex / OpenAI surface",
                 default=default_chat_model("openrouter"),
             ).strip()
         if ANTHROPIC_FAMILY in families:
@@ -3555,7 +3557,8 @@ def _print_opencode_auth_help() -> None:
         "    • [bold]opencode auth login[/bold] — sign in to a provider (OpenAI, Anthropic, …);\n"
         "      stored in ~/.local/share/opencode/auth.json.\n"
         "    • Provider env vars (OPENAI_API_KEY / ANTHROPIC_API_KEY / …) are auto-detected.\n"
-        "    • Databricks gateway: set an agent ``profile`` (configured under Claude / Codex);\n"
+        "    • Databricks gateway: set an agent ``profile`` "
+        "(configured under Claude / MultiDex);\n"
         "      Omnigent synthesizes opencode's per-session provider config from it.\n"
         "  Omnigent stores no OpenCode credential of its own.\n"
         f"  [dim]Tip:[/dim] 'Set default model' picks which model "

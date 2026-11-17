@@ -381,9 +381,9 @@ def test_detect_sign_in_prompt_does_not_treat_an_auth_shaped_hostname_as_the_end
 
 def test_sign_in_next_step_names_the_agent_and_carries_no_address() -> None:
     """The next step never embeds the one-time link; the card fetches it live."""
-    step = sign_in_next_step("Codex")
+    step = sign_in_next_step("MultiDex")
     assert step == (
-        "Open the sign-in link and sign in. Codex continues on its own once the "
+        "Open the sign-in link and sign in. MultiDex continues on its own once the "
         "sign-in completes; then send your message again."
     )
     assert "http" not in step

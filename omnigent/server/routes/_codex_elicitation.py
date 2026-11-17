@@ -84,24 +84,24 @@ def parse_codex_elicitation_request(payload: dict[str, Any]) -> CodexElicitation
     request_id: object = payload.get("id")
     if not isinstance(method, str) or not method:
         raise OmnigentError(
-            "Codex elicitation request must include a non-empty method string.",
+            "MultiDex elicitation request must include a non-empty method string.",
             code=ErrorCode.INVALID_INPUT,
         )
     if not isinstance(params, dict):
         raise OmnigentError(
-            "Codex elicitation request params must be an object.",
+            "MultiDex elicitation request params must be an object.",
             code=ErrorCode.INVALID_INPUT,
         )
     if not is_codex_request_id(request_id):
         raise OmnigentError(
-            "Codex elicitation request must include a string or integer id.",
+            "MultiDex elicitation request must include a string or integer id.",
             code=ErrorCode.INVALID_INPUT,
         )
     typed_request_id = cast(int | str, request_id)
     adapter = _CODEX_ELICITATION_ADAPTERS.get(method)
     if adapter is None:
         raise OmnigentError(
-            f"Unsupported Codex elicitation request method: {method!r}",
+            f"Unsupported MultiDex elicitation request method: {method!r}",
             code=ErrorCode.INVALID_INPUT,
         )
     return CodexElicitationRequest(
@@ -258,7 +258,7 @@ def _codex_mcp_elicitation_response(
         advertised = _codex_mcp_persist_modes(params)
         if not isinstance(requested_persist, str) or requested_persist not in advertised:
             raise OmnigentError(
-                "Codex MCP persistence choice was not advertised by the request.",
+                "MultiDex MCP persistence choice was not advertised by the request.",
                 code=ErrorCode.INVALID_INPUT,
             )
         response_meta = {"persist": requested_persist}
@@ -297,12 +297,12 @@ def _execpolicy_amendment(value: Any) -> list[str] | None:
         return None
     if not isinstance(value, list) or not value:
         raise OmnigentError(
-            "Codex execpolicy amendment must be a non-empty list of strings.",
+            "MultiDex execpolicy amendment must be a non-empty list of strings.",
             code=ErrorCode.INVALID_INPUT,
         )
     if not all(isinstance(entry, str) and entry for entry in value):
         raise OmnigentError(
-            "Codex execpolicy amendment must be a non-empty list of strings.",
+            "MultiDex execpolicy amendment must be a non-empty list of strings.",
             code=ErrorCode.INVALID_INPUT,
         )
     return list(value)
@@ -325,7 +325,7 @@ def _decision_execpolicy_amendment(decision: Any) -> list[str] | None:
         return None
     if not isinstance(wrapped, dict):
         raise OmnigentError(
-            "Codex acceptWithExecpolicyAmendment decision must be an object.",
+            "MultiDex acceptWithExecpolicyAmendment decision must be an object.",
             code=ErrorCode.INVALID_INPUT,
         )
     return _execpolicy_amendment(wrapped.get("execpolicy_amendment"))
@@ -398,7 +398,7 @@ def _codex_command_approval_response(
             allowed = _codex_available_execpolicy_amendment(params)
             if allowed != amendment:
                 raise OmnigentError(
-                    "Codex execpolicy amendment approval did not match an available decision.",
+                    "MultiDex execpolicy amendment approval did not match an available decision.",
                     code=ErrorCode.INVALID_INPUT,
                 )
             decision = {
@@ -420,7 +420,7 @@ def _codex_command_approval_response(
         }[result.action]
     else:
         raise OmnigentError(
-            f"Unsupported Codex command approval method: {method!r}",
+            f"Unsupported MultiDex command approval method: {method!r}",
             code=ErrorCode.INVALID_INPUT,
         )
     return {"decision": decision}
@@ -524,12 +524,12 @@ def _codex_mcp_elicitation_params(
     message = params.get("message")
     if mode not in {"form", "url"}:
         raise OmnigentError(
-            "Codex MCP elicitation params.mode must be 'form' or 'url'.",
+            "MultiDex MCP elicitation params.mode must be 'form' or 'url'.",
             code=ErrorCode.INVALID_INPUT,
         )
     if not isinstance(message, str) or not message:
         raise OmnigentError(
-            "Codex MCP elicitation params.message must be a non-empty string.",
+            "MultiDex MCP elicitation params.message must be a non-empty string.",
             code=ErrorCode.INVALID_INPUT,
         )
     server_name = params.get("serverName")
@@ -551,7 +551,7 @@ def _codex_mcp_elicitation_params(
         requested_schema = params.get("requestedSchema")
         if not isinstance(requested_schema, dict):
             raise OmnigentError(
-                "Codex MCP form elicitation requires object params.requestedSchema.",
+                "MultiDex MCP form elicitation requires object params.requestedSchema.",
                 code=ErrorCode.INVALID_INPUT,
             )
         return ElicitationRequestParams(
@@ -567,7 +567,7 @@ def _codex_mcp_elicitation_params(
     url = params.get("url")
     if not isinstance(url, str) or not url:
         raise OmnigentError(
-            "Codex MCP URL elicitation requires non-empty params.url.",
+            "MultiDex MCP URL elicitation requires non-empty params.url.",
             code=ErrorCode.INVALID_INPUT,
         )
     return ElicitationRequestParams(
@@ -600,7 +600,7 @@ def _codex_tool_request_user_input_params(
     ask_payload = _structured_codex_request_user_input(params)
     if ask_payload is None:
         raise OmnigentError(
-            "Codex requestUserInput requires at least one usable question.",
+            "MultiDex requestUserInput requires at least one usable question.",
             code=ErrorCode.INVALID_INPUT,
         )
     thread_id = params.get("threadId")
@@ -619,7 +619,7 @@ def _codex_tool_request_user_input_params(
         extras["item_id"] = item_id
     return ElicitationRequestParams(
         mode="form",
-        message="Codex needs input",
+        message="MultiDex needs input",
         requestedSchema=None,
         url=None,
         phase="codex_request_user_input",
@@ -674,9 +674,9 @@ def _codex_command_approval_params(
         extras["approval_id"] = approval_id
     if execpolicy_amendment is not None:
         extras["execpolicy_amendment"] = execpolicy_amendment
-    message = "Codex wants to run a command"
+    message = "MultiDex wants to run a command"
     if command:
-        message = f"Codex wants to run **{command}**"
+        message = f"MultiDex wants to run **{command}**"
     return ElicitationRequestParams(
         mode="form",
         message=message,
@@ -722,9 +722,9 @@ def _codex_file_change_approval_params(
         extras["turn_id"] = turn_id
     if isinstance(item_id, str) and item_id:
         extras["item_id"] = item_id
-    message = "Codex wants to modify files"
+    message = "MultiDex wants to modify files"
     if grant_root:
-        message = f"Codex wants write access under **{grant_root}**"
+        message = f"MultiDex wants write access under **{grant_root}**"
     return ElicitationRequestParams(
         mode="form",
         message=message,
@@ -775,7 +775,7 @@ def _codex_permissions_approval_params(
         extras["item_id"] = item_id
     return ElicitationRequestParams(
         mode="form",
-        message="Codex requests additional permissions",
+        message="MultiDex requests additional permissions",
         requestedSchema=None,
         url=None,
         phase="codex_permissions_approval",
@@ -820,7 +820,7 @@ def _codex_apply_patch_approval_params(
         extras["files"] = sorted(str(key) for key in files)
     return ElicitationRequestParams(
         mode="form",
-        message="Codex wants to apply a patch",
+        message="MultiDex wants to apply a patch",
         requestedSchema=None,
         url=None,
         phase="codex_apply_patch_approval",

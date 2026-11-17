@@ -307,7 +307,7 @@ def test_reused_automation_settings(
         page.get_by_role("menuitem", name="Edit", exact=True).click()
         if prompt_kind == "trigger":
             worker_agent = page.get_by_test_id("task-worker-agent-trigger")
-            expect(worker_agent).to_contain_text("Codex")
+            expect(worker_agent).to_contain_text("MultiDex")
             worker_agent.click()
             page.keyboard.press("Escape")
             expect(page.get_by_role("listbox")).to_have_count(0)

@@ -90,12 +90,12 @@ const FAILURE_CODE_DESCRIPTIONS: Record<string, string> = {
   session_agent_missing:
     "This agent no longer exists. Fork this session into another agent to continue.",
   codex_thread_reset:
-    "Codex hit an error reloading the earlier transcript, so it started a fresh thread.",
-  codex_turn_error: "Codex ran into an error during this turn.",
+    "MultiDex hit an error reloading the earlier transcript, so it started a fresh thread.",
+  codex_turn_error: "MultiDex ran into an error during this turn.",
   databricks_sign_in_pending: "The agent is waiting for a Databricks sign-in.",
   agent_startup_pending: "The agent is still starting in the session terminal.",
   databricks_sign_in_completed: "The Databricks sign-in completed and the agent is ready.",
-  codex_thread_not_started: "Codex stopped before it could start, so this turn never ran.",
+  codex_thread_not_started: "MultiDex stopped before it could start, so this turn never ran.",
   native_turn_error: "The agent ran into an error during this turn.",
   native_prompt_not_recorded: "Message not delivered. Try sending it again.",
   rate_limit_exceeded: "The model's rate limit was reached. You can retry this turn.",
@@ -104,9 +104,9 @@ const FAILURE_CODE_DESCRIPTIONS: Record<string, string> = {
   budget_exhausted:
     "The AI gateway refused this turn because a spending budget or usage limit is exhausted. Contact an admin to raise it, or use a different budget.",
   codex_compaction_model_failed:
-    "Codex couldn't compact the conversation on the previous model, so this turn didn't run.",
+    "MultiDex couldn't compact the conversation on the previous model, so this turn didn't run.",
   codex_provider_auth_failed:
-    "Codex couldn't get a token from the model provider's sign-in command on the host.",
+    "MultiDex couldn't get a token from the model provider's sign-in command on the host.",
   client_update_required:
     "The agent CLI on the host is too old for the selected model. Update it on the host, then start a new session.",
   host_disk_full: "The host's disk is full, so the agent can't save the conversation.",
@@ -156,7 +156,7 @@ function errorHeadline(error: RenderErrorDetails): string {
     error.title ||
     FAILURE_CODE_DESCRIPTIONS[error.code] ||
     (error.level === "info" ? "Notice" : "Something went wrong")
-  );
+  ).replace(/\bCodex\b/g, "MultiDex");
 }
 
 // An address the user can open, as printed by a launcher or a harness.
@@ -201,7 +201,10 @@ function relatedErrorText(error: RenderErrorDetails): string {
     error.remediation ? `Try this: ${error.remediation}` : undefined,
     error.message || error.code,
   ].filter((part): part is string => Boolean(part));
-  return parts.filter((part, index) => parts.indexOf(part) === index).join("\n\n");
+  return parts
+    .filter((part, index) => parts.indexOf(part) === index)
+    .join("\n\n")
+    .replace(/\bCodex\b/g, "MultiDex");
 }
 
 function trimBlankBoundaryLines(lines: string[]): string | null {
@@ -339,7 +342,10 @@ export function ErrorBanner({
       })),
     [relatedErrors],
   );
-  const parsed = useMemo(() => parseErrorMessage(message), [message]);
+  const parsed = useMemo(
+    () => parseErrorMessage(message.replace(/\bCodex\b/g, "MultiDex")),
+    [message],
+  );
   // Codex keeps compacting on its previous model, so only a rebuilt fork continues.
   const compactionModelError = [{ code, cause, message: parsed.message }, ...relatedErrors].find(
     (error) => error.code === COMPACTION_MODEL_FAILED_CODE,
@@ -350,7 +356,7 @@ export function ErrorBanner({
     if (remediation) parts.push(`Try this: ${remediation}`);
     if (!cause && parsed.message && parsed.message !== headline) parts.push(parsed.message);
     if (parts.length === 0) parts.push(parsed.message || code || headline);
-    return parts.join("\n\n");
+    return parts.join("\n\n").replace(/\bCodex\b/g, "MultiDex");
   }, [cause, code, headline, parsed.message, remediation]);
   const signIn = SIGN_IN_PENDING_CODES.has(code);
   const signInComplete = notice && SIGN_IN_COMPLETED_CODES.has(code);

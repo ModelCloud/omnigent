@@ -109,14 +109,14 @@ def test_harness_grouping_persists_across_reload(
     page.get_by_role("menuitemradio", name="Harness", exact=True).click()
     page.keyboard.press("Escape")
     claude = page.locator("section").filter(has=_section_header(page, "Claude Code"))
-    codex = page.locator("section").filter(has=_section_header(page, "Codex"))
+    codex = page.locator("section").filter(has=_section_header(page, "MultiDex"))
     expect(claude.locator('a[href^="/c/"]')).to_have_text(["Awaiting session"])
     expect(codex.locator('a[href^="/c/"]')).to_have_text(["Running session", "Idle session"])
     expect(claude.get_by_test_id("session-filter")).to_be_visible()
     expect(_section_header(page, "Projects")).to_have_count(0)
-    _section_header(page, "Codex").click()
+    _section_header(page, "MultiDex").click()
     expect(codex.locator('a[href^="/c/"]')).to_have_count(0)
-    _section_header(page, "Codex").click()
+    _section_header(page, "MultiDex").click()
 
     page.reload()
     if width < 768:

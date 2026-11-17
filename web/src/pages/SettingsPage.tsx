@@ -969,7 +969,7 @@ function FoldAssistantNarrationControl() {
       <SettingsLabel
         label="Show only the final answer"
         labelId={labelId}
-        description="Fold other agents' progress into the Worked row, keeping each turn's last message visible. Codex already folds completed turns."
+        description="Fold other agents' progress into the Worked row, keeping each turn's last message visible. MultiDex already folds completed turns."
       />
       <Switch
         aria-labelledby={labelId}

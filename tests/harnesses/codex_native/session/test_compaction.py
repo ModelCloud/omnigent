@@ -535,7 +535,7 @@ def test_codex_event_msg_record_reports_non_string_text_cleanly() -> None:
     """Malformed block text produces a user-facing CLI error."""
     with pytest.raises(
         click.ClickException,
-        match="Codex message content text must be a string",
+        match="MultiDex message content text must be a string",
     ):
         codex_native._codex_event_msg_record_for_message(
             {

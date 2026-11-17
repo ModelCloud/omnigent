@@ -4385,7 +4385,7 @@ async def test_attach_with_reconnect_uses_session_name_in_clean_close_message(
         attach_url="wss://example.com/attach",
         headers={"Authorization": "Bearer tok"},
         recover=lambda: _noop_async(),
-        session_name="Codex",
+        session_name="MultiDex",
     )
 
     captured = capsys.readouterr()

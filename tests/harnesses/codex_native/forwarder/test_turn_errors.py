@@ -1402,7 +1402,8 @@ async def test_handle_event_fails_retrying_turn_on_launcher_certificate_failure(
     assert "reauth_required" not in body["data"]
     output = body["data"]["output"]
     assert output.startswith(
-        "Codex could not connect to its model endpoint for gpt-5: the TLS certificate has expired"
+        "MultiDex could not connect to its model endpoint for gpt-5: "
+        "the TLS certificate has expired"
     )
     assert "SSLV3_ALERT_CERTIFICATE_EXPIRED" in output
     assert "run dbcert" in output
@@ -1631,7 +1632,7 @@ async def test_connection_retry_surfaces_once_per_turn(tmp_path: Path) -> None:
 
 
 _SYSTEM_ERROR_OUTPUT = (
-    "Codex reported a system error on this thread. Open the terminal for details."
+    "MultiDex reported a system error on this thread. Open the terminal for details."
 )
 
 

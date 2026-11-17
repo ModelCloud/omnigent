@@ -97,7 +97,7 @@ def _agents(*, skills: bool = False, picker_navigation: bool = False) -> list[di
     rows = []
     for agent_id, name, display, harness in [
         ("browser-chat-agent", "browser-chat-agent", "Browser agent", "claude-native"),
-        ("browser-codex-agent", "browser-codex-agent", "Codex", "codex-native"),
+        ("browser-codex-agent", "browser-codex-agent", "MultiDex", "codex-native"),
         (
             "browser-opencode-agent" if picker_navigation else "browser-gemini-agent",
             "browser-opencode-agent" if picker_navigation else "browser-gemini-agent",

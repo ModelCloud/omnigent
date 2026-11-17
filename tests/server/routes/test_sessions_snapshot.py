@@ -2702,7 +2702,7 @@ async def test_session_snapshot_retries_503_model_options(
                 _FakeResponse(
                     {
                         "error": "codex_native_model_options_failed",
-                        "detail": "Codex-native model options are not ready yet.",
+                        "detail": "MultiDex-native model options are not ready yet.",
                     },
                     status_code=503,
                 ),

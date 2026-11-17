@@ -3112,7 +3112,7 @@ def test_fork_checks_attachment_history_before_creating_session(
     assert response.status_code == expected_status, response.text
     if expected_status == 400:
         assert filename in response.json()["error"]["message"]
-        assert "Claude Code or Codex" in response.json()["error"]["message"]
+        assert "Claude Code or MultiDex" in response.json()["error"]["message"]
         assert not conv_store.fork_calls
         assert len(file_store.files) == 1
     else:

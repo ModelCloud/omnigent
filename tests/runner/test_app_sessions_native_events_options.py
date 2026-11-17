@@ -955,7 +955,7 @@ async def test_events_codex_native_approval_mode_change_types_only_when_idle(
     body = resp.json()
     assert body["error"] == "codex_native_approval_mode_busy"
     assert body["detail"] == (
-        "Codex is working on a turn. Change the approval mode after it finishes, "
+        "MultiDex is working on a turn. Change the approval mode after it finishes, "
         "or stop the turn first."
     )
     assert tmux_calls == []

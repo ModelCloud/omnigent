@@ -3907,8 +3907,8 @@ def test_publish_native_terminal_start_error_emits_failed_status_only(
         error = _publish_native_terminal_start_error(
             _capture,
             "415c9954e2fe4b9276083a4d2c66f689",
-            "Codex",
-            ImportError("Native Codex requires the 'codex' CLI on PATH."),
+            "MultiDex",
+            ImportError("Native MultiDex requires the 'codex' CLI on PATH."),
         )
 
     # Client-safe payload pointing at the runner log — no raw exception text.
@@ -5573,7 +5573,7 @@ async def test_create_session_codex_envelope_avoids_reads_and_overlaps_recovery(
         )
         terminal_started.set()
         return SessionResourceView(
-            id="terminal_codex_main", type="terminal", session_id=session_id, name="Codex"
+            id="terminal_codex_main", type="terminal", session_id=session_id, name="MultiDex"
         )
 
     monkeypatch.setattr(

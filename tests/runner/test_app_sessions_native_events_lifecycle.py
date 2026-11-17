@@ -1548,7 +1548,7 @@ async def test_codex_native_model_options_returns_503_until_bridge_state_exists(
     assert resp.status_code == 503, resp.text
     assert resp.json() == {
         "error": "codex_native_model_options_failed",
-        "detail": "Codex-native model options are not ready yet.",
+        "detail": "MultiDex-native model options are not ready yet.",
     }
 
 
@@ -2652,7 +2652,7 @@ async def test_events_codex_native_plan_mode_requires_loaded_bridge(
         )
 
     assert resp.status_code == 503, resp.text
-    assert "loaded Codex bridge" in resp.text
+    assert "loaded MultiDex bridge" in resp.text
 
 
 @pytest.mark.asyncio

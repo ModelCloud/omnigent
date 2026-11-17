@@ -6213,7 +6213,7 @@ _CODEX_MODEL_CARD = {
     "cause": _CODEX_MODEL_DETAIL,
     "remediation": (
         "Choose a model supported by your ChatGPT account using the model picker or /model. "
-        "To use another provider, configure it for Codex with `omnigent setup` "
+        "To use another provider, configure it for MultiDex with `omnigent setup` "
         "on the host, then start a new session."
     ),
 }
@@ -6231,7 +6231,7 @@ _CODEX_COMPACTION_BUDGET_CARD = {
     "title": "gpt-6-astra is over its AI gateway budget",
     "cause": (
         "The AI gateway refused a compaction request on gpt-6-astra: its budget is exhausted. "
-        "Codex retries it every turn before switching to gpt-6-1-sol, so switching models "
+        "MultiDex retries it every turn before switching to gpt-6-1-sol, so switching models "
         "doesn't help."
     ),
     "remediation": (
@@ -6241,9 +6241,9 @@ _CODEX_COMPACTION_BUDGET_CARD = {
     ),
 }
 _CODEX_COMPACTION_RETRY_CARD = {
-    "title": "Codex can't compact on gpt-6-astra right now",
+    "title": "MultiDex can't compact on gpt-6-astra right now",
     "cause": (
-        "Codex compacts this conversation on the previous model, gpt-6-astra, before "
+        "MultiDex compacts this conversation on the previous model, gpt-6-astra, before "
         "switching to gpt-6-1-sol, and that model is temporarily unavailable."
     ),
     "remediation": "Retry later, or choose Fork in the session menu to continue on gpt-6-1-sol.",
@@ -6259,7 +6259,7 @@ _CODEX_PROVIDER_AUTH_DETAIL = (
 )
 _CODEX_PROVIDER_AUTH_CARD = {
     "code": "codex_provider_auth_failed",
-    "title": "Codex couldn't get a model provider token",
+    "title": "MultiDex couldn't get a model provider token",
     "cause": (
         "The model provider's token command `isaac` failed on the host: Error: Could not "
         "get an AI DevTools access token. Run `isaac` to log in and try again."
@@ -11835,7 +11835,9 @@ async def test_patch_collaboration_mode_requires_live_runner_before_persisting(
                 runner_status,
                 json={
                     "error": "codex_native_settings_update_failed",
-                    "detail": "Codex-native plan-mode update requires a loaded Codex bridge.",
+                    "detail": (
+                        "MultiDex-native plan-mode update requires a loaded MultiDex bridge."
+                    ),
                 },
             )
 
@@ -11997,7 +11999,7 @@ async def test_patch_approval_mode_requires_live_runner_before_persisting(
                 runner_status,
                 json={
                     "error": "codex_native_approval_mode_failed",
-                    "detail": "Codex terminal is not running; reconnect first.",
+                    "detail": "MultiDex terminal is not running; reconnect first.",
                 },
             )
 

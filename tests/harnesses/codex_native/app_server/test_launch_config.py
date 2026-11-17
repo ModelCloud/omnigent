@@ -126,7 +126,7 @@ def test_build_codex_native_server_profile_error_names_profile(
     assert isinstance(caught.value, CodexDatabricksProfileMissingError)
     assert classify_exception(caught.value) == (ErrorCategory.CONFIG, ErrorImpact.BLOCKING)
     assert "databricks auth login --profile oss" in str(caught.value)
-    payload = _native_terminal_start_error_payload(caught.value, "Codex", session_id="conv_1")
+    payload = _native_terminal_start_error_payload(caught.value, "MultiDex", session_id="conv_1")
     assert str(caught.value) in payload["message"]
     assert "see the runner log" not in payload["message"]
 

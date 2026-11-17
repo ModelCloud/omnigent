@@ -20,7 +20,7 @@ import { authenticatedFetch } from "@/lib/identity";
 export const BRAIN_HARNESS_LABELS: Record<string, string> = {
   // Insertion order IS the fly-out's menu order.
   "claude-sdk": "Claude SDK",
-  codex: "Codex",
+  codex: "MultiDex",
   cursor: "Cursor",
   pi: "Pi",
   antigravity: "Antigravity",

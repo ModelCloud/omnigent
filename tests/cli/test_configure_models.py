@@ -225,7 +225,7 @@ def test_configure_models_list_groups_configured_providers(isolated_config) -> N
     # Grouped under each harness family (Claude / Codex); both providers
     # appear with their kind word — proves neither row was dropped.
     assert "Claude" in result.output
-    assert "Codex" in result.output
+    assert "MultiDex" in result.output
     assert "anthropic" in result.output
     assert "openai" in result.output
     assert result.output.count("key") >= 2
@@ -1693,7 +1693,7 @@ def test_overview_marks_unconfigured_with_x_and_configured_without_checkmark(
     assert "✓ Claude" not in out
     assert "✓ Anthropic API Key" in out
     # Installed-but-unconfigured Codex: the row's status is a ✗ "Not configured".
-    assert "Codex" in out
+    assert "MultiDex" in out
     assert "✗ Not configured" in out
 
 
@@ -1779,7 +1779,7 @@ def test_overview_lists_all_harnesses_in_priority_order(isolated_config, monkeyp
     options, selectable, descriptions, compact, max_visible = _capture_setup_overview(monkeypatch)
     expected = [
         "Claude",
-        "Codex",
+        "MultiDex",
         "Cursor",
         "OpenCode",
         "Hermes",
@@ -2249,7 +2249,7 @@ def test_overview_status_color_distinguishes_missing_from_unconfigured(
     options, selectable, _descriptions, _compact, _max_visible = _capture_setup_overview(
         monkeypatch
     )
-    codex = options[_overview_row_names(options, selectable).index("Codex")]
+    codex = options[_overview_row_names(options, selectable).index("MultiDex")]
     assert "[yellow]✗ Not configured[/]" in codex
 
     # CLI absent → red ✗ (nothing to use yet).
@@ -2260,7 +2260,7 @@ def test_overview_status_color_distinguishes_missing_from_unconfigured(
     options, selectable, _descriptions, _compact, _max_visible = _capture_setup_overview(
         monkeypatch
     )
-    codex = options[_overview_row_names(options, selectable).index("Codex")]
+    codex = options[_overview_row_names(options, selectable).index("MultiDex")]
     assert "[red]✗ Not installed[/]" in codex
 
 
@@ -2367,7 +2367,7 @@ def test_overview_descriptions_map_to_their_rows(isolated_config, monkeypatch) -
         for name, desc in zip(_overview_row_names(options, selectable), descriptions, strict=True)
     }
     assert desc_by_name["Claude"] == "Open to add a credential."
-    assert desc_by_name["Codex"] == "Open to add a credential."
+    assert desc_by_name["MultiDex"] == "Open to add a credential."
     assert desc_by_name["Cursor"] == ""
     # No provider signed in still runs OpenCode's free models, so the row is ready.
     assert desc_by_name["OpenCode"] == ""

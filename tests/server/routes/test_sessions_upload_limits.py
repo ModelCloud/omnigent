@@ -201,7 +201,7 @@ def test_empty_policy_refuses_default_filesystem_types(
     response = _upload(client, session_id, "bundle.zip", content_type=content_type)
     assert response.status_code == 415, response.text
     assert "'application/zip'" in response.text
-    assert "Claude Code or Codex" not in response.text
+    assert "Claude Code or MultiDex" not in response.text
     assert SqlAlchemyFileStore(db_uri).list(session_id).data == []
 
 
@@ -316,7 +316,7 @@ def test_upload_rejects_filesystem_types_for_an_unsupported_harness(
     )
     resp = _upload(client, sdk_session.id, filename, b"PK\x03\x04 fake", content_type)
     assert resp.status_code == 415, resp.text
-    assert "Claude Code or Codex" in resp.text
+    assert "Claude Code or MultiDex" in resp.text
 
 
 @pytest.mark.parametrize(
@@ -417,7 +417,7 @@ def test_send_rechecks_unsent_upload_after_fork_into_another_harness(
     assert response.status_code == status, response.text
     if status == 415:
         assert filename in response.text
-        assert "Claude Code or Codex" in response.text
+        assert "Claude Code or MultiDex" in response.text
         policy.assert_not_awaited()
     else:
         assert response.json()["denied"] is True

@@ -846,10 +846,10 @@ def test_scheduled_task_edit_switches_the_harness(
         "new-chat-landing-agent-select"
     )
     # Seeded from the task's own agent, not the first listed one.
-    expect(agent_trigger).to_contain_text("Codex", timeout=30_000)
+    expect(agent_trigger).to_contain_text("MultiDex", timeout=30_000)
     agent_trigger.click()
     expect(agent_trigger).to_have_attribute("aria-expanded", "true")
-    expect(page.get_by_role("menuitem", name="Codex", exact=True)).to_be_focused()
+    expect(page.get_by_role("menuitem", name="MultiDex", exact=True)).to_be_focused()
     page.get_by_role("menuitem").filter(has_text="Claude Code").click()
     expect(agent_trigger).to_contain_text("Claude Code")
     page.get_by_test_id("create-scheduled-task-submit").click()

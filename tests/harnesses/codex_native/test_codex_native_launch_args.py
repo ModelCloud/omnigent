@@ -278,7 +278,7 @@ def test_malformed_profile_state_preserves_both_files(tmp_path: Path, state: str
     config_path.write_text('model="base"\n')
     state_path = private / ".omnigent-config-profile.toml"
     state_path.write_text(state)
-    with pytest.raises(ValueError, match="Invalid Codex profile state"):
+    with pytest.raises(ValueError, match="Invalid MultiDex profile state"):
         materialize_codex_config_profile(private, source, None, codex_version=(0, 155, 0))
     assert config_path.read_text() == 'model="base"\n'
     assert state_path.read_text() == state
@@ -658,12 +658,12 @@ def test_reject_reserved_codex_transport_args_rejects(reserved_args: list[str]) 
         launch_args.reserved_codex_transport_arg(reserved_args)
         == reserved_args[0].split("=", 1)[0]
     )
-    with pytest.raises(ValueError, match="runner-owned Codex transport") as caught:
+    with pytest.raises(ValueError, match="runner-owned MultiDex transport") as caught:
         launch_args.reject_reserved_codex_transport_args(reserved_args)
     assert classify_exception(caught.value) == (ErrorCategory.CONFIG, ErrorImpact.BLOCKING)
-    assert "Start a new Codex session without" in str(caught.value)
+    assert "Start a new MultiDex session without" in str(caught.value)
     assert "ws://" not in str(caught.value)
-    with pytest.raises(ValueError, match="runner-owned Codex transport"):
+    with pytest.raises(ValueError, match="runner-owned MultiDex transport"):
         app_server.build_codex_remote_args(
             codex_args=tuple(reserved_args),
             thread_id=None,
@@ -678,7 +678,7 @@ def test_build_codex_native_server_rejects_transport_args_before_cli_discovery(
         pytest.fail("invalid saved arguments must fail before preparing an app-server")
 
     monkeypatch.setattr(app_server, "_find_codex_cli", unexpected_discovery)
-    with pytest.raises(ValueError, match="runner-owned Codex transport"):
+    with pytest.raises(ValueError, match="runner-owned MultiDex transport"):
         app_server.build_codex_native_server(
             socket_path=tmp_path / "codex.sock",
             codex_home=tmp_path / "codex-home",

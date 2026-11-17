@@ -57,7 +57,7 @@ _ROUTING_AGENTS_BODY = json.dumps(
             {
                 "id": "ag_codex_e2e",
                 "name": "codex-native-ui",
-                "display_name": "Codex",
+                "display_name": "MultiDex",
                 "description": "OpenAI's coding agent",
                 "harness": "codex-native",
                 "skills": [],

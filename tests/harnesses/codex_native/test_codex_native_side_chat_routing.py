@@ -118,7 +118,7 @@ async def test_forward_side_chat_turn_falls_through_without_thread_or_parent() -
         (404, {"detail": "thread not found: t"}, "not_found", "thread not found"),
         (
             503,
-            {"detail": "The Codex app-server connection was lost"},
+            {"detail": "The MultiDex app-server connection was lost"},
             "runner_unavailable",
             "lost",
         ),

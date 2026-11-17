@@ -75,6 +75,8 @@ describe("filterConversations", () => {
 
     expect(filterConversations(conversations, "claude").map((c) => c.id)).toEqual(["conv_native"]);
     expect(filterConversations(conversations, "codex").map((c) => c.id)).toEqual(["conv_codex"]);
+    expect(filterConversations(conversations, "multidex").map((c) => c.id)).toEqual(["conv_codex"]);
+    expect(conversationDisplayLabel(conversations[1])).toBe("MultiDex");
     expect(filterConversations(conversations, "pi").map((c) => c.id)).toEqual(["conv_pi"]);
   });
 });

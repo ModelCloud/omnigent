@@ -75,5 +75,5 @@ def test_codex_plan_mode_creation_and_toggles_preserve_instructions(
         heading = "# Plan Mode" if mode == "Plan" else "# Collaboration Mode: Default"
         assert collaboration and heading in collaboration[-1], collaboration
         assert any(
-            "Codex is running in the session terminal" in text for text in developer_messages
+            "MultiDex is running in the session terminal" in text for text in developer_messages
         )

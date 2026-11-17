@@ -463,7 +463,7 @@ def test_codex_provider_auth_diagnosis_names_the_command_to_sign_in(message: str
     diagnosis = diagnose_codex_provider_auth_failure(message)
 
     assert diagnosis == FailureDiagnosis(
-        title="Codex couldn't get a model provider token",
+        title="MultiDex couldn't get a model provider token",
         cause=(
             "The model provider's token command `isaac` failed on the host: Error: Could not "
             "get an AI DevTools access token. Run `isaac` to log in and try again."
@@ -741,7 +741,7 @@ def test_codex_model_rejection_explains_how_to_fix_configuration(model: str) -> 
     assert diagnosis.cause == message
     assert diagnosis.remediation is not None
     assert "model picker or /model" in diagnosis.remediation
-    assert "another provider, configure it for Codex" in diagnosis.remediation
+    assert "another provider, configure it for MultiDex" in diagnosis.remediation
     assert "start a new session" in diagnosis.remediation
     assert diagnosis.category is ErrorCategory.CONFIG
     assert classify_native_turn_error("codex_turn_error", message) == "codex_turn_error"
@@ -829,7 +829,7 @@ def test_model_unavailable_ignores_unrelated_errors(message: str) -> None:
 
 
 _COMPACTION_PREFIX = (
-    "Codex compacts this conversation on the previous model, gpt-6-astra, "
+    "MultiDex compacts this conversation on the previous model, gpt-6-astra, "
     "before switching to gpt-6-1-sol"
 )
 
@@ -846,21 +846,21 @@ _COMPACTION_PREFIX = (
         ),
         (
             "codex_turn_error",
-            "Codex can't compact on gpt-6-astra",
-            "gpt-6-astra rejected a compaction request. Codex retries it every turn",
+            "MultiDex can't compact on gpt-6-astra",
+            "gpt-6-astra rejected a compaction request. MultiDex retries it every turn",
             "Fork this session",
             ErrorCategory.UPSTREAM,
         ),
         (
             "rate_limit_exceeded",
-            "Codex can't compact on gpt-6-astra right now",
+            "MultiDex can't compact on gpt-6-astra right now",
             f"{_COMPACTION_PREFIX}, and that model is temporarily unavailable.",
             "Retry later",
             ErrorCategory.UPSTREAM,
         ),
         (
             "transient_upstream_error",
-            "Codex can't compact on gpt-6-astra right now",
+            "MultiDex can't compact on gpt-6-astra right now",
             f"{_COMPACTION_PREFIX}, and that model is temporarily unavailable.",
             "Retry later",
             ErrorCategory.UPSTREAM,

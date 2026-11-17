@@ -373,7 +373,7 @@ def _configure_brokered_codex_with_ucode(
     profile = provider.profile
     if os.environ.get("HARNESS_CODEX_GATEWAY_AUTH_COMMAND"):
         raise OmnigentError(
-            "signer-backed Codex conflicts with HARNESS_CODEX_GATEWAY_AUTH_COMMAND",
+            "signer-backed MultiDex conflicts with HARNESS_CODEX_GATEWAY_AUTH_COMMAND",
             code=ErrorCode.INVALID_INPUT,
         )
     sandbox = spec.os_env.sandbox if spec.os_env is not None else None
@@ -394,13 +394,13 @@ def _configure_brokered_codex_with_ucode(
             spec.os_env.sandbox = sandbox
     if sandbox.egress_rules:
         raise OmnigentError(
-            "signer-backed Codex does not support os_env.sandbox.egress_rules; "
+            "signer-backed MultiDex does not support os_env.sandbox.egress_rules; "
             "brokered sessions are model-only",
             code=ErrorCode.INVALID_INPUT,
         )
     if not profile:
         raise OmnigentError(
-            "signer-backed Codex requires an explicit Databricks profile",
+            "signer-backed MultiDex requires an explicit Databricks profile",
             code=ErrorCode.INVALID_INPUT,
         )
     workspace_url = get_workspace_url_for_profile(profile)
@@ -409,7 +409,7 @@ def _configure_brokered_codex_with_ucode(
     endpoint = agent_state.base_url if agent_state is not None else None
     if state is None or endpoint is None:
         raise OmnigentError(
-            "signer-backed Codex requires configured ucode Codex state; run `ucode configure`",
+            "signer-backed MultiDex requires configured provider authentication state",
             code=ErrorCode.INVALID_INPUT,
         )
     assert agent_state is not None

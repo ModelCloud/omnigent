@@ -965,13 +965,13 @@ def test_extract_search_text_for_error_item() -> None:
         data=ErrorData(
             source="execution",
             code="native_terminal_start_failed",
-            message="Native Codex requires the 'codex' CLI on PATH.",
+            message="Native MultiDex requires the 'codex' CLI on PATH.",
         ),
     )
     text = extract_search_text(item)
     assert "execution" in text
     assert "native_terminal_start_failed" in text
-    assert "Codex" in text
+    assert "MultiDex" in text
 
 
 def test_extract_search_text_for_resource_event_item() -> None:

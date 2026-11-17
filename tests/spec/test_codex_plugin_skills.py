@@ -269,7 +269,7 @@ def test_unavailable_plugin_inventory_keeps_standalone_and_enabled_plugin_skills
     if failure is None:
         codex_cli.assert_not_called()
         loaded_skills.assert_not_called()
-        message = "Codex plugin skills unavailable: `codex` was not found on the host"
+        message = "MultiDex plugin skills unavailable: `codex` was not found on the host"
         assert warnings == [f"{message}."]
         assert logged == [(logging.WARNING, message)]
     else:
@@ -277,7 +277,7 @@ def test_unavailable_plugin_inventory_keeps_standalone_and_enabled_plugin_skills
         # Codex's loaded catalog stands in for the inventory, so nothing is missing.
         assert warnings == []
         assert [level for level, _ in logged] == [logging.INFO]
-        assert logged[0][1].startswith("Codex plugin inventory unavailable: ")
+        assert logged[0][1].startswith("MultiDex plugin inventory unavailable: ")
 
 
 @pytest.mark.parametrize("skills_filter", ["all", ["selected"], ["toolkit:selected"]])
@@ -330,7 +330,7 @@ def test_unavailable_plugin_sources_keep_standalone_skills_and_warn(
     standalone = _skill(codex_home / "skills")
     _skill(_plugin(codex_home) / "skills")
     codex_cli.side_effect = failure
-    catalog_error = "Codex skills/list connection failed: refused"
+    catalog_error = "MultiDex skills/list connection failed: refused"
     loaded_skills.side_effect = RuntimeError(catalog_error)
     warnings: list[str] = []
 
@@ -367,7 +367,7 @@ def test_loaded_skill_errors_keep_found_skills_and_warn(
         assert _discover(tmp_path, warnings=warnings) == {"toolkit:review": enabled}
 
     message = (
-        "Codex plugin skills may be incomplete: `codex plugin list` exited 1 and "
+        "MultiDex plugin skills may be incomplete: `codex plugin list` exited 1 and "
         "`codex app-server` reported errors loading skills"
     )
     assert warnings == [f"{message}; see the host log for details."]
@@ -389,7 +389,7 @@ def test_failed_loaded_skill_query_keeps_standalone_skills(
 
     assert _discover(tmp_path, warnings=warnings) == {"review": standalone}
     assert warnings == [
-        "Codex plugin skills unavailable: `codex plugin list` exited 1 and "
+        "MultiDex plugin skills unavailable: `codex plugin list` exited 1 and "
         "`codex app-server` could not list skills; see the host log for details."
     ]
 
@@ -415,7 +415,7 @@ def test_unavailable_plugin_sources_without_a_collector_only_log(
     with caplog.at_level(logging.WARNING, logger="omnigent.spec.codex_plugin_skills"):
         assert _discover(tmp_path) == {}
     assert [record.getMessage() for record in caplog.records] == [
-        "Codex plugin skills unavailable: `codex plugin list` exited 1 and "
+        "MultiDex plugin skills unavailable: `codex plugin list` exited 1 and "
         "`codex app-server` could not list skills: TimeoutError"
     ]
 

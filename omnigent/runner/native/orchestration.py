@@ -945,7 +945,7 @@ def _required_runner_env(name: str) -> str:
     """
     value = os.environ.get(name)
     if value is None or not value:
-        raise RuntimeError(f"{name} must be set for runner-owned Codex terminals.")
+        raise RuntimeError(f"{name} must be set for runner-owned MultiDex terminals.")
     return value
 
 
@@ -1405,18 +1405,18 @@ async def _codex_native_launch_config(
         snapshot = await _fetch_native_launch_snapshot(
             server_client=server_client,
             session_id=session_id,
-            runtime_label="Codex",
+            runtime_label="MultiDex",
         )
     terminal_launch_args = snapshot.get("terminal_launch_args")
     if terminal_launch_args is not None and not (
         isinstance(terminal_launch_args, list)
         and all(isinstance(arg, str) for arg in terminal_launch_args)
     ):
-        raise RuntimeError(f"Invalid terminal_launch_args for Codex session {session_id!r}.")
+        raise RuntimeError(f"Invalid terminal_launch_args for MultiDex session {session_id!r}.")
     model_override = snapshot.get("model_override")
     if model_override is not None:
         if not isinstance(model_override, str) or not model_override:
-            raise RuntimeError(f"Invalid model_override for Codex session {session_id!r}.")
+            raise RuntimeError(f"Invalid model_override for MultiDex session {session_id!r}.")
         # Defense-in-depth: re-validate the persisted override at the runner
         # boundary so a value that somehow bypassed server-side validation
         # can never reach the Codex ``config.toml`` / ``--model`` argv as
@@ -1425,13 +1425,13 @@ async def _codex_native_launch_config(
             validate_model_override(model_override)
         except ValueError as exc:
             raise RuntimeError(
-                f"Invalid model_override for Codex session {session_id!r}: {exc}"
+                f"Invalid model_override for MultiDex session {session_id!r}: {exc}"
             ) from exc
     external_session_id = snapshot.get("external_session_id")
     if external_session_id is not None and (
         not isinstance(external_session_id, str) or not external_session_id
     ):
-        raise RuntimeError(f"Invalid external_session_id for Codex session {session_id!r}.")
+        raise RuntimeError(f"Invalid external_session_id for MultiDex session {session_id!r}.")
     # A model selected inside the native terminal is reported back to the
     # server, but does not change the web pick (model_override). On a cold
     # resume the last confirmed runtime model wins over that older pick and
@@ -1473,7 +1473,7 @@ async def _codex_native_launch_config(
     if session_workspace is not None and (
         not isinstance(session_workspace, str) or not session_workspace
     ):
-        raise RuntimeError(f"Invalid workspace for Codex session {session_id!r}.")
+        raise RuntimeError(f"Invalid workspace for MultiDex session {session_id!r}.")
     # Fork directives stamped on a clone at fork time. Only consulted when
     # the clone has no external_session_id of its own yet (see the
     # fork-source branch in _auto_create_codex_terminal); inert otherwise.
@@ -3236,9 +3236,9 @@ async def _post_native_launch_notice(
 
 
 _CODEX_THREAD_RESET_NOTICE = (
-    "Codex could not load this session's saved transcript, so Omnigent started a fresh "
-    "Codex thread instead of failing the turn. The chat history here is intact, but "
-    "Codex's own memory of the earlier turns is not restored."
+    "MultiDex could not load this session's saved transcript, so Omnigent started a fresh "
+    "MultiDex thread instead of failing the turn. The chat history here is intact, but "
+    "MultiDex's own memory of the earlier turns is not restored."
 )
 
 
@@ -5898,7 +5898,7 @@ async def _auto_create_codex_terminal(
         from omnigent.harnesses.codex_native.main import _ensure_local_codex_resume_rollout
 
         if server_client is None:
-            raise RuntimeError("server_client is required for Codex cold resume.")
+            raise RuntimeError("server_client is required for MultiDex cold resume.")
         await _ensure_local_codex_resume_rollout(
             server_client,
             session_id=session_id,
@@ -6424,7 +6424,7 @@ class _CodexTerminalExited(RuntimeError):
 
     def __init__(self, instance: TerminalInstance) -> None:
         self.instance = instance
-        super().__init__(_terminal_exit_summary(instance, "Codex", before_thread=True))
+        super().__init__(_terminal_exit_summary(instance, "MultiDex", before_thread=True))
 
 
 class _CodexSignInPromptSeen(RuntimeError):
@@ -6432,7 +6432,7 @@ class _CodexSignInPromptSeen(RuntimeError):
 
     def __init__(self, instance: TerminalInstance) -> None:
         self.instance = instance
-        super().__init__("Codex pane is parked on a sign-in prompt")
+        super().__init__("MultiDex pane is parked on a sign-in prompt")
 
 
 async def _codex_pane_screen(instance: TerminalInstance) -> str:
@@ -6538,14 +6538,14 @@ async def _record_agent_startup_pending(
     prompt = detect_sign_in_prompt(await _codex_pane_screen(terminal_instance))
     if prompt is not None:
         code = "databricks_sign_in_pending"
-        title = "Codex can't start until you sign in to Databricks"
-        message = "Codex is waiting for a sign-in in this session's terminal."
-        remediation = sign_in_next_step("Codex")
+        title = "MultiDex can't start until you sign in to Databricks"
+        message = "MultiDex is waiting for a sign-in in this session's terminal."
+        remediation = sign_in_next_step("MultiDex")
     else:
         code = "agent_startup_pending"
-        title = "Codex is still starting"
+        title = "MultiDex is still starting"
         message = (
-            "Codex is still starting in this session's terminal and may be waiting "
+            "MultiDex is still starting in this session's terminal and may be waiting "
             "for a sign-in there."
         )
         remediation = (
@@ -6602,7 +6602,7 @@ async def _apply_codex_launch_plan_mode(
     except Exception as exc:
         # Never execute a queued implementation request after its Plan switch failed.
         message = (
-            "Could not enable Codex Plan mode. Restart the session and send the message again."
+            "Could not enable MultiDex Plan mode. Restart the session and send the message again."
         )
         write_bridge_startup_error(
             bridge_dir, message, code="codex_plan_mode_failed", title="Plan mode could not start"
@@ -6719,8 +6719,8 @@ async def _codex_discover_thread_and_forward(
         )
         write_bridge_startup_error(
             bridge_dir,
-            "Codex is not signed in and no Omnigent provider routes the codex "
-            "harness, so the Codex TUI is parked on its sign-in screen and "
+            "MultiDex is not signed in and no Omnigent provider routes the codex "
+            "harness, so the MultiDex TUI is parked on its sign-in screen and "
             f"cannot run this turn. Launch routing: {routing_summary}. "
             "Sign in from the session terminal, or configure a provider "
             "(`omnigent setup`), then send the message again.",
@@ -6891,7 +6891,7 @@ async def _codex_discover_thread_and_forward(
                 if isinstance(exc, _CodexTerminalExited):
                     # The app-server stayed healthy; lead with the TUI's actual
                     # failure instead of the generic thread-discovery wrapper.
-                    summary = _terminal_exit_summary(exc.instance, "Codex", before_thread=True)
+                    summary = _terminal_exit_summary(exc.instance, "MultiDex", before_thread=True)
                 else:
                     if isinstance(exc, TimeoutError):
                         timeout_seconds = (
@@ -6903,7 +6903,8 @@ async def _codex_discover_thread_and_forward(
                     else:
                         cause = "event stream ended before a thread was created"
                     summary = (
-                        f"Codex app-server never started a thread ({cause}: {type(exc).__name__})."
+                        "MultiDex app-server never started a thread "
+                        f"({cause}: {type(exc).__name__})."
                     )
                 if app_server is None or _AUTO_CODEX_APP_SERVERS.get(session_id) is app_server:
                     terminal_output = diagnostics.get("terminal_last_output")

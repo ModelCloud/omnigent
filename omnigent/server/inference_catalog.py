@@ -84,7 +84,7 @@ def _wire(provider: ProviderEntry, harness: str, model: str | None = None) -> Mo
     protocol = provider.families[family].wire_api
     canonical = canonicalize_harness(normalize_inference_harness(harness))
     if canonical in {"codex", "codex-native"} and protocol == "chat":
-        raise _invalid("Codex requires a Responses endpoint; configure wire_api: responses.")
+        raise _invalid("MultiDex requires a Responses endpoint; configure wire_api: responses.")
     if canonical in {"opencode-native", "jcode", "qwen"}:
         if protocol == "responses":
             raise _invalid(

@@ -151,11 +151,11 @@ def test_is_connection_retry_falls_back_to_message_text() -> None:
 
 def test_connection_retry_detail_names_codex_reason() -> None:
     assert connection_retry_detail(_retry(_CONNECTION_FAILED)) == (
-        "Codex is reconnecting to its model endpoint (Reconnecting... waiting for network: "
+        "MultiDex is reconnecting to its model endpoint (Reconnecting... waiting for network: "
         "Connection failed: error sending request)"
     )
     assert connection_retry_detail({"willRetry": True}) == (
-        "Codex is reconnecting to its model endpoint (no detail reported)"
+        "MultiDex is reconnecting to its model endpoint (no detail reported)"
     )
 
 
@@ -163,11 +163,11 @@ def test_certificate_failure_message_names_model_cause_and_evidence() -> None:
     failure = detect_certificate_failure(_DBCERT_LINE)
     assert failure is not None
     assert certificate_failure_message(failure, model="gpt-5") == (
-        "Codex could not connect to its model endpoint for gpt-5: the TLS certificate has "
+        "MultiDex could not connect to its model endpoint for gpt-5: the TLS certificate has "
         f"expired (stderr: {_DBCERT_LINE})."
     )
     assert certificate_failure_message(failure).startswith(
-        "Codex could not connect to its model endpoint: the TLS certificate has expired"
+        "MultiDex could not connect to its model endpoint: the TLS certificate has expired"
     )
     assert "run dbcert" in CERTIFICATE_REMEDIATION
 
@@ -185,7 +185,7 @@ def test_connection_retry_detail_redacts_and_bounds_codex_text() -> None:
     detail = connection_retry_detail(params)
     assert "secret" not in detail
     assert "https://[REDACTED]@proxy.example/v1" in detail
-    assert len(detail) <= 300 + len("Codex is reconnecting to its model endpoint ()")
+    assert len(detail) <= 300 + len("MultiDex is reconnecting to its model endpoint ()")
 
 
 def test_is_connection_failure_text_matches_connection_level_wording() -> None:
@@ -199,4 +199,4 @@ def test_certificate_failure_message_keeps_codex_text() -> None:
     failure = detect_certificate_failure(_DBCERT_LINE)
     assert failure is not None
     message = certificate_failure_message(failure, codex_error="stream disconnected")
-    assert message.endswith("). Codex reported: stream disconnected")
+    assert message.endswith("). MultiDex reported: stream disconnected")

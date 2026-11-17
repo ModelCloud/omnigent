@@ -739,13 +739,13 @@ class NativeInterruptRunner:
         pending_mcp = cancel_pending_mcp_startup(bridge_dir)
         if state.active_turn_id is None and not pending_mcp:
             self._logger.info(
-                "Codex-native interrupt skipped for %s: no active turn or MCP startup.",
+                "MultiDex-native interrupt skipped for %s: no active turn or MCP startup.",
                 conv_id,
             )
             return Response(status_code=204)
         if pending_mcp:
             self._logger.info(
-                "Codex-native interrupt for %s cancels MCP startup: %s",
+                "MultiDex-native interrupt for %s cancels MCP startup: %s",
                 conv_id,
                 ", ".join(pending_mcp),
             )
@@ -778,7 +778,8 @@ class NativeInterruptRunner:
                         )
                     except Exception:  # the local cancel already took effect.
                         self._logger.warning(
-                            "Codex-native MCP startup interrupt failed for session=%s thread=%s",
+                            "MultiDex-native MCP startup interrupt failed "
+                            "for session=%s thread=%s",
                             conv_id,
                             state.thread_id,
                             exc_info=True,
@@ -812,7 +813,7 @@ class NativeInterruptRunner:
                                     )
                                 except Exception:  # the clear already succeeded.
                                     self._logger.warning(
-                                        "Codex-native idle publish failed for session=%s",
+                                        "MultiDex-native idle publish failed for session=%s",
                                         conv_id,
                                         exc_info=True,
                                     )
@@ -823,7 +824,7 @@ class NativeInterruptRunner:
                                 on_cleared=None if stopping else _publish_idle,
                             )
                             self._logger.info(
-                                "Codex-native interrupt reconciled an already-ended turn "
+                                "MultiDex-native interrupt reconciled an already-ended turn "
                                 "for session=%s thread=%s turn=%s cleared=%s: %s",
                                 conv_id,
                                 state.thread_id,
@@ -836,7 +837,7 @@ class NativeInterruptRunner:
                             # live, so leave its recorded id in place and publish no
                             # idle; the forwarder owns the newer turn's lifecycle.
                             self._logger.info(
-                                "Codex-native interrupt targeted a superseded turn for "
+                                "MultiDex-native interrupt targeted a superseded turn for "
                                 "session=%s thread=%s turn=%s; a newer turn is live: %s",
                                 conv_id,
                                 state.thread_id,
@@ -849,7 +850,7 @@ class NativeInterruptRunner:
                         return Response(status_code=204)
         except Exception as exc:  # surface active-turn interrupt failures.
             self._logger.warning(
-                "Codex-native turn/interrupt failed for session=%s thread=%s turn=%s",
+                "MultiDex-native turn/interrupt failed for session=%s thread=%s turn=%s",
                 conv_id,
                 state.thread_id,
                 state.active_turn_id,
@@ -892,7 +893,7 @@ class NativeInterruptRunner:
                 await self._codex_interrupt(conv_id, stopping=True)
         except Exception:
             self._logger.warning(
-                "Codex-native stop could not interrupt session=%s; continuing teardown",
+                "MultiDex-native stop could not interrupt session=%s; continuing teardown",
                 conv_id,
                 exc_info=True,
             )
@@ -903,7 +904,7 @@ class NativeInterruptRunner:
                 await teardown_codex_native_app_server(conv_id, strict=True)
         except Exception as exc:
             self._logger.warning(
-                "Codex-native stop teardown failed for session=%s", conv_id, exc_info=True
+                "MultiDex-native stop teardown failed for session=%s", conv_id, exc_info=True
             )
             return JSONResponse(
                 status_code=503,
@@ -929,7 +930,7 @@ class NativeInterruptRunner:
             delivery_ack.entry is not None or conv_id in self._session_sub_agent_names
         ):
             self._logger.warning(
-                "Codex-native stop succeeded but sub-agent delivery was "
+                "MultiDex-native stop succeeded but sub-agent delivery was "
                 "not confirmed; session=%s reason=%s",
                 conv_id,
                 delivery_ack.reason,

@@ -13718,7 +13718,7 @@ async def test_sign_in_pending_failure_posts_a_notice_once_the_agent_is_ready(
 
     (notice,) = _notices()
     item = notice["data"]["item_data"]
-    agent = "Codex" if harness == "codex-native" else "Claude Code"
+    agent = "MultiDex" if harness == "codex-native" else "Claude Code"
     assert notice["data"]["item_type"] == "error"
     assert item["level"] == "info"
     assert item["title"] == "Signed in to Databricks"

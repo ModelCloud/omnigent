@@ -105,7 +105,7 @@ _KIND_STYLE: dict[str, str] = {
 # model families).
 _FAMILY_LABEL: dict[str, str] = {
     ANTHROPIC_FAMILY: "Claude",
-    OPENAI_FAMILY: "Codex",
+    OPENAI_FAMILY: "MultiDex",
     GEMINI_FAMILY: "Gemini",
     PI_SURFACE: "Pi",
 }

@@ -310,7 +310,7 @@ def test_incomplete_codex_catalog_reports_warnings_and_is_cached_only_briefly(
     monkeypatch.setattr("omnigent.spec.codex_plugin_skills.subprocess.run", cli)
     monkeypatch.setattr(
         "omnigent.harnesses.codex_native.skill_discovery.loaded_codex_skills",
-        Mock(side_effect=RuntimeError("Codex skills/list connection failed")),
+        Mock(side_effect=RuntimeError("MultiDex skills/list connection failed")),
     )
     discovery = HostSkillDiscovery(lambda _: pytest.fail("No bundle expected"))
     frame = HostSkillsFrame("request", "codex-native", str(tmp_path))
@@ -320,7 +320,7 @@ def test_incomplete_codex_catalog_reports_warnings_and_is_cached_only_briefly(
 
     # Standalone skills survive both failed plugin sources, and the catalog says why.
     warning = (
-        "Codex plugin skills unavailable: `codex plugin list` exited 1 and "
+        "MultiDex plugin skills unavailable: `codex plugin list` exited 1 and "
         "`codex app-server` could not list skills; see the host log for details."
     )
     assert names(warnings := []) == ["later", "local"]

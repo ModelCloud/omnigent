@@ -168,7 +168,7 @@ def test_select_fallback_skips_header_rows_in_numbering(
     the user's pick would land on the wrong provider).
     """
     _feed(monkeypatch, ["2"])
-    options = ["Claude", "  anthropic", "  claude-sub", "Codex", "  openai"]
+    options = ["Claude", "  anthropic", "  claude-sub", "MultiDex", "  openai"]
     selectable = [False, True, True, False, True]
     result = interactive.select("Configure harness", options, selectable=selectable)
     # 2nd selectable row = "  claude-sub" at original index 2. If headers
@@ -181,7 +181,7 @@ def test_select_fallback_skips_header_rows_in_numbering(
     assert "3.   openai" in out
     # The header text appears but is never given a selectable number.
     assert "Claude" in out and "1. Claude" not in out
-    assert "Codex" in out and "3. Codex" not in out
+    assert "MultiDex" in out and "3. Codex" not in out
 
 
 def test_select_fallback_default_maps_to_numbered_position(
@@ -222,7 +222,7 @@ def test_select_rejects_all_header_rows(non_tty: None) -> None:
     than spin or return a header index.
     """
     with pytest.raises(ValueError):
-        interactive.select("Pick", ["Claude", "Codex"], selectable=[False, False])
+        interactive.select("Pick", ["Claude", "MultiDex"], selectable=[False, False])
 
 
 def test_step_selectable_skips_headers() -> None:
@@ -560,7 +560,7 @@ def _select_over_pty(monkeypatch: pytest.MonkeyPatch, keys: bytes) -> int:
         monkeypatch.setattr(sys, "stdin", stdin)
         monkeypatch.setattr(sys, "stdout", io.StringIO())
         writer.start()
-        return interactive.select("Pick", ["Claude", "Codex", "Quit"])
+        return interactive.select("Pick", ["Claude", "MultiDex", "Quit"])
     finally:
         writer.join(timeout=10)
         os.close(controller)

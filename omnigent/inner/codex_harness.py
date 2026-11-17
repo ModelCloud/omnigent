@@ -328,9 +328,9 @@ def _resolve_signer_launch_config() -> SignerLaunchConfig | None:
     if provider_id != UCODE_SIGNER_BINDING_ID:
         raise ValueError(f"unsupported model signer provider {provider_id!r}")
     if _parse_truthy(_ENV_GATEWAY, default=False):
-        raise ValueError("signer-backed Codex conflicts with the legacy gateway mode")
+        raise ValueError("signer-backed MultiDex conflicts with the legacy gateway mode")
     if os.environ.get(_ENV_GATEWAY_AUTH_COMMAND):
-        raise ValueError("signer-backed Codex conflicts with a legacy gateway auth command")
+        raise ValueError("signer-backed MultiDex conflicts with a legacy gateway auth command")
     if any(
         os.environ.get(name)
         for name in (
@@ -339,13 +339,13 @@ def _resolve_signer_launch_config() -> SignerLaunchConfig | None:
             _ENV_MODEL_PROVIDER,
         )
     ):
-        raise ValueError("signer-backed Codex conflicts with legacy provider overrides")
+        raise ValueError("signer-backed MultiDex conflicts with legacy provider overrides")
     host = os.environ.get(_ENV_GATEWAY_HOST, "").strip()
     profile = os.environ.get(_ENV_DATABRICKS_PROFILE, "").strip()
     if not endpoint or not host or not profile:
         raise ValueError("ucode signer requires trusted endpoint, host, and profile")
     if not raw_model_egress:
-        raise ValueError("signer-backed Codex requires explicit model egress")
+        raise ValueError("signer-backed MultiDex requires explicit model egress")
     try:
         model_egress = json.loads(raw_model_egress)
     except json.JSONDecodeError as exc:

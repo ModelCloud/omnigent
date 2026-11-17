@@ -981,7 +981,7 @@ def _codex_inherited_records(
             yield record
 
 
-_CODEX_COMPACTION_FALLBACK_SUMMARY = "[Codex compaction — context was compacted in Codex]"
+_CODEX_COMPACTION_FALLBACK_SUMMARY = "[MultiDex compaction — context was compacted in MultiDex]"
 
 
 def _codex_compaction_item(payload: dict[str, object]) -> NewConversationItem | None:
@@ -1081,7 +1081,7 @@ def load_codex_session(
     rollouts = _codex_rollout_candidates(homes)
     selected = _codex_thread_location(homes, session_id, rollouts)
     if selected is None:
-        raise SessionImportNotFoundError(f"Codex session {session_id!r} was not found")
+        raise SessionImportNotFoundError(f"MultiDex session {session_id!r} was not found")
     rollout_path, home, thread_row = selected
 
     own_records = _codex_rollout_records(rollout_path)
@@ -1103,7 +1103,9 @@ def load_codex_session(
     )
     items = _codex_items_within_import_cap(items)
     if not items:
-        raise SessionImportNotFoundError(f"Codex session {session_id!r} has no importable history")
+        raise SessionImportNotFoundError(
+            f"MultiDex session {session_id!r} has no importable history"
+        )
     return LocalSessionImport(
         source="codex",
         external_session_id=session_id,

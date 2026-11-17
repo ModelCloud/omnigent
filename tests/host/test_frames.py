@@ -227,7 +227,7 @@ def test_import_local_frames_round_trip() -> None:
             request_id="req_skills",
             status="ok",
             skills=[{"name": "review", "description": "Review changes"}],
-            warnings=["Codex plugin skills unavailable: `codex plugin list` exited 1"],
+            warnings=["MultiDex plugin skills unavailable: `codex plugin list` exited 1"],
         ),
         HostSkillsResultFrame(
             request_id="req_skills",

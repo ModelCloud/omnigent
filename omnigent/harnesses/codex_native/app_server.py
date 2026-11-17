@@ -248,7 +248,7 @@ class CodexModelProviderMissingError(OmnigentError, RuntimeError):
         except ValueError:
             shown_path = str(config_path)
         super().__init__(
-            f"Codex config {shown_path} has no [model_providers.{provider}] table "
+            f"MultiDex config {shown_path} has no [model_providers.{provider}] table "
             "for the selected model provider. Restore it, or pick another provider "
             "with `omnigent setup`.",
             code=ErrorCode.HARNESS_NOT_CONFIGURED,
@@ -684,16 +684,18 @@ def _sync_codex_developer_instructions(
         try:
             state = tomlkit.parse(state_path.read_text()).unwrap()
         except tomlkit.exceptions.TOMLKitError as error:
-            raise ValueError(f"Invalid Codex developer-instruction state: {state_path}") from error
+            raise ValueError(
+                f"Invalid MultiDex developer-instruction state: {state_path}"
+            ) from error
         if not all(isinstance(state.get(key), str) for key in ("base", "applied")):
-            raise ValueError(f"Invalid Codex developer-instruction state: {state_path}")
+            raise ValueError(f"Invalid MultiDex developer-instruction state: {state_path}")
         base = state["base"]
         if "pending" in state:
             if not isinstance(state["pending"], str):
-                raise ValueError(f"Invalid Codex developer-instruction state: {state_path}")
+                raise ValueError(f"Invalid MultiDex developer-instruction state: {state_path}")
             if current_base not in (state["applied"], state["pending"]):
                 raise ValueError(
-                    "Codex developer instructions changed during an incomplete update: "
+                    "MultiDex developer instructions changed during an incomplete update: "
                     f"{state_path}"
                 )
         elif preserve_current_edit and current_base != state["applied"]:
@@ -705,7 +707,7 @@ def _sync_codex_developer_instructions(
                 base = current_base
     elif base_override is not _NO_INSTRUCTION_BASE_OVERRIDE:
         if not isinstance(base_override, str):
-            raise TypeError("Codex developer-instruction base override must be a string")
+            raise TypeError("MultiDex developer-instruction base override must be a string")
         base = base_override
     elif legacy_base_path.exists():
         base = legacy_base_path.read_text(encoding="utf-8")
@@ -797,7 +799,7 @@ def _migrate_profile_instruction_base(
             source = tomlkit.parse(source_path.read_text()) if source_path.exists() else {}
         except (OSError, tomlkit.exceptions.TOMLKitError) as error:
             raise ValueError(
-                f"Cannot migrate Codex profile instructions from {source_path}"
+                f"Cannot migrate MultiDex profile instructions from {source_path}"
             ) from error
         else:
             source_instructions = source.get("developer_instructions")
@@ -828,7 +830,7 @@ def _selected_profile_instructions(
         profiles = source.get("profiles")
         document = profiles.get(profile) if isinstance(profiles, dict) else None
         if not isinstance(document, dict):
-            raise ValueError(f"Codex config profile {profile!r} does not exist")
+            raise ValueError(f"MultiDex config profile {profile!r} does not exist")
     if not isinstance(document, dict):
         return _NO_PROFILE_INSTRUCTIONS
     value = document.get("developer_instructions", _NO_PROFILE_INSTRUCTIONS)
@@ -987,7 +989,7 @@ def clamp_codex_effort_for_model(
     log_once(
         _logger,
         logging.INFO,
-        "Adjusted Codex reasoning effort for model %s: %s -> %s",
+        "Adjusted MultiDex reasoning effort for model %s: %s -> %s",
         model,
         effort,
         resolved,
@@ -1039,7 +1041,7 @@ async def resolve_codex_effort_for_model(
             log_once(
                 _logger,
                 logging.WARNING,
-                "Could not read Codex model capabilities for effort validation (transport=%s)",
+                "Could not read MultiDex model capabilities for effort validation (transport=%s)",
                 transport,
                 exc_info=True,
             )
@@ -1048,13 +1050,13 @@ async def resolve_codex_effort_for_model(
         if entry is None:
             # Name the cause, since an unreachable server and an unlisted model differ.
             raise ValueError(
-                "Could not read the Codex model catalog to resolve the default effort"
+                "Could not read the MultiDex model catalog to resolve the default effort"
                 if model and catalog is None
-                else f"Codex model capabilities unavailable for {model!r}"
+                else f"MultiDex model capabilities unavailable for {model!r}"
             )
         default = entry.get("defaultReasoningEffort", entry.get("default_reasoning_level"))
         if not isinstance(default, str) or not default:
-            raise ValueError("Codex model catalog did not provide a default reasoning effort")
+            raise ValueError("MultiDex model catalog did not provide a default reasoning effort")
         effort = default
     return clamp_codex_effort_for_model(effort, model, catalog) or effort
 
@@ -1514,13 +1516,13 @@ class CodexAppServerClient:
         :raises CodexAppServerResponseError: If the app-server returns an error.
         """
         if self._ws is None:
-            raise RuntimeError("Codex app-server client is not connected")
+            raise RuntimeError("MultiDex app-server client is not connected")
         request_id = self._next_id
         self._next_id += 1
         loop = asyncio.get_running_loop()
         future: asyncio.Future[CodexMessage] = loop.create_future()
         self._pending_requests[request_id] = future
-        rpc_identity = f"Codex app-server RPC: method={method} request_id={request_id}"
+        rpc_identity = f"MultiDex app-server RPC: method={method} request_id={request_id}"
         try:
             try:
                 await self._ws.send(
@@ -1575,7 +1577,7 @@ class CodexAppServerClient:
             reader.exception() if reader is not None and not reader.cancelled() else None
         )
         close_code = self._ws.close_code if self._ws is not None else None
-        error = ConnectionError(f"Codex app-server disconnected before responding to {method}")
+        error = ConnectionError(f"MultiDex app-server disconnected before responding to {method}")
         error.__cause__ = reader_error
         error.add_note(f"{rpc_identity} phase=response close_code={close_code}")
         return error
@@ -1603,7 +1605,7 @@ class CodexAppServerClient:
         :returns: None.
         """
         if self._ws is None:
-            raise RuntimeError("Codex app-server client is not connected")
+            raise RuntimeError("MultiDex app-server client is not connected")
         message: CodexMessage = {"method": method}
         if params is not None:
             message["params"] = params
@@ -1627,7 +1629,7 @@ class CodexAppServerClient:
             connected.
         """
         if self._ws is None:
-            raise RuntimeError("Codex app-server client is not connected")
+            raise RuntimeError("MultiDex app-server client is not connected")
         await self._ws.send(json.dumps({"id": request_id, "result": result}))
 
     async def iter_events(self) -> AsyncIterator[CodexMessage]:
@@ -1740,25 +1742,25 @@ async def list_codex_model_options(
                 log_once(
                     _logger,
                     logging.INFO,
-                    "Codex model/list rejected includeHidden; hidden model capabilities "
+                    "MultiDex model/list rejected includeHidden; hidden model capabilities "
                     "are unavailable from this server",
                 )
             continue
         result = response.get("result")
         if not isinstance(result, dict):
-            raise ValueError("Codex model/list result must be an object")
+            raise ValueError("MultiDex model/list result must be an object")
         data = result.get("data")
         if not isinstance(data, list):
-            raise ValueError("Codex model/list data must be a list")
+            raise ValueError("MultiDex model/list data must be a list")
         for raw_model in data:
             if not isinstance(raw_model, dict):
-                raise ValueError("Codex model/list item must be an object")
+                raise ValueError("MultiDex model/list item must be an object")
             options.append(raw_model)
         next_cursor = result.get("nextCursor")
         if next_cursor is None:
             return options
         if not isinstance(next_cursor, str) or not next_cursor:
-            raise ValueError("Codex model/list nextCursor must be a string or null")
+            raise ValueError("MultiDex model/list nextCursor must be a string or null")
         cursor = next_cursor
 
 
@@ -1784,7 +1786,7 @@ async def discover_codex_model_options(*, codex_path: str | None = None) -> list
     """
     resolved_codex = codex_path or _find_codex_cli()
     if not resolved_codex:
-        raise ImportError("Native Codex model discovery requires the 'codex' CLI on PATH.")
+        raise ImportError("Native MultiDex model discovery requires the 'codex' CLI on PATH.")
     cached = _model_discovery_cache.get(resolved_codex)
     if cached is not None:
         return [dict(option) for option in cached]
@@ -1966,7 +1968,7 @@ async def _wait_for_discovery_listener(
     deadline = asyncio.get_running_loop().time() + _CONNECT_TIMEOUT_SECONDS
     while asyncio.get_running_loop().time() < deadline:
         if process.returncode is not None:
-            message = f"Codex model discovery exited early ({process.returncode})"
+            message = f"MultiDex model discovery exited early ({process.returncode})"
             detail = await discovery.stderr_tail
             if detail:
                 message = f"{message}: {detail}"
@@ -1980,7 +1982,7 @@ async def _wait_for_discovery_listener(
         await writer.wait_closed()
         del reader
         return
-    raise TimeoutError("Timed out waiting for Codex model discovery app-server")
+    raise TimeoutError("Timed out waiting for MultiDex model discovery app-server")
 
 
 def _codex_config_identity(source_home: Path) -> tuple[object, ...]:
@@ -2139,7 +2141,7 @@ async def probe_codex_model_options(
         launch = await asyncio.to_thread(resolve_native_codex_launch, model=None)
     resolved_codex = codex_path or _find_codex_cli()
     if not resolved_codex:
-        raise ImportError("Native Codex model probing requires the 'codex' CLI on PATH.")
+        raise ImportError("Native MultiDex model probing requires the 'codex' CLI on PATH.")
     config_overrides = list(launch.config_overrides)
     pinned_model = launch.model
     env = _clean_codex_env()
@@ -2781,7 +2783,7 @@ class CodexNativeAppServer:
         config_source = self.config_source or _codex_home_config_source_from_env()
         if self.codex_home.resolve() == config_source.resolve():
             raise ValueError(
-                "Omnigent could not isolate this session's Codex configuration. "
+                "Omnigent could not isolate this session's MultiDex configuration. "
                 "Startup was stopped to protect your shared config. Please report this as a bug."
             )
         self.codex_home.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -2984,7 +2986,7 @@ class CodexNativeAppServer:
         )
         if codex_version is not None and not policy_hooks_supported:
             self._disable_policy_hook(
-                f"Codex CLI {_format_codex_version(codex_version)} is older than "
+                f"MultiDex CLI {_format_codex_version(codex_version)} is older than "
                 f"{_format_codex_version(_MIN_POLICY_HOOK_CODEX_VERSION)}; upgrade "
                 "codex to enforce tool-call policies."
             )
@@ -3155,7 +3157,9 @@ class CodexNativeAppServer:
                     try:
                         await self._trust_policy_hooks(client=startup_client)
                     except Exception as exc:  # noqa: BLE001 - degrade, never block startup
-                        self._disable_policy_hook(f"Codex policy hook could not be trusted: {exc}")
+                        self._disable_policy_hook(
+                            f"MultiDex policy hook could not be trusted: {exc}"
+                        )
             finally:
                 try:
                     await startup_client.close()
@@ -3338,7 +3342,7 @@ class CodexNativeAppServer:
             return ""
         joined = " | ".join(config_errors[-3:])
         return (
-            f" Codex reported a configuration problem (the per-session config "
+            f" MultiDex reported a configuration problem (the per-session config "
             f"{self.codex_home / 'config.toml'} is likely invalid TOML, so codex "
             f"loaded no hooks): {joined}"
         )
@@ -3449,7 +3453,7 @@ class CodexNativeAppServer:
                         provider, _codex_home_config_source_from_env() / "config.toml"
                     )
                 detail = " | ".join(recent_stderr[-5:])
-                raise RuntimeError(f"Codex app-server exited early: {detail}")
+                raise RuntimeError(f"MultiDex app-server exited early: {detail}")
             client: CodexAppServerClient | None = None
             try:
                 if self.listen_url and self.listen_url.startswith("ws://"):
@@ -3483,7 +3487,7 @@ class CodexNativeAppServer:
         target = self.listen_url or f"unix://{self.socket_path}"
         message = (
             f"Timed out after {_APP_SERVER_READY_TIMEOUT_SECONDS:g}s waiting for the "
-            f"Codex app-server at {target}: {last_error}; stderr={detail}"
+            f"MultiDex app-server at {target}: {last_error}; stderr={detail}"
         )
         # Still running but never initialized: start() can respawn it once.
         if self.proc is not None and self.proc.returncode is None:
@@ -4162,7 +4166,7 @@ class CodexDatabricksProfileMissingError(OmnigentError, OSError):
         :param profile: ``~/.databrickscfg`` profile name, e.g. ``"oss"``.
         """
         super().__init__(
-            f"Native Codex with Databricks profile {profile!r} (from your "
+            f"Native MultiDex with Databricks profile {profile!r} (from your "
             "provider config) requires a matching ~/.databrickscfg section "
             "with a host visible to the runner process. Add it with "
             f"`databricks auth login --profile {profile}`, or point the provider "
@@ -4475,7 +4479,7 @@ def build_codex_native_server(
     resolved_codex = codex_path or _find_codex_cli()
     if not resolved_codex:
         raise ImportError(
-            "Native Codex requires the 'codex' CLI on PATH. If codex is "
+            "Native MultiDex requires the 'codex' CLI on PATH. If codex is "
             "installed on a PATH the host daemon didn't inherit (e.g. an "
             "nvm-managed bin dir), set OMNIGENT_CODEX_PATH=/path/to/codex."
         )
@@ -4486,7 +4490,7 @@ def build_codex_native_server(
         and config_profile != terminal_config_profile
     ):
         raise ValueError(
-            "Native Codex received conflicting configuration profiles from "
+            "Native MultiDex received conflicting configuration profiles from "
             "the resolved launch and terminal arguments"
         )
     effective_config_profile = config_profile or terminal_config_profile
@@ -4659,7 +4663,7 @@ def _native_codex_config_profile(spec: AgentSpec | None) -> str | None:
     profile = str(value).strip()
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", profile):
         raise ValueError(
-            "Codex profile names may contain only letters, numbers, underscores, and hyphens"
+            "MultiDex profile names may contain only letters, numbers, underscores, and hyphens"
         )
     return profile
 
@@ -4748,10 +4752,10 @@ def _codex_config_profile_launch(*, model: str | None, config_profile: str) -> N
         profile_config = tomllib.loads(profile_path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
         raise FileNotFoundError(
-            f"Codex profile {config_profile!r} was selected but {profile_path} does not exist"
+            f"MultiDex profile {config_profile!r} was selected but {profile_path} does not exist"
         ) from exc
     except tomllib.TOMLDecodeError as exc:
-        raise ValueError(f"Codex profile {profile_path} is invalid TOML: {exc}") from exc
+        raise ValueError(f"MultiDex profile {profile_path} is invalid TOML: {exc}") from exc
 
     provider = profile_config.get("model_provider")
     profile_model = profile_config.get("model")
@@ -4766,7 +4770,7 @@ def _codex_config_profile_launch(*, model: str | None, config_profile: str) -> N
         model=resolved_model if isinstance(resolved_model, str) else None,
         profile=None,
         config_profile=config_profile,
-        summary=f"Codex configuration profile {config_profile!r}",
+        summary=f"MultiDex configuration profile {config_profile!r}",
     )
 
 
@@ -5329,22 +5333,25 @@ def _resolve_subscription_launch(
     if _codex_login_usable():
         log_info_once(
             _logger,
-            "native-codex routing: Codex CLI login (subscription provider %r; Codex is logged in)",
+            "native-codex routing: MultiDex CLI login "
+            "(subscription provider %r; MultiDex is logged in)",
             entry.name,
         )
         return NativeCodexLaunch(
             config_overrides=subscription_overrides,
             model=model,
             profile=None,
-            summary=f"Codex CLI login (subscription provider {entry.name!r}; Codex is logged in)",
+            summary=(
+                f"MultiDex CLI login (subscription provider {entry.name!r}; MultiDex is logged in)"
+            ),
         )
     fallback = _first_routable_codex_provider(explicit, exclude=entry.name, model=model)
     if fallback is not None:
         return fallback
     log_info_once(
         _logger,
-        "native-codex routing: Codex CLI login (subscription provider %r has no usable "
-        "Codex login and no alternative provider is configured)",
+        "native-codex routing: MultiDex CLI login (subscription provider %r has no usable "
+        "MultiDex login and no alternative provider is configured)",
         entry.name,
     )
     return NativeCodexLaunch(
@@ -5352,7 +5359,7 @@ def _resolve_subscription_launch(
         model=model,
         profile=None,
         summary=(
-            f"Codex CLI login (subscription provider {entry.name!r} has no usable Codex "
+            f"MultiDex CLI login (subscription provider {entry.name!r} has no usable MultiDex "
             "login and no alternative provider is configured) — the TUI likely renders "
             "the sign-in screen and never starts a thread"
         ),
@@ -5458,7 +5465,7 @@ def resolve_native_codex_launch(
         bound_launch = _codex_provider_launch(bound, selected)
         if bound_launch is None:
             raise ValueError(
-                f"Configured provider {bound.name!r} cannot route Codex. "
+                f"Configured provider {bound.name!r} cannot route MultiDex. "
                 "Check its OpenAI endpoint and credential reference."
             )
         return bound_launch
@@ -5493,17 +5500,17 @@ def resolve_native_codex_launch(
                 # the spec did not name is worse than the login screen.
                 spec_codex_logged_in = _codex_login_usable()
                 if spec_codex_logged_in:
-                    state = "Codex is logged in"
+                    state = "MultiDex is logged in"
                 else:
                     state = (
-                        "Codex is not logged in — the TUI likely renders the "
+                        "MultiDex is not logged in — the TUI likely renders the "
                         "sign-in screen and never starts a thread"
                     )
                 return NativeCodexLaunch(
                     config_overrides=['model_provider="openai"'],
                     model=model,
                     profile=None,
-                    summary=f"Codex CLI login (spec provider {spec_entry.name!r}; {state})",
+                    summary=f"MultiDex CLI login (spec provider {spec_entry.name!r}; {state})",
                     login_required=not spec_codex_logged_in,
                 )
             if _openai_vendor_pin_forbids(spec_entry, model):
@@ -5516,7 +5523,7 @@ def resolve_native_codex_launch(
                 return _codex_login_launch(
                     model,
                     summary=(
-                        f"Codex CLI login (spec provider {spec_entry.name!r} is a gateway; "
+                        f"MultiDex CLI login (spec provider {spec_entry.name!r} is a gateway; "
                         f"OpenAI-vendor model {model!r} requires OpenAI's own endpoint)"
                     ),
                 )
@@ -5581,7 +5588,7 @@ def resolve_native_codex_launch(
             return _codex_login_launch(
                 model,
                 summary=(
-                    f"Codex CLI login (config.toml provider {provider_id!r} was declined for "
+                    f"MultiDex CLI login (config.toml provider {provider_id!r} was declined for "
                     f"OpenAI-vendor model {model!r})"
                 ),
             )
@@ -5595,7 +5602,7 @@ def resolve_native_codex_launch(
             config_overrides=[f"model_provider={json.dumps(provider_id)}"],
             model=model,
             profile=None,
-            summary=f"Codex config.toml provider {provider_id!r} (ambient fallback)",
+            summary=f"MultiDex config.toml provider {provider_id!r} (ambient fallback)",
         )
 
     from omnigent.host.databricks_credential import api_key_auth_precludes_broker
@@ -5644,8 +5651,8 @@ def resolve_native_codex_launch(
         if ambient_builtin is not None:
             log_info_once(
                 _logger,
-                "native-codex routing: config.toml built-in provider %r (Codex-native "
-                "ambient config; Codex authenticates it itself)",
+                "native-codex routing: config.toml built-in provider %r (MultiDex-native "
+                "ambient config; MultiDex authenticates it itself)",
                 ambient_builtin,
             )
             return NativeCodexLaunch(
@@ -5653,13 +5660,13 @@ def resolve_native_codex_launch(
                 model=model,
                 profile=None,
                 summary=(
-                    f"Codex config.toml built-in provider {ambient_builtin!r} "
-                    "(Codex-native ambient config; Codex authenticates it itself)"
+                    f"MultiDex config.toml built-in provider {ambient_builtin!r} "
+                    "(MultiDex-native ambient config; MultiDex authenticates it itself)"
                 ),
             )
         log_info_once(
             _logger,
-            "native-codex routing: Codex CLI login (no provider configured for the Codex "
+            "native-codex routing: MultiDex CLI login (no provider configured for the MultiDex "
             "harness, no Databricks profile). Run `omnigent setup --no-internal-beta` to route "
             "through a provider.",
         )
@@ -5668,7 +5675,7 @@ def resolve_native_codex_launch(
             model=model,
             profile=None,
             summary=(
-                "Codex CLI login (no provider configured for the codex harness, no "
+                "MultiDex CLI login (no provider configured for the codex harness, no "
                 "Databricks profile) — the TUI likely renders the ChatGPT sign-in "
                 f"screen and never starts a thread; run `{cli_invocation()} setup` "
                 "to route through a provider"
@@ -5693,7 +5700,7 @@ def resolve_native_codex_launch(
         return _codex_login_launch(
             model,
             summary=(
-                f"Codex CLI login (default provider {entry.name!r} is a gateway; "
+                f"MultiDex CLI login (default provider {entry.name!r} is a gateway; "
                 f"OpenAI-vendor model {model!r} requires OpenAI's own endpoint)"
             ),
         )
@@ -5721,7 +5728,7 @@ def resolve_native_codex_launch(
         model=model,
         profile=None,
         summary=(
-            f"Codex CLI login (provider {entry.name!r} is the codex default but has no "
+            f"MultiDex CLI login (provider {entry.name!r} is the codex default but has no "
             "usable openai credential) — the TUI likely renders the sign-in screen "
             "and never starts a thread"
         ),
@@ -6039,7 +6046,7 @@ async def preload_codex_thread_for_resume(
             result = response.get("result")
             loaded_config = result.get("config") if isinstance(result, dict) else None
             if not isinstance(loaded_config, dict):
-                raise ValueError("Codex config/read returned an invalid config")
+                raise ValueError("MultiDex config/read returned an invalid config")
             sandbox_config = loaded_config.get("sandbox_workspace_write") or {}
             roots = sandbox_config.get("writable_roots") or []
             config = cast(CodexParams, params.setdefault("config", {}))
@@ -6475,7 +6482,7 @@ def build_codex_remote_args(
     for override in config_overrides:
         if override.lstrip().startswith("model_providers."):
             raise ValueError(
-                "Codex remote provider definitions must be materialized in CODEX_HOME"
+                "MultiDex remote provider definitions must be materialized in CODEX_HOME"
             )
         override_args.extend(["-c", override])
     if bypass_sandbox:

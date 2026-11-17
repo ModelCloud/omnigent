@@ -254,7 +254,7 @@ async def test_cold_start_invalid_mcp_source_preserves_private_config(
     server = _test_app_server(tmp_path, private, tmp_path / "bridge", tmp_path)
     server.config_profile = profile
 
-    with pytest.raises(ValueError, match=r"Codex.*config") as caught:
+    with pytest.raises(ValueError, match=r"MultiDex.*config") as caught:
         await server.start()
 
     assert str(failed_path) in str(caught.value)

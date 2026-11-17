@@ -603,9 +603,9 @@ def test_codex_picker_offers_the_clis_catalog_and_default(
     page.goto(picker_rig.base_url)
     expect(page.get_by_test_id("new-chat-landing-input")).to_be_visible(timeout=30_000)
     _dismiss_setup_review(page)
-    _pick_agent(page, "Codex")
+    _pick_agent(page, "MultiDex")
 
-    rows = _model_rows(page, picker_rig, "Codex")
+    rows = _model_rows(page, picker_rig, "MultiDex")
     row_ids = [row["id"] for row in rows]
 
     if picker_rig.codex_default == _CODEX_HIDDEN_SLUG:
@@ -651,7 +651,7 @@ def test_codex_picker_offers_the_clis_catalog_and_default(
     expect(page.get_by_test_id("new-chat-landing-agent-model-value")).to_have_text(
         selected_row["text"]
     )
-    selected_rows = _model_rows(page, picker_rig, "Codex")
+    selected_rows = _model_rows(page, picker_rig, "MultiDex")
     assert [row["id"] for row in selected_rows if row["checked"] == "true"] == [selected]
 
 

@@ -1367,7 +1367,7 @@ POLICY_REGISTRY: list[dict[str, Any]] = [  # type: ignore[explicit-any]
         "description": (
             "Controls GitHub access across MCP tools (official per-operation server and the "
             "github_read_api_call / github_write_api_call HTTP-proxy wrapper) and git/gh shell "
-            "commands. Supports Omnigent, Claude/Codex, Cursor, Pi, Hermes, and Goose shell "
+            "commands. Supports Omnigent, Claude/MultiDex, Cursor, Pi, Hermes, and Goose shell "
             "tools. Restricts reads to read_repos (unless read_all), and "
             "writes to write_repos plus optional write_branches. Shell commands whose target repo "
             "or branch cannot be determined return ASK for human approval."

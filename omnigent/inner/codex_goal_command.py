@@ -17,7 +17,7 @@ def goal_objective_length_error(objective: str) -> str | None:
     if len(objective) <= GOAL_OBJECTIVE_MAX_CHARS:
         return None
     return (
-        f"Goal objective is {len(objective)} characters; Codex allows at most "
+        f"Goal objective is {len(objective)} characters; MultiDex allows at most "
         f"{GOAL_OBJECTIVE_MAX_CHARS}. Shorten the /goal objective and send it again."
     )
 

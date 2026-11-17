@@ -24,7 +24,7 @@ from tests._helpers.native_session import create_native_session
 _PLUGIN_SKILL = "toolkit:review"
 _EMPTY_CATALOG_ROW = "No skills available"
 _INVENTORY_ERROR = "failed to load plugin inventory (injected by test)"
-_WARNING_ROW = "Codex plugin skills unavailable"
+_WARNING_ROW = "MultiDex plugin skills unavailable"
 _EXIT_SUMMARY = "`codex plugin list` exited 1"
 _INVENTORY = {
     "installed": [

@@ -1417,7 +1417,7 @@ def _codex_compaction_baselines(imported: LocalSessionImport) -> list[list[str]]
 @pytest.mark.parametrize(
     ("compaction", "summary", "window_id"),
     [
-        ({}, "[Codex compaction — context was compacted in Codex]", 1),
+        ({}, "[MultiDex compaction — context was compacted in MultiDex]", 1),
         (
             {"message": "Summary of turn 1.", "window_id": "01a11f4f-af66-74e3-92a6-6ea6e33fd77d"},
             "Summary of turn 1.",

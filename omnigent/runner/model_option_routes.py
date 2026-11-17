@@ -133,7 +133,7 @@ def register_model_option_routes(
                 status_code=503,
                 content={
                     "error": "codex_native_model_options_failed",
-                    "detail": "Codex-native model options are not ready yet.",
+                    "detail": "MultiDex-native model options are not ready yet.",
                 },
             )
         except Exception as exc:  # surface Codex app-server failures to AP.
