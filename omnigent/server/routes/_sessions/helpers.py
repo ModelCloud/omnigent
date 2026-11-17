@@ -4932,7 +4932,7 @@ def _require_collaboration_mode_forward(
     action = "enter Plan mode" if enabled else "exit Plan mode"
     if runner_result is None:
         raise OmnigentError(
-            f"Could not {action}: no live Codex runner is available for "
+            f"Could not {action}: no live MultiDex runner is available for "
             f"session {session_id!r}. Reconnect the session and try again.",
             code=ErrorCode.RUNNER_UNAVAILABLE,
         )
@@ -5069,7 +5069,7 @@ def _require_codex_approval_mode_forward(
     """
     if runner_result is None:
         raise OmnigentError(
-            f"Could not switch to {mode} approval mode: no live Codex runner is "
+            f"Could not switch to {mode} approval mode: no live MultiDex runner is "
             f"available for session {session_id!r}. Reconnect the session and try again.",
             code=ErrorCode.RUNNER_UNAVAILABLE,
         )
@@ -12154,7 +12154,7 @@ async def _require_filesystem_attachment_harness(conv: Conversation, filename: s
         raise HTTPException(
             status_code=415,
             detail=(
-                f"'{filename}' can only be attached to a Claude Code or Codex "
+                f"'{filename}' can only be attached to a Claude Code or MultiDex "
                 "session, which can open this file type."
             ),
         )

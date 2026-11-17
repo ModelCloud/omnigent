@@ -240,7 +240,7 @@ async def codex_launch_harness(
             id="terminal_codex_main",
             type="terminal",
             session_id=kwargs["session_id"],
-            name="Codex",
+            name="MultiDex",
         )
 
     event_client = SimpleNamespace(connect=AsyncMock(), close=AsyncMock())

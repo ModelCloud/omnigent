@@ -542,7 +542,7 @@ def diagnose_codex_provider_auth_failure(message: str) -> FailureDiagnosis | Non
             f"Run `{command}` on the host to sign in again, then send your message again."
         )
     return FailureDiagnosis(
-        title="Codex couldn't get a model provider token",
+        title="MultiDex couldn't get a model provider token",
         cause=cause,
         remediation=remediation,
     )
@@ -557,7 +557,7 @@ def diagnose_codex_model_rejection(message: str) -> FailureDiagnosis | None:
         cause=message.strip(),
         remediation=(
             "Choose a model supported by your ChatGPT account using the model picker or /model. "
-            f"To use another provider, configure it for Codex with `{cli_invocation()} setup` "
+            f"To use another provider, configure it for MultiDex with `{cli_invocation()} setup` "
             "on the host, then start a new session."
         ),
     )
@@ -636,9 +636,9 @@ def diagnose_codex_compaction_model_failure(
     # Each cause is stored as a 256-character label, so it names each model once.
     if code in {"rate_limit_exceeded", "transient_upstream_error"}:
         return FailureDiagnosis(
-            title=f"Codex can't compact on {previous} right now",
+            title=f"MultiDex can't compact on {previous} right now",
             cause=(
-                f"Codex compacts this conversation on the previous model, {previous}, "
+                f"MultiDex compacts this conversation on the previous model, {previous}, "
                 f"before switching to {selected}, and that model is temporarily unavailable."
             ),
             # These keep their Retry action, so Fork is only in the session menu.
@@ -648,7 +648,7 @@ def diagnose_codex_compaction_model_failure(
             category=ErrorCategory.UPSTREAM,
         )
     repeated = (
-        f"Codex retries it every turn before switching to {selected}, "
+        f"MultiDex retries it every turn before switching to {selected}, "
         "so switching models doesn't help."
     )
     fork = (
@@ -667,7 +667,7 @@ def diagnose_codex_compaction_model_failure(
             category=ErrorCategory.USER,
         )
     return FailureDiagnosis(
-        title=f"Codex can't compact on {previous}",
+        title=f"MultiDex can't compact on {previous}",
         cause=f"{previous} rejected a compaction request. {repeated}",
         remediation=fork,
         category=ErrorCategory.UPSTREAM,
@@ -696,19 +696,20 @@ _FAILURE_CODE_DESCRIPTIONS: dict[str, str] = {
     "context_length_exceeded": "The conversation grew past the model's context window.",
     "executor_error": "The agent runtime hit an error while running the turn.",
     "codex_thread_reset": (
-        "Codex hit an error reloading the earlier transcript, so it started a fresh thread."
+        "MultiDex hit an error reloading the earlier transcript, so it started a fresh thread."
     ),
-    "codex_turn_error": "Codex ran into an error during this turn.",
+    "codex_turn_error": "MultiDex ran into an error during this turn.",
     CODEX_COMPACTION_MODEL_FAILED: (
-        "Codex couldn't compact the conversation on the previous model, so this turn didn't run."
+        "MultiDex couldn't compact the conversation on the previous model, "
+        "so this turn didn't run."
     ),
     CODEX_PROVIDER_AUTH_FAILED: (
-        "Codex couldn't get a token from the model provider's sign-in command on the host."
+        "MultiDex couldn't get a token from the model provider's sign-in command on the host."
     ),
     "databricks_sign_in_pending": "The agent is waiting for a Databricks sign-in.",
     "agent_startup_pending": "The agent is still starting in the session terminal.",
     "databricks_sign_in_completed": "The Databricks sign-in completed and the agent is ready.",
-    "codex_thread_not_started": "Codex stopped before it could start, so this turn never ran.",
+    "codex_thread_not_started": "MultiDex stopped before it could start, so this turn never ran.",
     "native_turn_error": "The agent ran into an error during this turn.",
     "rate_limit_exceeded": "The model's rate limit was reached. You can retry this turn.",
     "transient_upstream_error": (

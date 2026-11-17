@@ -665,8 +665,8 @@ function ForkRunConfig({
             >
               <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
               <span>
-                Danger: this fork runs Codex with approvals and the command sandbox disabled. It can
-                edit any file and run any command without asking.
+                Danger: this fork runs MultiDex with approvals and the command sandbox disabled. It
+                can edit any file and run any command without asking.
               </span>
             </div>
           )}

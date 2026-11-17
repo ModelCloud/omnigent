@@ -13,7 +13,7 @@ from omnigent.native import native_terminal
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("harness_name", ["Claude", "Codex"])
+@pytest.mark.parametrize("harness_name", ["Claude", "MultiDex"])
 @pytest.mark.parametrize("status_code", [202, 503])
 async def test_post_initial_prompt_sends_one_message(
     monkeypatch: pytest.MonkeyPatch,

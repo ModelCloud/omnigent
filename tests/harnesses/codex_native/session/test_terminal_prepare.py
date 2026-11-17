@@ -31,7 +31,7 @@ def test_wrapper_spec_startup_instructions_resolves_prompt(tmp_path: Path) -> No
     spec_path = codex_native._materialize_codex_agent_spec(tmp_path, model=None)
     result = codex_native._wrapper_spec_startup_instructions(spec_path)
     assert result is not None
-    assert "Codex is running in the session terminal" in result
+    assert "MultiDex is running in the session terminal" in result
     assert result.endswith(WORKSPACE_IMAGE_INSTRUCTION)
 
 
@@ -287,7 +287,7 @@ async def test_prepare_codex_terminal_closes_resources_when_cleanup_is_interrupt
         await close_resource("server")
 
     def progress(_progress: object, message: str) -> None:
-        if message == "Codex terminal ready.":
+        if message == "MultiDex terminal ready.":
             raise error("startup failed")
 
     client = SimpleNamespace(close=close_client)
@@ -401,7 +401,7 @@ def test_run_with_local_server_threads_raw_instructions_to_prepare_terminal_fres
         )
 
     assert captured.get("developer_instructions") is not None
-    assert "Codex is running in the session terminal" in captured["developer_instructions"]
+    assert "MultiDex is running in the session terminal" in captured["developer_instructions"]
 
 
 def test_run_with_local_server_threads_raw_instructions_to_prepare_terminal_resume(
@@ -483,7 +483,7 @@ def test_run_with_local_server_threads_raw_instructions_to_prepare_terminal_resu
         )
 
     assert captured.get("developer_instructions") is not None
-    assert "Codex is running in the session terminal" in captured["developer_instructions"]
+    assert "MultiDex is running in the session terminal" in captured["developer_instructions"]
 
 
 @pytest.mark.asyncio
@@ -620,11 +620,11 @@ async def test_prepare_codex_terminal_via_daemon_creates_runner_and_ensures_term
         {"terminal": "codex", "session_key": "main", "ensure_native_terminal": True},
     ) in calls
     assert progress_updates == [
-        "Creating Codex session...",
+        "Creating MultiDex session...",
         "Starting runner...",
         "Waiting for runner...",
-        "Starting Codex terminal...",
-        "Codex terminal ready.",
+        "Starting MultiDex terminal...",
+        "MultiDex terminal ready.",
     ]
 
     events = [r.attributes for r in caplog.records if r.name == "omnigent.startup"]
@@ -853,7 +853,7 @@ async def test_prepare_codex_terminal_via_daemon_live_resume_skips_config_patch(
     assert ("GET", "/v1/sessions/conv_live/items", None) not in calls
     assert not any(method == "PATCH" for method, _path, _body in calls)
     assert live_rollout.read_bytes() == before
-    assert "Ignoring Codex launch args/model" in capsys.readouterr().err
+    assert "Ignoring MultiDex launch args/model" in capsys.readouterr().err
 
 
 @pytest.mark.asyncio
@@ -1055,7 +1055,7 @@ async def test_find_running_codex_terminal_unexpected_error_still_raises() -> No
         with pytest.raises(click.ClickException) as excinfo:
             await codex_native._find_running_codex_terminal(client, "conv_abc")
 
-    assert "Failed to fetch Codex terminal (500)" in excinfo.value.message
+    assert "Failed to fetch MultiDex terminal (500)" in excinfo.value.message
     assert "database unavailable" in excinfo.value.message
 
 
@@ -1089,5 +1089,5 @@ async def test_find_running_codex_terminal_generic_errors_still_raise(
         with pytest.raises(click.ClickException) as excinfo:
             await codex_native._find_running_codex_terminal(client, "conv_abc")
 
-    assert f"Failed to fetch Codex terminal ({status_code})" in excinfo.value.message
+    assert f"Failed to fetch MultiDex terminal ({status_code})" in excinfo.value.message
     assert "database unavailable" in excinfo.value.message

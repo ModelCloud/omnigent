@@ -129,7 +129,7 @@ async def test_dead_before_observation_records_exit_without_publishing_a_resourc
 
     events: list[object] = []
     runtime_name = {
-        CODEX_NATIVE_TERMINAL_ROLE: "Codex",
+        CODEX_NATIVE_TERMINAL_ROLE: "MultiDex",
         CLAUDE_NATIVE_TERMINAL_ROLE: "Claude",
         PI_NATIVE_TERMINAL_ROLE: "Pi",
     }[role]

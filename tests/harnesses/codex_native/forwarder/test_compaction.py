@@ -139,7 +139,7 @@ async def test_persist_codex_compaction_item_posts_uuid_window_id(tmp_path: Path
     body = kwargs["json"]
     assert body["type"] == "compaction"
     assert body["data"]["last_item_id"] == "item_codex"
-    assert "Codex" in body["data"]["summary"]
+    assert "MultiDex" in body["data"]["summary"]
     assert body["data"]["window_id"] == "01a070e2-2665-7d62-9b74-973decf239b7"
     assert body["data"]["compacted_messages"][0]["role"] == "user"
 

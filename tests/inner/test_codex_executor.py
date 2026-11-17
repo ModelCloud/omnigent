@@ -5451,7 +5451,7 @@ async def test_brokered_codex_version_gate_rejects_old_and_unstable_versions_bef
 
     monkeypatch.setattr("omnigent.inner.codex_executor._create_subprocess_exec", _fake_exec)
 
-    with pytest.raises(RuntimeError, match="unsupported Codex wire version"):
+    with pytest.raises(RuntimeError, match="unsupported MultiDex wire version"):
         await _require_brokered_codex_version("/usr/local/bin/codex")
 
 
@@ -5481,7 +5481,7 @@ async def test_brokered_version_failure_precedes_signer_session_construction(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    version_gate = AsyncMock(side_effect=RuntimeError("unsupported Codex wire version"))
+    version_gate = AsyncMock(side_effect=RuntimeError("unsupported MultiDex wire version"))
     app_session_factory = AsyncMock()
     monkeypatch.setattr(
         "omnigent.inner.codex_executor._require_brokered_codex_version", version_gate
@@ -5500,7 +5500,7 @@ async def test_brokered_version_failure_precedes_signer_session_construction(
         signer_launch_config=signer_config,
     )
 
-    with pytest.raises(RuntimeError, match="unsupported Codex wire version"):
+    with pytest.raises(RuntimeError, match="unsupported MultiDex wire version"):
         await anext(
             executor.run_turn(
                 [{"role": "user", "content": "hello", "session_id": "version-gate"}],
@@ -6384,7 +6384,7 @@ def test_certificate_failure_on_stderr_fails_fast_on_connection_retry():
             assert "SSLV3_ALERT_CERTIFICATE_EXPIRED" in error.message
             assert "wedged LLM" not in error.message
             assert error.code == "model_endpoint_certificate_rejected"
-            assert error.title == "Codex can't reach its model endpoint"
+            assert error.title == "MultiDex can't reach its model endpoint"
             assert error.remediation is not None and "run dbcert" in error.remediation
             session._request.assert_any_await(
                 "turn/interrupt", {"threadId": "thread-1", "turnId": "turn-1"}

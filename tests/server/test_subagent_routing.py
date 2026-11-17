@@ -693,7 +693,7 @@ async def test_unnamed_codex_spawn_routes_on_the_placeholder_task() -> None:
         caps=FakeCaps(routing_client=client),
         available_models={"codex-native": [GPT_MODEL]},
     )
-    assert client.calls[0][0] == "Codex subagent task"
+    assert client.calls[0][0] == "MultiDex subagent task"
     assert decision.action == "rewrite"
     assert decision.model == GPT_MODEL
     assert "No routable signal" not in decision.rationale
@@ -725,7 +725,10 @@ async def test_every_unnamed_codex_spawn_scores_the_same_placeholder() -> None:
             caps=caps,
             available_models={"codex-native": [GPT_MODEL]},
         )
-    assert [call[0] for call in client.calls] == ["Codex subagent task", "Codex subagent task"]
+    assert [call[0] for call in client.calls] == [
+        "MultiDex subagent task",
+        "MultiDex subagent task",
+    ]
 
 
 @pytest.mark.parametrize(

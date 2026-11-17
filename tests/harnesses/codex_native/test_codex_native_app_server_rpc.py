@@ -88,7 +88,7 @@ async def test_initialize_disconnect_keeps_transport_cause() -> None:
                 await asyncio.wait_for(client.connect(), 2)
             assert isinstance(raised.value.__cause__, ConnectionClosedError)
             assert raised.value.__notes__ == [
-                "Codex app-server RPC: method=initialize request_id=1"
+                "MultiDex app-server RPC: method=initialize request_id=1"
                 " phase=response close_code=1006"
             ]
         finally:
@@ -121,7 +121,7 @@ async def test_abandoned_rpc_releases_pending_request(outcome: str) -> None:
             with pytest.raises(ConnectionError) as raised:
                 await request
             assert raised.value.__notes__ == [
-                "Codex app-server RPC: method=turn/start request_id=1 phase=send"
+                "MultiDex app-server RPC: method=turn/start request_id=1 phase=send"
             ]
         assert client._pending_requests == {}
         assert not client._reader_task.done()

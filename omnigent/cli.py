@@ -8087,7 +8087,8 @@ _DEFAULT_HARNESS_PROMPTS = {
         "Help the user with software engineering tasks."
     ),
     "codex": (
-        "You are Codex, running through Omnigent. Help the user with software engineering tasks."
+        "You are MultiDex, running through Omnigent. "
+        "Help the user with software engineering tasks."
     ),
     "cursor": (
         "You are Cursor, running through Omnigent. Help the user with software engineering tasks."
@@ -14997,7 +14998,7 @@ def _reject_reserved_codex_transport_args(codex_args: tuple[str, ...]) -> None:
     reserved = reserved_codex_transport_arg(codex_args)
     if reserved is not None:
         raise click.UsageError(
-            f"{reserved!r} is reserved for Omnigent, which starts Codex's app-server "
+            f"{reserved!r} is reserved for Omnigent, which starts MultiDex's app-server "
             f"and attaches the TUI itself. Drop it from `{cli_invocation()} codex`, "
             "or run `codex app-server` directly for a standalone app-server."
         )

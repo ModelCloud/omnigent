@@ -403,7 +403,7 @@ def test_codex_model_rejection_shows_recovery_hint_live_and_after_reload(
             expect(pill, f"reload={reload}").to_contain_text(headline, timeout=15_000)
             pill.locator('button[aria-expanded="false"]').click()
             expect(pill).to_contain_text("model picker or /model")
-            expect(pill).to_contain_text("another provider, configure it for Codex")
+            expect(pill).to_contain_text("another provider, configure it for MultiDex")
             expect(pill).to_contain_text("on the host, then start a new session")
             expect(pill.get_by_test_id("error-message-content")).to_contain_text(message)
             expect(pill.get_by_role("button", name="Retry", exact=True)).to_have_count(0)
@@ -655,7 +655,7 @@ def test_info_level_error_item_renders_as_notice_pill(
 
     pill = page.locator('[data-testid="error-pill"][data-level="info"]')
     expect(pill).to_be_visible(timeout=15_000)
-    expect(pill).to_contain_text("Codex hit an error reloading", timeout=15_000)
+    expect(pill).to_contain_text("MultiDex hit an error reloading", timeout=15_000)
     expect(page.locator('[data-testid="error-pill"][data-level="error"]')).to_have_count(0)
 
 
@@ -681,8 +681,8 @@ def test_sign_in_card_opens_the_live_link_and_reports_when_none_is_pending(
     _seed_error_item(
         session_id,
         code="databricks_sign_in_pending",
-        message="Codex is waiting for a sign-in in this session's terminal.",
-        title="Codex can't start until you sign in to Databricks",
+        message="MultiDex is waiting for a sign-in in this session's terminal.",
+        title="MultiDex can't start until you sign in to Databricks",
         remediation=(
             "Open the sign-in link and sign in. Codex continues on its own once the "
             "sign-in completes; then send your message again."
@@ -692,7 +692,7 @@ def test_sign_in_card_opens_the_live_link_and_reports_when_none_is_pending(
     pill = page.locator('[data-testid="error-pill"][data-level="error"]')
     expect(pill).to_be_visible(timeout=15_000)
     expect(pill.get_by_test_id("error-headline")).to_have_text(
-        "Codex can't start until you sign in to Databricks"
+        "MultiDex can't start until you sign in to Databricks"
     )
     open_link = pill.get_by_role("button", name="Open sign-in link")
     expect(open_link).to_be_visible()

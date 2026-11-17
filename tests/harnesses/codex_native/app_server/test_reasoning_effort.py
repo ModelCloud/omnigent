@@ -206,7 +206,7 @@ async def test_effort_reset_names_a_catalog_it_could_not_read() -> None:
     client = AsyncMock(spec=app_server.CodexAppServerClient)
     client.request.side_effect = ConnectionError("app-server unreachable")
 
-    with pytest.raises(ValueError, match="Could not read the Codex model catalog"):
+    with pytest.raises(ValueError, match="Could not read the MultiDex model catalog"):
         await app_server.resolve_codex_effort_for_model(client, None, "gpt-5.4")
 
 

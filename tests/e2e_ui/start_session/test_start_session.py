@@ -119,7 +119,7 @@ def _codex_native_agents_body() -> str:
                 {
                     "id": "ag_codex_e2e",
                     "name": "codex-native-ui",
-                    "display_name": "Codex",
+                    "display_name": "MultiDex",
                     "description": "OpenAI's coding agent",
                     "harness": "codex-native",
                     "skills": [],
@@ -142,7 +142,7 @@ def _forked_codex_first_page_body() -> str:
                 {
                     "id": "ag_codex_fork_1",
                     "name": "codex-native-ui (fork ag_old1)",
-                    "display_name": "Codex",
+                    "display_name": "MultiDex",
                     "description": "Stale Codex fork",
                     "harness": "codex-native",
                     "skills": [],
@@ -150,7 +150,7 @@ def _forked_codex_first_page_body() -> str:
                 {
                     "id": "ag_codex_fork_2",
                     "name": "codex-native-ui (fork ag_old2)",
-                    "display_name": "Codex",
+                    "display_name": "MultiDex",
                     "description": "Another stale Codex fork",
                     "harness": "codex-native",
                     "skills": [],
@@ -170,7 +170,7 @@ def _canonical_codex_second_page_body() -> str:
                 {
                     "id": "ag_codex_e2e",
                     "name": "codex-native-ui",
-                    "display_name": "Codex",
+                    "display_name": "MultiDex",
                     "description": "OpenAI's coding agent",
                     "harness": "codex-native",
                     "skills": [],
@@ -2149,7 +2149,7 @@ async def _drive_agent_picker_pagination_dedupe(base_url: str, session_id: str) 
             )
 
             picker = page.get_by_test_id("new-chat-landing-agent-select")
-            await expect(picker).to_have_attribute("aria-label", re.compile("Codex"))
+            await expect(picker).to_have_attribute("aria-label", re.compile("MultiDex"))
             await picker.click()
 
             await expect(

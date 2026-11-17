@@ -75,7 +75,7 @@ def _report_plugin_skills(message: str, detail: str, warnings: list[str] | None)
 
 def _without_inventory(summary: str, detail: str, warnings: list[str] | None) -> list[SkillSpec]:
     """Omit plugin skills, telling the host log and the caller's menu why."""
-    _report_plugin_skills(f"Codex plugin skills unavailable: {summary}", detail, warnings)
+    _report_plugin_skills(f"MultiDex plugin skills unavailable: {summary}", detail, warnings)
     return []
 
 
@@ -134,7 +134,7 @@ def _loaded_plugin_skills(
         try:
             spec = _parse_skill(Path(path))
         except (OmnigentError, OSError, yaml.YAMLError) as exc:
-            _log.warning("Could not read loaded Codex skill %r: %s", name, exc)
+            _log.warning("Could not read loaded MultiDex skill %r: %s", name, exc)
             continue
         out.append(replace(spec, name=name, display_name=None))
     return out
@@ -167,7 +167,7 @@ def discover_codex_plugin_skills(
         plugins = _inventory_plugins(codex_path, codex_home, cwd)
     except (OSError, subprocess.SubprocessError, ValueError) as exc:
         summary, detail = _inventory_failure(exc)
-        _log.info("Codex plugin inventory unavailable: %s", detail or summary)
+        _log.info("MultiDex plugin inventory unavailable: %s", detail or summary)
         catalog_errors: list[str] = []
         try:
             loaded = _loaded_plugin_skills(
@@ -182,7 +182,7 @@ def discover_codex_plugin_skills(
             )
         if catalog_errors:
             _report_plugin_skills(
-                f"Codex plugin skills may be incomplete: {summary} and "
+                f"MultiDex plugin skills may be incomplete: {summary} and "
                 "`codex app-server` reported errors loading skills",
                 "; ".join([detail, *catalog_errors] if detail else catalog_errors),
                 warnings,

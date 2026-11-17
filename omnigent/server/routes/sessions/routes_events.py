@@ -2020,7 +2020,7 @@ def register_events_routes(
                     or not child_thread_id
                 ):
                     raise OmnigentError(
-                        "Cannot identify the Codex side-chat turn to interrupt.",
+                        "Cannot identify the MultiDex side-chat turn to interrupt.",
                         code=ErrorCode.INVALID_INPUT,
                     )
                 target_session_id = conv.parent_conversation_id

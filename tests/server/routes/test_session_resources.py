@@ -2612,7 +2612,7 @@ async def test_copy_refuses_a_workspace_file_for_a_harness_without_a_workspace(
     )
 
     assert resp.status_code == 415, resp.text
-    assert "Claude Code or Codex" in resp.text
+    assert "Claude Code or MultiDex" in resp.text
     listed = file_store.list(session_id="405bfe154d5c0e795a2b87021bc897bf", limit=10)
     assert listed.data == []
 
@@ -5677,7 +5677,7 @@ async def test_relay_does_not_persist_session_level_response_error() -> None:
                     "source": "execution",
                     "error": {
                         "code": "native_terminal_start_failed",
-                        "message": "Native Codex requires the 'codex' CLI on PATH.",
+                        "message": "Native MultiDex requires the 'codex' CLI on PATH.",
                     },
                 }
             ),
@@ -5717,7 +5717,7 @@ async def test_relay_persists_in_turn_response_error_once_from_runner() -> None:
                     "source": "execution",
                     "error": {
                         "code": "native_terminal_start_failed",
-                        "message": "Native Codex requires the 'codex' CLI on PATH.",
+                        "message": "Native MultiDex requires the 'codex' CLI on PATH.",
                     },
                 }
             ),
@@ -5727,7 +5727,7 @@ async def test_relay_persists_in_turn_response_error_once_from_runner() -> None:
                     "source": "execution",
                     "error": {
                         "code": "native_terminal_start_failed",
-                        "message": "Native Codex requires the 'codex' CLI on PATH.",
+                        "message": "Native MultiDex requires the 'codex' CLI on PATH.",
                     },
                 }
             ),
@@ -5745,7 +5745,7 @@ async def test_relay_persists_in_turn_response_error_once_from_runner() -> None:
     assert errors[0].response_id == "resp_turn"
     assert errors[0].data.source == "execution"
     assert errors[0].data.code == "native_terminal_start_failed"
-    assert errors[0].data.message == "Native Codex requires the 'codex' CLI on PATH."
+    assert errors[0].data.message == "Native MultiDex requires the 'codex' CLI on PATH."
 
 
 @pytest.mark.asyncio
@@ -5787,7 +5787,7 @@ async def test_relay_dedupes_duplicate_error_persistence_but_forwards_live_frame
                         "source": "execution",
                         "error": {
                             "code": "native_terminal_start_failed",
-                            "message": "Native Codex requires the 'codex' CLI on PATH.",
+                            "message": "Native MultiDex requires the 'codex' CLI on PATH.",
                         },
                     }
                 ),
@@ -5797,7 +5797,7 @@ async def test_relay_dedupes_duplicate_error_persistence_but_forwards_live_frame
                         "source": "execution",
                         "error": {
                             "code": "native_terminal_start_failed",
-                            "message": "Native Codex requires the 'codex' CLI on PATH.",
+                            "message": "Native MultiDex requires the 'codex' CLI on PATH.",
                         },
                     }
                 ),
@@ -9244,7 +9244,7 @@ async def test_relay_leaves_the_queue_alone_when_the_harness_may_have_the_messag
                         "model": "codex",
                         "error": {
                             "code": "codex_turn_error",
-                            "message": "Codex native executor error: connection reset.",
+                            "message": "MultiDex native executor error: connection reset.",
                         },
                     },
                 }

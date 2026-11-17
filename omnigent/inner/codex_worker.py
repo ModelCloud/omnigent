@@ -69,10 +69,10 @@ def prepare_codex_catalog_probe(
 ) -> CodexWorkerLaunch:
     """Prepare a network-denied launcher for ``codex debug models --bundled``."""
     if os_env is None or (os_env.sandbox is not None and os_env.sandbox.type == "none"):
-        raise OSError("brokered Codex catalog probe requires an active sandbox")
+        raise OSError("brokered MultiDex catalog probe requires an active sandbox")
     policy = resolve_sandbox(os_env, cwd)
     if not policy.active:
-        raise OSError("brokered Codex catalog probe requires an active sandbox")
+        raise OSError("brokered MultiDex catalog probe requires an active sandbox")
 
     codex_dir = Path(codex_path).resolve(strict=False).parent
     policy = with_additional_read_roots(policy, [codex_dir, _FRAMEWORK_PACKAGE_ROOT])
@@ -88,7 +88,7 @@ def prepare_codex_catalog_probe(
     probe_argv = [codex_path, "debug", "models", "--bundled"]
     if backend.wrap_launcher_argv(probe_argv, policy, cwd, target=codex_path) == probe_argv:
         raise OSError(
-            f"Sandbox backend {policy.backend_type!r} cannot contain the Codex catalog probe"
+            f"Sandbox backend {policy.backend_type!r} cannot contain the MultiDex catalog probe"
         )
     launcher = Path(create_exec_launcher(codex_path, policy))
     return CodexWorkerLaunch(
@@ -112,29 +112,29 @@ def prepare_codex_worker(
     """Prepare a contained worker or propagate the containment failure."""
     if os_env is None or (os_env.sandbox is not None and os_env.sandbox.type == "none"):
         if signer_readiness is not None:
-            raise OSError("signer-backed Codex worker requires an active sandbox")
+            raise OSError("signer-backed MultiDex worker requires an active sandbox")
         return CodexWorkerLaunch(launch_path=codex_path, sandboxed=False)
     sandbox_spec = os_env.sandbox
     if signer_readiness is not None and sandbox_spec is not None and sandbox_spec.egress_rules:
         raise ValueError(
-            "signer-backed Codex does not support os_env.sandbox.egress_rules; "
+            "signer-backed MultiDex does not support os_env.sandbox.egress_rules; "
             "brokered sessions are model-only"
         )
 
     policy = resolve_sandbox(os_env, cwd)
     if not policy.active:
         if signer_readiness is not None:
-            raise OSError("signer-backed Codex worker requires an active sandbox")
+            raise OSError("signer-backed MultiDex worker requires an active sandbox")
         return CodexWorkerLaunch(launch_path=codex_path, sandboxed=False)
     if signer_readiness is not None and worker_env is None:
-        raise ValueError("signer-backed Codex worker requires an owned worker environment")
+        raise ValueError("signer-backed MultiDex worker requires an owned worker environment")
     egress_rules = (
         list(sandbox_spec.egress_rules or [])
         if signer_readiness is None and sandbox_spec is not None
         else []
     )
     if egress_rules and worker_env is None:
-        raise ValueError("egress-filtered Codex worker requires an owned worker environment")
+        raise ValueError("egress-filtered MultiDex worker requires an owned worker environment")
 
     codex_dir = Path(codex_path).resolve(strict=False).parent
     policy = with_additional_read_roots(policy, [codex_dir, _FRAMEWORK_PACKAGE_ROOT])
@@ -177,7 +177,7 @@ def prepare_codex_worker(
     )
     if wrapped_argv == probe_argv:
         raise OSError(
-            f"Sandbox backend {policy.backend_type!r} cannot contain the Codex worker at spawn"
+            f"Sandbox backend {policy.backend_type!r} cannot contain the MultiDex worker at spawn"
         )
 
     egress_handle: EgressProxyHandle | None = None

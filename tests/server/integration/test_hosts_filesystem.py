@@ -301,12 +301,12 @@ async def test_list_filesystem_survives_idle_mock_host(
         (
             {
                 "skills": [],
-                "warnings": ["Codex plugin skills unavailable: `codex plugin list` exited 1"],
+                "warnings": ["MultiDex plugin skills unavailable: `codex plugin list` exited 1"],
             },
             200,
             {
                 "skills": [],
-                "warnings": ["Codex plugin skills unavailable: `codex plugin list` exited 1"],
+                "warnings": ["MultiDex plugin skills unavailable: `codex plugin list` exited 1"],
             },
         ),
         (

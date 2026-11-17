@@ -109,7 +109,7 @@ class CodexGoalRunner:
         """Extract a JSON-RPC ``result`` object from a Codex goal response."""
         result = response.get("result")
         if not isinstance(result, dict):
-            raise ValueError(f"Codex goal {action} returned no result object")
+            raise ValueError(f"MultiDex goal {action} returned no result object")
         return result
 
     @staticmethod
@@ -119,7 +119,7 @@ class CodexGoalRunner:
             status_code=502,
             content={
                 "error": "codex_native_goal_failed",
-                "detail": (f"Codex-native goal {action} requires a loaded Codex bridge."),
+                "detail": (f"MultiDex-native goal {action} requires a loaded MultiDex bridge."),
             },
         )
 
@@ -130,7 +130,7 @@ class CodexGoalRunner:
             status_code=503,
             content={
                 "error": "codex_native_goal_failed",
-                "detail": f"Codex-native goal {action} returned {detail}.",
+                "detail": f"MultiDex-native goal {action} returned {detail}.",
             },
         )
 
@@ -173,7 +173,7 @@ class CodexGoalRunner:
             return self._malformed_response(action, str(exc))
         except Exception as exc:  # surface app-server goal failures to AP.
             self._logger.warning(
-                "Codex-native %s failed for session=%s",
+                "MultiDex-native %s failed for session=%s",
                 method,
                 conv_id,
                 exc_info=True,
@@ -305,7 +305,7 @@ class CodexGoalRunner:
                 status_code=400,
                 content={
                     "error": "invalid_input",
-                    "detail": "Codex goal controls require a codex-native session",
+                    "detail": "MultiDex goal controls require a codex-native session",
                 },
             )
 

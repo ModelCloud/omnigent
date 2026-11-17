@@ -42,7 +42,7 @@ async def _loaded_skills(
         result = response.get("result")
         data = result.get("data") if isinstance(result, dict) else None
         if not isinstance(data, list):
-            raise ValueError("Codex skills/list data must be a list")
+            raise ValueError("MultiDex skills/list data must be a list")
         if errors is not None:
             errors.extend(
                 f"{error.get('path')}: {error.get('message')}"
@@ -59,7 +59,7 @@ async def _loaded_skills(
             if isinstance(skill, dict)
         ]
     except WebSocketException as exc:
-        raise RuntimeError(f"Codex skills/list connection failed: {exc}") from exc
+        raise RuntimeError(f"MultiDex skills/list connection failed: {exc}") from exc
     finally:
         with contextlib.suppress(Exception):
             await asyncio.wait_for(client.close(), timeout=1)

@@ -84,7 +84,7 @@ async def test_rejected_request_traceback_identifies_rpc(method: str) -> None:
     assert exc.code == -32600
     assert exc.message == "invalid turn id"
     assert str(exc) == str(error)
-    assert exc.__notes__ == [f"Codex app-server RPC: method={method} request_id=1"]
+    assert exc.__notes__ == [f"MultiDex app-server RPC: method={method} request_id=1"]
     rendered = "".join(traceback.format_exception(exc))
     assert exc.__notes__[0] in rendered
     assert "private prompt" not in rendered

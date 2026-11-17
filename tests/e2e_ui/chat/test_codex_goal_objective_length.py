@@ -130,5 +130,5 @@ def test_overlong_goal_command_does_not_surface_raw_injection_error(
     # The bug itself: the app-server rejection reaches the user verbatim as a
     # raw injection failure. Neither the executor passthrough prefix nor the
     # raw JSON-RPC payload may appear anywhere in the chat.
-    expect(page.get_by_text("Codex native executor error")).to_have_count(0)
+    expect(page.get_by_text("MultiDex native executor error")).to_have_count(0)
     expect(page.get_by_text("-32600")).to_have_count(0)

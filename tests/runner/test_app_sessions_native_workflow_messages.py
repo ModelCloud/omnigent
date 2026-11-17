@@ -1709,7 +1709,7 @@ async def _fake_auto_create_codex_terminal(
         id="terminal_codex_main",
         type="terminal",
         session_id=session_id,
-        name="Codex",
+        name="MultiDex",
     )
 
 

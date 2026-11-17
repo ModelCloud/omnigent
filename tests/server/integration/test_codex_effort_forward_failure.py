@@ -644,7 +644,7 @@ async def test_legacy_runner_refusal_keeps_the_effort_it_cached(
             503,
             json={
                 "error": "codex_native_settings_update_failed",
-                "detail": "Codex-native settings update requires a loaded Codex bridge.",
+                "detail": "MultiDex-native settings update requires a loaded MultiDex bridge.",
             },
         )
 

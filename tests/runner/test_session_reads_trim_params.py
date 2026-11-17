@@ -56,7 +56,7 @@ class _RecordingClient:
     [
         pytest.param(
             lambda client: _fetch_native_launch_snapshot(
-                server_client=client, session_id=_SESSION_ID, runtime_label="Codex"
+                server_client=client, session_id=_SESSION_ID, runtime_label="MultiDex"
             ),
             id="native_launch_snapshot",
         ),

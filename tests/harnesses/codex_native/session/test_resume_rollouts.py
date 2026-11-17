@@ -1122,7 +1122,7 @@ async def test_ensure_local_codex_resume_rollout_rejects_unsafe_thread_id(
 
     transport = httpx.MockTransport(handler)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        with pytest.raises(click.ClickException, match="not a safe Codex rollout id"):
+        with pytest.raises(click.ClickException, match="not a safe MultiDex rollout id"):
             await codex_native._ensure_local_codex_resume_rollout(
                 client,
                 session_id="conv_codex",

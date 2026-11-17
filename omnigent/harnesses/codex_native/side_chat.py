@@ -142,7 +142,7 @@ def side_chat_question_from_content(content: object) -> str | None:
         )
     ):
         raise OmnigentError(
-            "Codex /side doesn't support attachments. Remove the attachments and try again.",
+            "MultiDex /side doesn't support attachments. Remove the attachments and try again.",
             code=ErrorCode.INVALID_INPUT,
         )
     return question

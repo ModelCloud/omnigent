@@ -19,7 +19,7 @@ const key = (conversationId: string, responseId: string) =>
   JSON.stringify([conversationId, responseId]);
 
 /**
- * Completion-level token counts divided by observed delta spans. Never attach
+ * Completion-level token counts divided by observed completion time. Never attach
  * these estimates to individual reasoning blocks: their token counts are unknown.
  */
 export const useTurnTpsStore = create<TurnTpsState>((set) => ({

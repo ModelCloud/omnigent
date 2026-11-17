@@ -1310,12 +1310,12 @@ def register_hooks_routes(
             payload = await request.json()
         except json.JSONDecodeError as exc:
             raise OmnigentError(
-                f"Invalid JSON in Codex elicitation hook body: {exc}",
+                f"Invalid JSON in MultiDex elicitation hook body: {exc}",
                 code=ErrorCode.INVALID_INPUT,
             ) from exc
         if not isinstance(payload, dict):
             raise OmnigentError(
-                "Codex elicitation hook body must be a JSON object.",
+                "MultiDex elicitation hook body must be a JSON object.",
                 code=ErrorCode.INVALID_INPUT,
             )
         codex_request = parse_codex_elicitation_request(payload)

@@ -952,7 +952,7 @@ def _resolve_file_id_block(
             return {k: v for k, v in block.items() if k != DELIVERY_KEY}, None
         raise ValueError(
             f"Attachment '{file_meta.filename}' requires a filesystem-capable "
-            "harness (e.g. Claude Code, Codex) and cannot be used with this model."
+            "harness (e.g. Claude Code, MultiDex) and cannot be used with this model."
         )
 
     # Use cached base64 if available; otherwise fetch, encode, and cache.

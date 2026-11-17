@@ -318,7 +318,7 @@ async def test_omnigent_codex_goal_put_without_live_runner_returns_503() -> None
 
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "codex_native_goal_failed"
-    assert "no live Codex runner" in response.json()["error"]["message"]
+    assert "no live MultiDex runner" in response.json()["error"]["message"]
 
 
 @pytest.mark.asyncio

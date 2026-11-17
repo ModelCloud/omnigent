@@ -22,7 +22,7 @@ import { useSessionImportStore } from "@/store/sessionImport";
 const SOURCES: { value: ImportSourceSelector; label: string }[] = [
   { value: "all", label: "All harnesses" },
   { value: "claude", label: "Claude Code" },
-  { value: "codex", label: "Codex" },
+  { value: "codex", label: "MultiDex" },
   { value: "opencode", label: "OpenCode" },
   { value: "pi", label: "Pi" },
   { value: "qwen", label: "Qwen" },

@@ -694,7 +694,8 @@ POLICY_REGISTRY: list[dict[str, object]] = [
         "name": "Block Dangerous Shell Commands",
         "description": "Allows safe shell commands, applies a configurable ASK or DENY action "
         "to recoverable risky commands, and always denies catastrophic commands such as "
-        "force-push or rm -rf /. Supports Omnigent, Claude/Codex, Cursor, Pi, Hermes, and Goose.",
+        "force-push or rm -rf /. Supports Omnigent, Claude/MultiDex, Cursor, Pi, "
+        "Hermes, and Goose.",
         "params_schema": {
             "type": "object",
             "properties": {
@@ -742,7 +743,7 @@ POLICY_REGISTRY: list[dict[str, object]] = [
         "handler": "omnigent.policies.builtins.orchestration.worktree_guard",
         "kind": "factory",
         "name": "Restrict Writes to Git Worktree",
-        "description": "Blocks file writes (sys_os_write/edit, Claude/Codex native "
+        "description": "Blocks file writes (sys_os_write/edit, Claude/MultiDex native "
         "Write/Edit/MultiEdit/NotebookEdit, and Pi native write/edit) outside the worker's "
         "git worktree to prevent cross-branch contamination",
     },
@@ -750,7 +751,7 @@ POLICY_REGISTRY: list[dict[str, object]] = [
         "handler": "omnigent.policies.builtins.orchestration.read_only_os",
         "kind": "factory",
         "name": "Report-Only (Deny File Writes)",
-        "description": "Denies every file-mutating tool (sys_os_write/edit, Claude/Codex "
+        "description": "Denies every file-mutating tool (sys_os_write/edit, Claude/MultiDex "
         "native Write/Edit/MultiEdit/NotebookEdit, and Pi native write/edit) so a "
         "report-only agent can read and run shell but never change code",
     },

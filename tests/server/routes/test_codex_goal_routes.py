@@ -568,7 +568,7 @@ async def test_set_goal_without_a_runner_is_503(
     _StagedForward(monkeypatch, None)
     resp = await client.put(f"/v1/sessions/{codex_session}/codex_goal", json={"objective": "x"})
     assert resp.status_code == 503
-    assert "Could not set Codex goal" in resp.json()["error"]["message"]
+    assert "Could not set MultiDex goal" in resp.json()["error"]["message"]
 
 
 async def test_set_goal_rejects_a_malformed_runner_goal(
@@ -577,7 +577,7 @@ async def test_set_goal_rejects_a_malformed_runner_goal(
     _StagedForward(monkeypatch, _result(200, {"goal": "nope"}))
     resp = await client.put(f"/v1/sessions/{codex_session}/codex_goal", json={"objective": "x"})
     assert resp.status_code == 502
-    assert "Could not set Codex goal" in resp.json()["error"]["message"]
+    assert "Could not set MultiDex goal" in resp.json()["error"]["message"]
 
 
 async def test_update_status_forwards_the_status_event(
@@ -596,7 +596,7 @@ async def test_update_status_forwards_the_status_event(
         f"/v1/sessions/{codex_session}/codex_goal/status", json={"status": "active"}
     )
     assert resp.status_code == 502
-    assert "Could not update Codex goal status" in resp.json()["error"]["message"]
+    assert "Could not update MultiDex goal status" in resp.json()["error"]["message"]
 
 
 async def test_clear_goal_reports_whether_codex_removed_one(
@@ -611,7 +611,7 @@ async def test_clear_goal_reports_whether_codex_removed_one(
     _StagedForward(monkeypatch, _result(200, {"cleared": "maybe"}))
     resp = await client.delete(f"/v1/sessions/{codex_session}/codex_goal")
     assert resp.status_code == 502
-    assert "Could not clear Codex goal" in resp.json()["error"]["message"]
+    assert "Could not clear MultiDex goal" in resp.json()["error"]["message"]
 
 
 async def test_goal_routes_refuse_non_codex_and_missing_sessions(

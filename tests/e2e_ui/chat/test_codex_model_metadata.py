@@ -155,7 +155,7 @@ def test_codex_native_picker_uses_raw_model_metadata(
     expect(page.get_by_test_id("composer-agent-effort-value")).to_have_text("xHigh")
 
     page.get_by_test_id("composer-config-gear").hover()
-    expect(page.get_by_test_id("composer-config-gear-tooltip")).to_contain_text("Codex")
+    expect(page.get_by_test_id("composer-config-gear-tooltip")).to_contain_text("MultiDex")
 
     # The Model submenu renders Codex's displayName raw.
     page.get_by_test_id("composer-config-gear").click()

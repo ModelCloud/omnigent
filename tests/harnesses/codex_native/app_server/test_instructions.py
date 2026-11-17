@@ -604,7 +604,7 @@ def test_migration_with_invalid_source_config_fails_without_mutation(tmp_path: P
     original_config = config_path.read_text()
     original_state = state_path.read_text()
 
-    with pytest.raises(ValueError, match="Cannot migrate Codex profile instructions"):
+    with pytest.raises(ValueError, match="Cannot migrate MultiDex profile instructions"):
         _materialize_codex_profile_for_start(
             codex_home, source_home, None, codex_version=(0, 155, 0)
         )

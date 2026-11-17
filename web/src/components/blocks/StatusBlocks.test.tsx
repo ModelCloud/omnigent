@@ -48,6 +48,41 @@ const RATE_LIMIT_ERROR = [
 describe("ErrorBanner", () => {
   beforeEach(() => vi.mocked(copyText).mockClear());
 
+  it("displays and copies legacy native errors as MultiDex while preserving commands and paths", async () => {
+    render(
+      <ErrorBanner
+        code="codex_turn_error"
+        source="harness"
+        message="Codex could not continue."
+        title="Codex turn failed"
+        cause="Codex could not read ~/.codex/config.toml."
+        remediation="Restart Codex with `codex resume`."
+        relatedErrors={[
+          {
+            code: "codex_thread_reset",
+            itemId: "legacy-reset",
+            source: "harness",
+            title: "Codex reset",
+            message: "Codex opened a fresh thread.",
+          },
+        ]}
+      />,
+    );
+    expect(screen.getByTestId("error-headline")).toHaveTextContent("MultiDex turn failed");
+    fireEvent.click(screen.getByRole("button", { name: /MultiDex turn failed/ }));
+    expect(screen.getByTestId("error-message-content")).toHaveTextContent(
+      "MultiDex could not read ~/.codex/config.toml.",
+    );
+    expect(screen.getByText(/Restart MultiDex with/)).toHaveTextContent("codex resume");
+    expect(screen.getByText(/MultiDex opened a fresh thread/)).toBeInTheDocument();
+    expect(screen.queryByText(/\bCodex\b/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Copy error message" }));
+    await waitFor(() => expect(copyText).toHaveBeenCalled());
+    expect(vi.mocked(copyText).mock.calls[0][0]).toContain(
+      "MultiDex could not read ~/.codex/config.toml.",
+    );
+  });
+
   it("renders compact by default and expands labeled message content", () => {
     render(
       <ErrorBanner message={TERMINAL_ERROR} source="execution" code="required_terminal_exited" />,
@@ -278,7 +313,7 @@ describe("ErrorBanner", () => {
   it.each([
     ["databricks_sign_in_pending", "The agent is waiting for a Databricks sign-in."],
     ["agent_startup_pending", "The agent is still starting in the session terminal."],
-    ["codex_thread_not_started", "Codex stopped before it could start, so this turn never ran."],
+    ["codex_thread_not_started", "MultiDex stopped before it could start, so this turn never ran."],
     [
       "transient_upstream_error",
       "The model service hit a temporary error mid-response; retrying usually continues the turn.",
@@ -289,7 +324,7 @@ describe("ErrorBanner", () => {
     ],
     [
       "codex_provider_auth_failed",
-      "Codex couldn't get a token from the model provider's sign-in command on the host.",
+      "MultiDex couldn't get a token from the model provider's sign-in command on the host.",
     ],
     [
       "harness_not_configured",
@@ -396,7 +431,7 @@ describe("ErrorBanner", () => {
     );
     expect(screen.getByTestId("error-headline")).toHaveTextContent("Signed in to Databricks");
     expect(screen.getByTestId("error-notice-body")).toHaveTextContent(
-      "Codex is ready. Send your message again.",
+      "MultiDex is ready. Send your message again.",
     );
     expect(screen.queryByRole("button", { name: "Open sign-in link" })).toBeNull();
   });
@@ -1427,7 +1462,7 @@ describe("ErrorBanner — info level", () => {
     const pill = screen.getByTestId("error-pill");
     expect(pill).toHaveAttribute("data-level", "info");
     expect(screen.getByTestId("error-headline")).toHaveTextContent(
-      "Codex hit an error reloading the earlier transcript, so it started a fresh thread.",
+      "MultiDex hit an error reloading the earlier transcript, so it started a fresh thread.",
     );
     expect(screen.getByTestId("error-headline")).not.toHaveClass("text-destructive");
     // Disclosure chevron is always shown; destructive styling is on the headline, not the icon.

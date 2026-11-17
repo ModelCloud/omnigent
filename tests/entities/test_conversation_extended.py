@@ -52,7 +52,7 @@ def test_error_data_valid() -> None:
     err = ErrorData(
         source="execution",
         code="native_terminal_start_failed",
-        message="Native Codex requires the 'codex' CLI on PATH.",
+        message="Native MultiDex requires the 'codex' CLI on PATH.",
     )
     assert err.source == "execution"
     assert err.code == "native_terminal_start_failed"

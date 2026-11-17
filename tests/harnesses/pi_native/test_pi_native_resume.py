@@ -253,7 +253,7 @@ def test_unconvertible_compaction_snapshot_preserves_unsummarized_history(
     [
         (
             [_user_item("old question"), {"type": "compaction", "encrypted_content": "opaque"}],
-            "[Codex compaction — context was compacted in the terminal]",
+            "[MultiDex compaction — context was compacted in the terminal]",
         ),
         (
             [{"role": "user", "content": [{"type": "text", "text": "native summary"}]}],
@@ -269,11 +269,11 @@ def test_unconvertible_compaction_snapshot_preserves_unsummarized_history(
                     ],
                 }
             ],
-            "[Codex compaction — context was compacted in the terminal]",
+            "[MultiDex compaction — context was compacted in the terminal]",
         ),
         (
             [_user_item("old question"), None],
-            "[Codex compaction — context was compacted in the terminal]",
+            "[MultiDex compaction — context was compacted in the terminal]",
         ),
     ],
     ids=["codex-encrypted", "claude-hook", "partial-message", "malformed-entry"],

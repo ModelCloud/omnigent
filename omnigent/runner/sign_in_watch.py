@@ -226,6 +226,6 @@ def build_sign_in_watch(
 
 def _agent_name(harness: str | None) -> str:
     """Name the native agent in a sign-in notice, e.g. ``"Claude Code"``."""
-    return {"codex-native": "Codex", "claude-native": "Claude Code"}.get(
+    return {"codex-native": "MultiDex", "claude-native": "Claude Code"}.get(
         harness or "", "The agent"
     )

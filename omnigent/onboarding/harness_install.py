@@ -222,7 +222,7 @@ _HARNESS_INSTALL: dict[str, HarnessInstallSpec] = {
         min_version=_CLAUDE_MIN_VERSION,
     ),
     OPENAI_FAMILY: HarnessInstallSpec(
-        "MultiDex (Codex-compatible)",
+        "MultiDex",
         "codex",
         package=None,
         login_args=("login",),

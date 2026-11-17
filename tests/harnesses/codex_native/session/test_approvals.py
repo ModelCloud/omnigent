@@ -109,7 +109,9 @@ def test_forwarder_declines_codex_command_when_approval_hook_rejects_request(
             json={
                 "error": {
                     "code": "invalid_input",
-                    "message": ("Codex execpolicy amendment must be a non-empty list of strings."),
+                    "message": (
+                        "MultiDex execpolicy amendment must be a non-empty list of strings."
+                    ),
                 }
             },
         )

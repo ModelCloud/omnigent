@@ -196,7 +196,7 @@ export const CODEX_NATIVE_APPROVAL_MODES: NativeHarnessMode[] = [
   {
     value: "default",
     label: "Default",
-    description: "Codex's default permissions, or your Codex config",
+    description: "MultiDex's default permissions, or your MultiDex config",
     args: [],
   },
   {
@@ -256,7 +256,7 @@ export const CODEX_NATIVE_BYPASS_APPROVAL_VALUE = "bypass";
 export const CODEX_NATIVE_BYPASS_APPROVAL_OPTION: NativeHarnessMode = {
   value: "bypass",
   label: "Bypass approvals & sandbox",
-  description: "Runs Codex with no approval prompts and no command sandbox",
+  description: "Runs MultiDex with no approval prompts and no command sandbox",
   args: [],
 };
 

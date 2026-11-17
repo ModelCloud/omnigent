@@ -384,8 +384,8 @@ async def test_goal_that_is_not_active_reports_idle_without_a_failure(
 @pytest.mark.parametrize(
     ("status", "output"),
     [
-        ("usageLimited", "Codex stopped the goal: usage limit reached."),
-        ("budgetLimited", "Codex stopped the goal: token budget reached."),
+        ("usageLimited", "MultiDex stopped the goal: usage limit reached."),
+        ("budgetLimited", "MultiDex stopped the goal: token budget reached."),
     ],
 )
 async def test_goal_stopped_by_a_limit_fails_the_session_once(
@@ -546,7 +546,7 @@ async def test_turn_completion_after_a_goal_limit_keeps_the_failure(
     ]
     assert statuses == [
         _background_work_post(False),
-        _failed_status_post("Codex stopped the goal: token budget reached."),
+        _failed_status_post("MultiDex stopped the goal: token budget reached."),
     ]
     bridge_state = read_bridge_state(tmp_path)
     assert bridge_state is None or bridge_state.active_turn_id is None
@@ -634,7 +634,7 @@ async def test_reconnect_reading_a_stopped_goal_still_fails_on_its_notification(
 
     assert client.posts == [
         _background_work_post(False),
-        _failed_status_post("Codex stopped the goal: token budget reached."),
+        _failed_status_post("MultiDex stopped the goal: token budget reached."),
         # The failure cleared the server's terminal list, so the turn's listing resends it.
         _background_work_post(None, []),
     ]

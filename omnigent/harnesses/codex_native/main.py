@@ -427,7 +427,7 @@ class PreparedCodexTerminal:
 def _require_codex_app_server_url(prepared: PreparedCodexTerminal) -> str:
     """Return the prepared app-server URL or fail on inconsistent state."""
     if prepared.app_server_url is None:
-        raise click.ClickException("Codex app-server transport was not initialized.")
+        raise click.ClickException("MultiDex app-server transport was not initialized.")
     return prepared.app_server_url
 
 
@@ -465,11 +465,11 @@ def run_codex_native(
     )
     resolved_command = command.strip()
     if not resolved_command:
-        raise click.ClickException("Codex command must not be empty.")
+        raise click.ClickException("MultiDex command must not be empty.")
     _preflight_local_tools()
     if server is None:
         raise click.ClickException(
-            "Codex requires a resolved Omnigent server URL. The CLI should call "
+            "MultiDex requires a resolved Omnigent server URL. The CLI should call "
             "_ensure_backend before run_codex_native."
         )
     with TemporaryDirectory(prefix="omnigent-codex-native-") as tmpdir:
@@ -530,7 +530,7 @@ def _align_working_directory_with_session(session_id: str) -> None:
         raise click.ClickException(
             f"Session {session_id} was created in {recorded_path}, but that "
             "directory no longer exists. Recreate or move the project back "
-            "before resuming Codex."
+            "before resuming MultiDex."
         )
     action = _prompt_codex_resume_workspace_action(
         recorded_path=recorded_path,
@@ -557,7 +557,7 @@ def _prompt_codex_resume_workspace_action(
     options = _codex_resume_workspace_action_options(recorded_path=recorded_path)
     click.echo(f"\nSession was started in: {recorded_path}", err=True)
     click.echo(f"Current working directory: {current}", err=True)
-    click.echo("Codex resume is workspace-scoped. Choose an action:", err=True)
+    click.echo("MultiDex resume is workspace-scoped. Choose an action:", err=True)
     for option in options:
         click.echo(f"  {option.action:<6} - {option.label}", err=True)
     action = click.prompt(
@@ -568,7 +568,7 @@ def _prompt_codex_resume_workspace_action(
         err=True,
     )
     if not isinstance(action, str):
-        raise click.ClickException("Codex resume action must be a string.")
+        raise click.ClickException("MultiDex resume action must be a string.")
     return action
 
 
@@ -624,8 +624,8 @@ def _materialize_codex_agent_spec(
     raw: _JsonObject = {
         "name": _AGENT_NAME,
         "prompt": (
-            "Codex is running in the session terminal. Web UI messages are "
-            "forwarded into the same native Codex app-server thread."
+            "MultiDex is running in the session terminal. Web UI messages are "
+            "forwarded into the same native MultiDex app-server thread."
         ),
         "executor": executor,
         # Opt the native session into the child-session spawn writes
@@ -735,7 +735,7 @@ def _run_with_local_server(
 
             :returns: None.
             """
-            with runner_startup_progress(initial_message="Preparing Codex...") as progress:
+            with runner_startup_progress(initial_message="Preparing MultiDex...") as progress:
                 bundle = None if resolved_session_id is not None else _bundle_agent(spec_path)
                 prepared = await _prepare_codex_terminal(
                     base_url=base_url,
@@ -835,7 +835,7 @@ def _run_with_remote_server(
 
             :returns: None.
             """
-            with runner_startup_progress(initial_message="Preparing Codex...") as progress:
+            with runner_startup_progress(initial_message="Preparing MultiDex...") as progress:
                 _update_startup_progress(progress, "Connecting to local daemon...")
                 _ensure_host_daemon(base_url)
                 bundle = None if resolved_session_id is not None else _bundle_agent(spec_path)
@@ -877,7 +877,7 @@ def _run_with_remote_server(
                     session_id=prepared.session_id,
                     prompt=prompt,
                     auth=attach_auth,
-                    harness_name="Codex",
+                    harness_name="MultiDex",
                 )
                 record_startup_event("initial_prompt_submitted")
             await _attach_terminal_resource(
@@ -951,8 +951,10 @@ async def _prepare_codex_terminal_via_daemon(
         fresh_session = session_id is None
         if session_id is None:
             if session_bundle is None:
-                raise click.ClickException("Creating a Codex session requires a session bundle.")
-            _update_startup_progress(startup_progress, "Creating Codex session...")
+                raise click.ClickException(
+                    "Creating a MultiDex session requires a session bundle."
+                )
+            _update_startup_progress(startup_progress, "Creating MultiDex session...")
             session_id, _ = await asyncio.gather(
                 _create_codex_session(
                     client,
@@ -963,7 +965,7 @@ async def _prepare_codex_terminal_via_daemon(
                 wait_for_host_online(client, host_id, timeout_s=_DAEMON_HOST_ONLINE_TIMEOUT_S),
             )
         else:
-            _update_startup_progress(startup_progress, "Loading Codex session...")
+            _update_startup_progress(startup_progress, "Loading MultiDex session...")
             payload = await _fetch_codex_session(client, session_id)
             record_startup_event("session_resolved", session_id=session_id)
             labels = payload.get("labels") if isinstance(payload, dict) else None
@@ -980,12 +982,12 @@ async def _prepare_codex_terminal_via_daemon(
                 thread_id = external_session_id if isinstance(external_session_id, str) else None
                 if persist_args or model is not None:
                     click.echo(
-                        "Ignoring Codex launch args/model for an already-running "
+                        "Ignoring MultiDex launch args/model for an already-running "
                         "terminal; restart the session terminal to apply them.",
                         err=True,
                     )
                 record_startup_event("terminal_available", session_id=session_id)
-                _update_startup_progress(startup_progress, "Codex terminal ready.")
+                _update_startup_progress(startup_progress, "MultiDex terminal ready.")
                 return PreparedCodexTerminal(
                     session_id=session_id,
                     terminal_id=existing_terminal.terminal_id,
@@ -1004,14 +1006,14 @@ async def _prepare_codex_terminal_via_daemon(
             if model is not None:
                 patch["model_override"] = model
             if patch:
-                _update_startup_progress(startup_progress, "Updating Codex session...")
+                _update_startup_progress(startup_progress, "Updating MultiDex session...")
                 resp = await client.patch(
                     f"/v1/sessions/{url_component(session_id)}",
                     json=patch,
                 )
                 if resp.status_code >= 400:
                     raise click.ClickException(
-                        f"Codex session launch config update failed "
+                        f"MultiDex session launch config update failed "
                         f"({resp.status_code}): {error_text(resp)}"
                     )
 
@@ -1035,7 +1037,7 @@ async def _prepare_codex_terminal_via_daemon(
         # session stays stopped.
         await _bind_session_runner(client, session_id, runner_id)
         record_startup_event("session_runner_bound")
-        _update_startup_progress(startup_progress, "Starting Codex terminal...")
+        _update_startup_progress(startup_progress, "Starting MultiDex terminal...")
         await _ensure_codex_terminal_on_runner(client, session_id)
         terminal = await _wait_for_codex_terminal_ready(
             client,
@@ -1043,7 +1045,7 @@ async def _prepare_codex_terminal_via_daemon(
             timeout_s=_DAEMON_TERMINAL_READY_TIMEOUT_S,
         )
         record_startup_event("terminal_available", session_id=session_id)
-        _update_startup_progress(startup_progress, "Codex terminal ready.")
+        _update_startup_progress(startup_progress, "MultiDex terminal ready.")
     return PreparedCodexTerminal(
         session_id=session_id,
         terminal_id=terminal.terminal_id,
@@ -1077,7 +1079,7 @@ async def _ensure_codex_terminal_on_runner(
     )
     if resp.status_code >= 400:
         raise click.ClickException(
-            f"Codex terminal ensure failed ({resp.status_code}): {error_text(resp)}"
+            f"MultiDex terminal ensure failed ({resp.status_code}): {error_text(resp)}"
         )
 
 
@@ -1105,7 +1107,8 @@ async def _wait_for_codex_terminal_ready(
             return terminal
         await asyncio.sleep(0.2)
     raise click.ClickException(
-        f"The runner did not create the Codex terminal for {session_id!r} within {timeout_s:.0f}s."
+        f"The runner did not create the MultiDex terminal for {session_id!r} "
+        f"within {timeout_s:.0f}s."
     )
 
 
@@ -1149,12 +1152,14 @@ async def _prepare_codex_terminal(
         thread_id: str | None = None
         if session_id is None:
             if session_bundle is None:
-                raise click.ClickException("Creating a Codex session requires a session bundle.")
-            _update_startup_progress(startup_progress, "Creating Codex session...")
+                raise click.ClickException(
+                    "Creating a MultiDex session requires a session bundle."
+                )
+            _update_startup_progress(startup_progress, "Creating MultiDex session...")
             bridge_id = secrets.token_urlsafe(24)
             session_id = await _create_codex_session(client, session_bundle, bridge_id=bridge_id)
         else:
-            _update_startup_progress(startup_progress, "Loading Codex session...")
+            _update_startup_progress(startup_progress, "Loading MultiDex session...")
             payload = await _fetch_codex_session(client, session_id)
             labels = payload.get("labels") if isinstance(payload, dict) else None
             if (
@@ -1182,7 +1187,7 @@ async def _prepare_codex_terminal(
                     if reattach_state is not None
                     else str(reattach_unix_socket)
                 )
-                _update_startup_progress(startup_progress, "Codex terminal ready.")
+                _update_startup_progress(startup_progress, "MultiDex terminal ready.")
                 return PreparedCodexTerminal(
                     session_id=session_id,
                     terminal_id=existing_terminal.terminal_id,
@@ -1197,7 +1202,7 @@ async def _prepare_codex_terminal(
                 )
             if thread_id is None:
                 raise click.ClickException(
-                    f"Conversation {session_id!r} is missing its Codex thread id."
+                    f"Conversation {session_id!r} is missing its MultiDex thread id."
                 )
 
         bridge_dir = prepare_bridge_dir(bridge_id)
@@ -1288,7 +1293,7 @@ async def _prepare_codex_terminal(
                 )
             if runner_id is not None:
                 await _bind_session_runner(client, session_id, runner_id)
-            _update_startup_progress(startup_progress, "Starting Codex terminal...")
+            _update_startup_progress(startup_progress, "Starting MultiDex terminal...")
             launched_terminal = await _launch_codex_terminal(
                 client,
                 session_id,
@@ -1305,7 +1310,7 @@ async def _prepare_codex_terminal(
                 codex_cli_version=app_server.codex_cli_version,
             )
             terminal_id = launched_terminal.terminal_id
-            _update_startup_progress(startup_progress, "Codex terminal ready.")
+            _update_startup_progress(startup_progress, "MultiDex terminal ready.")
         except BaseException:
             try:
                 if terminal_id is not None:
@@ -1323,7 +1328,7 @@ async def _prepare_codex_terminal(
                     await app_server.close()
             raise
     if launched_terminal is None:
-        raise click.ClickException("Codex terminal was not launched.")
+        raise click.ClickException("MultiDex terminal was not launched.")
     return PreparedCodexTerminal(
         session_id=session_id,
         terminal_id=launched_terminal.terminal_id,
@@ -1459,7 +1464,7 @@ def _start_codex_forwarder(
     :raises click.ClickException: If the Codex thread id is not known.
     """
     if prepared.thread_id is None:
-        raise click.ClickException("Codex thread id was not initialized.")
+        raise click.ClickException("MultiDex thread id was not initialized.")
     app_server_url = _require_codex_app_server_url(prepared)
     return asyncio.create_task(
         supervise_forwarder(
@@ -1498,7 +1503,7 @@ async def _initialize_fresh_terminal_thread(
     :raises click.ClickException: If no thread-start listener exists.
     """
     if prepared.event_client is None:
-        raise click.ClickException("Codex event listener was not initialized.")
+        raise click.ClickException("MultiDex event listener was not initialized.")
     app_server_url = _require_codex_app_server_url(prepared)
     thread_id = await _wait_for_thread_started(prepared.event_client)
     from omnigent.cli_auth import open_server_client
@@ -1541,19 +1546,19 @@ async def _attach_terminal_resource(
     direct_tmux_error = _direct_tmux_unavailable_reason(prepared)
     if direct_tmux_error is None:
         if prepared.tmux_socket is None or prepared.tmux_target is None:
-            raise click.ClickException("Codex tmux attach metadata was incomplete.")
+            raise click.ClickException("MultiDex tmux attach metadata was incomplete.")
         await _attach_direct_tmux(prepared.tmux_socket, prepared.tmux_target)
         return
     if prepared.app_server_url is None:
         raise click.ClickException(
-            f"Runner-owned Codex terminal requires direct tmux attach, but {direct_tmux_error}"
+            f"Runner-owned MultiDex terminal requires direct tmux attach, but {direct_tmux_error}"
         )
     await _attach_with_reconnect(
         attach=attach_local_terminal,
         attach_url=_attach_url(base_url, prepared.session_id, prepared.terminal_id),
         headers=headers,
         recover=recover,
-        session_name="Codex",
+        session_name="MultiDex",
         base_url=base_url,
         session_id=prepared.session_id,
         terminal_id=prepared.terminal_id,
@@ -1684,12 +1689,14 @@ async def _create_codex_session(
     )
     if resp.status_code >= 400:
         raise click.ClickException(
-            f"Codex session creation failed ({resp.status_code}): {error_text(resp)}"
+            f"MultiDex session creation failed ({resp.status_code}): {error_text(resp)}"
         )
     body = resp.json()
     new_session_id = body.get("session_id")
     if not isinstance(new_session_id, str) or not new_session_id:
-        raise click.ClickException("Codex session creation response did not include session_id.")
+        raise click.ClickException(
+            "MultiDex session creation response did not include session_id."
+        )
     record_startup_event("session_resolved", session_id=new_session_id)
     return new_session_id
 
@@ -1805,7 +1812,7 @@ def _copy_rollout_with_cwd(
                 record = json.loads(line)
             except json.JSONDecodeError as exc:
                 raise click.ClickException(
-                    f"Cannot clone malformed Codex rollout {source}: "
+                    f"Cannot clone malformed MultiDex rollout {source}: "
                     f"line {line_number} is not valid JSON."
                 ) from exc
             record_type = record.get("type") if isinstance(record, dict) else None
@@ -1900,7 +1907,7 @@ def _clone_codex_rollout(
             clone_model
         ):
             raise _CodexForkModelMismatchError(
-                f"Codex rollout {source.name} last ran on {source_model}, "
+                f"MultiDex rollout {source.name} last ran on {source_model}, "
                 f"but the fork launches on {clone_model}"
             )
     # Preserve the source's ``sessions/<YYYY>/<MM>/<DD>/`` layout; only swap
@@ -1981,8 +1988,8 @@ async def _ensure_local_codex_resume_rollout(
     """
     if not _CODEX_THREAD_ID_RE.fullmatch(external_session_id):
         raise click.ClickException(
-            f"Cannot resume Codex session {session_id!r}: persisted thread id "
-            f"{external_session_id!r} is not a safe Codex rollout id."
+            f"Cannot resume MultiDex session {session_id!r}: persisted thread id "
+            f"{external_session_id!r} is not a safe MultiDex rollout id."
         )
     await _replay_dead_letters_before_resume(client, codex_home.parent)
     try:
@@ -2041,7 +2048,7 @@ async def _ensure_local_codex_resume_rollout(
         os.replace(tmp, target)
     except OSError as exc:
         raise click.ClickException(
-            f"Failed to write Codex resume rollout {target}: {exc}"
+            f"Failed to write MultiDex resume rollout {target}: {exc}"
         ) from exc
     finally:
         if tmp is not None:
@@ -2697,7 +2704,7 @@ def _codex_event_msg_record_for_message(
             continue
         block_text = block.get("text", "")
         if not isinstance(block_text, str):
-            raise click.ClickException("Codex message content text must be a string.")
+            raise click.ClickException("MultiDex message content text must be a string.")
         text_parts.append(block_text)
     text = " ".join(text_parts).strip()
     if not text:
@@ -2869,20 +2876,20 @@ def _codex_function_call_payload_from_session_item(
     if not isinstance(name, str) or not name:
         item_id = item.get("id")
         raise click.ClickException(
-            "Cannot synthesize Codex resume rollout: Omnigent function_call "
+            "Cannot synthesize MultiDex resume rollout: Omnigent function_call "
             f"{item_id!r} has an invalid name."
         )
     if not isinstance(call_id, str) or not call_id:
         item_id = item.get("id")
         raise click.ClickException(
-            "Cannot synthesize Codex resume rollout: Omnigent function_call "
+            "Cannot synthesize MultiDex resume rollout: Omnigent function_call "
             f"{item_id!r} has an invalid call_id."
         )
     arguments = item.get("arguments")
     if not isinstance(arguments, str):
         item_id = item.get("id")
         raise click.ClickException(
-            "Cannot synthesize Codex resume rollout: Omnigent function_call "
+            "Cannot synthesize MultiDex resume rollout: Omnigent function_call "
             f"{item_id!r} has non-string arguments."
         )
     payload: _JsonObject = {
@@ -2913,14 +2920,14 @@ def _codex_function_call_output_payload_from_session_item(
     if not isinstance(call_id, str) or not call_id:
         item_id = item.get("id")
         raise click.ClickException(
-            "Cannot synthesize Codex resume rollout: Omnigent function_call_output "
+            "Cannot synthesize MultiDex resume rollout: Omnigent function_call_output "
             f"{item_id!r} has an invalid call_id."
         )
     output = item.get("output")
     if not isinstance(output, str):
         item_id = item.get("id")
         raise click.ClickException(
-            "Cannot synthesize Codex resume rollout: Omnigent function_call_output "
+            "Cannot synthesize MultiDex resume rollout: Omnigent function_call_output "
             f"{item_id!r} has non-string output."
         )
     return {
@@ -3055,7 +3062,7 @@ async def _patch_external_session_id(
     )
     if resp.status_code >= 400:
         raise click.ClickException(
-            f"Codex thread bind failed ({resp.status_code}): {error_text(resp)}"
+            f"MultiDex thread bind failed ({resp.status_code}): {error_text(resp)}"
         )
 
 
@@ -3080,12 +3087,12 @@ async def _wait_for_thread_started(client: CodexAppServerClient) -> str:
         return await wait_for_thread_started(client, timeout=_CODEX_THREAD_START_TIMEOUT_SECONDS)
     except TimeoutError as exc:
         raise click.ClickException(
-            "Codex TUI did not start a remote app-server thread before "
+            "MultiDex TUI did not start a remote app-server thread before "
             f"the {_CODEX_THREAD_START_TIMEOUT_SECONDS:.0f}s timeout."
         ) from exc
     except RuntimeError as exc:
         raise click.ClickException(
-            "Codex app-server event stream ended before thread startup."
+            "MultiDex app-server event stream ended before thread startup."
         ) from exc
 
 
@@ -3173,7 +3180,7 @@ async def _launch_codex_terminal(
     )
     if resp.status_code >= 400:
         raise click.ClickException(
-            f"Codex terminal launch failed ({resp.status_code}): {error_text(resp)}"
+            f"MultiDex terminal launch failed ({resp.status_code}): {error_text(resp)}"
         )
     payload = resp.json()
     return _launched_codex_terminal_from_payload(payload)
@@ -3190,10 +3197,12 @@ def _launched_codex_terminal_from_payload(payload: object) -> LaunchedCodexTermi
         terminal id.
     """
     if not isinstance(payload, dict):
-        raise click.ClickException("Codex terminal launch returned non-object JSON.")
+        raise click.ClickException("MultiDex terminal launch returned non-object JSON.")
     terminal_id = payload.get("id")
     if not isinstance(terminal_id, str) or not terminal_id:
-        raise click.ClickException("Codex terminal launch response did not include terminal id.")
+        raise click.ClickException(
+            "MultiDex terminal launch response did not include terminal id."
+        )
     metadata = payload.get("metadata")
     tmux_socket: Path | None = None
     tmux_target: str | None = None
@@ -3239,7 +3248,7 @@ async def _find_running_codex_terminal(
         return None
     if resp.status_code >= 400:
         raise click.ClickException(
-            f"Failed to fetch Codex terminal ({resp.status_code}): {error_text(resp)}"
+            f"Failed to fetch MultiDex terminal ({resp.status_code}): {error_text(resp)}"
         )
     payload = resp.json()
     metadata = payload.get("metadata") if isinstance(payload, dict) else None
@@ -3402,6 +3411,6 @@ def _preflight_local_tools() -> None:
     """
     if shutil.which("tmux") is None:
         raise click.ClickException(
-            "tmux was not found on local PATH. The native Codex wrapper "
-            "attaches to the runner-owned Codex tmux terminal."
+            "tmux was not found on local PATH. The native MultiDex wrapper "
+            "attaches to the runner-owned MultiDex tmux terminal."
         )

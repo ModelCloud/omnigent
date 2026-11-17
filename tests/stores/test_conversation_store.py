@@ -1242,7 +1242,7 @@ def test_append_error_item_round_trips_for_history(
                 data=ErrorData(
                     source="execution",
                     code="native_terminal_start_failed",
-                    message="Native Codex requires the 'codex' CLI on PATH.",
+                    message="Native MultiDex requires the 'codex' CLI on PATH.",
                 ),
             ),
         ],
@@ -1253,7 +1253,7 @@ def test_append_error_item_round_trips_for_history(
     assert read_back.id == persisted.id
     assert read_back.response_id == "resp_failed"
     assert isinstance(read_back.data, ErrorData)
-    assert read_back.data.message == "Native Codex requires the 'codex' CLI on PATH."
+    assert read_back.data.message == "Native MultiDex requires the 'codex' CLI on PATH."
     assert read_back.to_api_dict() == {
         "id": persisted.id,
         "response_id": "resp_failed",
@@ -1262,7 +1262,7 @@ def test_append_error_item_round_trips_for_history(
         "created_at": read_back.created_at,
         "source": "execution",
         "code": "native_terminal_start_failed",
-        "message": "Native Codex requires the 'codex' CLI on PATH.",
+        "message": "Native MultiDex requires the 'codex' CLI on PATH.",
     }
 
 

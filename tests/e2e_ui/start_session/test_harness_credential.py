@@ -33,7 +33,7 @@ def _agents_body() -> str:
                 {
                     "id": "ag_codex_e2e",
                     "name": "codex-native-ui",
-                    "display_name": "Codex",
+                    "display_name": "MultiDex",
                     "description": "OpenAI's coding agent",
                     "harness": _HARNESS,
                     "skills": [],
@@ -83,7 +83,7 @@ def _info_body() -> str:
 def _harnesses_body() -> str:
     return json.dumps(
         {
-            "data": [{"id": "codex", "label": "Codex"}],
+            "data": [{"id": "codex", "label": "MultiDex"}],
             "setup_steps": {
                 _HARNESS: [
                     {
@@ -215,7 +215,7 @@ async def _drive_add_key(base_url: str) -> None:
             codex_option = page.get_by_test_id("new-chat-landing-agent-ag_codex_e2e")
             await expect(codex_option).to_be_visible(timeout=60_000)
             await expect(codex_option).to_have_attribute("aria-disabled", "true")
-            await codex_option.get_by_text("Codex", exact=True).hover()
+            await codex_option.get_by_text("MultiDex", exact=True).hover()
             await expect(
                 page.get_by_test_id("new-chat-landing-agent-tooltip-ag_codex_e2e")
             ).to_contain_text(

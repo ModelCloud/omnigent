@@ -74,11 +74,11 @@ def prepare_codex_skills_dir(path: Path) -> Path:
         or not stat.S_ISDIR(root_stat.st_mode)
         or root.is_junction()
     ):
-        raise OSError("Codex skills must use a dedicated session staging directory")
+        raise OSError("MultiDex skills must use a dedicated session staging directory")
     if hasattr(os, "getuid") and (
         root_stat.st_uid != os.getuid() or stat.S_IMODE(root_stat.st_mode) != 0o700
     ):
-        raise OSError("Codex skills staging directory must be private to the current user")
+        raise OSError("MultiDex skills staging directory must be private to the current user")
     for child in root.iterdir():
         if child.is_junction():
             child.rmdir()

@@ -50,7 +50,7 @@ export function LocalIntroStep({
       <OnboardingHeading>Set up Omnigent locally</OnboardingHeading>
 
       <p className="flex-1 text-base text-muted-foreground max-w-sm mx-auto text-center">
-        Use Claude Code, Codex, Cursor, and other local harnesses from one UI. Keep history and
+        Use Claude Code, MultiDex, Cursor, and other local harnesses from one UI. Keep history and
         context across harnesses. Import existing harness chats.
       </p>
 

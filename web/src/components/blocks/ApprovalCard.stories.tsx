@@ -90,7 +90,7 @@ export const RememberWebDomain: Story = {
 
 export const CodexCommand: Story = {
   args: {
-    message: "Codex wants to run the focused frontend checks.",
+    message: "MultiDex wants to run the focused frontend checks.",
     phase: "codex_command_approval",
     policyName: "codex_native_command_approval",
     contentPreview: "",

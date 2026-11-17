@@ -245,7 +245,7 @@ def test_custom_native_harness_session_without_wrapper_label_is_native(
     # resolver, so a label-less native session no longer raises
     # "Unsupported native terminal session".
     display_name, _model, harness = sessions_routes._native_terminal_runtime(conv)
-    assert (display_name, harness) == ("Codex", "codex-native")
+    assert (display_name, harness) == ("MultiDex", "codex-native")
 
 
 def test_custom_sdk_harness_session_is_not_native(

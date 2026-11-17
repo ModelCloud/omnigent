@@ -561,7 +561,7 @@ def test_attach_terminal_resource_runner_owned_missing_socket_fails_loud(
         )
 
     message = str(exc_info.value)
-    assert "Runner-owned Codex terminal requires direct tmux attach" in message
+    assert "Runner-owned MultiDex terminal requires direct tmux attach" in message
     assert str(tmp_path / "missing.sock") in message
     assert "WebSocket" not in message
 
@@ -610,7 +610,7 @@ def test_attach_with_forwarder_falls_back_when_tmux_socket_is_not_local(
         """
         attach_url = kwargs["attach_url"]
         assert isinstance(attach_url, str)
-        assert kwargs["session_name"] == "Codex"
+        assert kwargs["session_name"] == "MultiDex"
         active_session_id_reader = kwargs["active_session_id_reader"]
         assert callable(active_session_id_reader)
         assert active_session_id_reader() == "conv_rotated"

@@ -397,7 +397,7 @@ def test_run_omnigent_coding_supervisor_spawns_codex_worker_to_list_files(
     # message points at the exact bug we care about rather than
     # the generic "expected filenames not found".
     combined = result.stdout + result.stderr
-    assert "Codex App Server error" not in combined, (
+    assert "MultiDex App Server error" not in combined, (
         f"Codex App Server error surfaced — profile propagation "
         f"regressed. Check _propagate_profile_to_environment in "
         f"omnigent/cli.py. "

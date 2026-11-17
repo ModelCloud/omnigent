@@ -143,7 +143,7 @@ def test_goal_to_api_rejects_malformed_fields(
 def test_goal_result_requires_result_object() -> None:
     assert CodexGoalRunner._goal_result({"result": {"goal": {}}}, action="read") == {"goal": {}}
 
-    with pytest.raises(ValueError, match="Codex goal read returned no result object"):
+    with pytest.raises(ValueError, match="MultiDex goal read returned no result object"):
         CodexGoalRunner._goal_result({}, action="read")
 
 
@@ -162,7 +162,7 @@ async def test_request_returns_bridge_error_without_loaded_bridge() -> None:
     assert result.status_code == 502
     assert _json_response(result) == {
         "error": "codex_native_goal_failed",
-        "detail": "Codex-native goal read requires a loaded Codex bridge.",
+        "detail": "MultiDex-native goal read requires a loaded MultiDex bridge.",
     }
 
 
@@ -214,7 +214,9 @@ async def test_request_maps_malformed_upstream_result_to_503(
     assert result.status_code == 503
     assert _json_response(result) == {
         "error": "codex_native_goal_failed",
-        "detail": "Codex-native goal read returned Codex goal read returned no result object.",
+        "detail": (
+            "MultiDex-native goal read returned MultiDex goal read returned no result object."
+        ),
     }
     assert fake_client.closed is True
 
@@ -317,7 +319,7 @@ async def test_get_rejects_invalid_goal_object() -> None:
     assert response.status_code == 503
     assert _json_response(response) == {
         "error": "codex_native_goal_failed",
-        "detail": "Codex-native goal read returned invalid goal object.",
+        "detail": "MultiDex-native goal read returned invalid goal object.",
     }
 
 
@@ -391,7 +393,7 @@ async def test_clear_rejects_non_boolean_cleared_flag() -> None:
     assert response.status_code == 503
     assert _json_response(response) == {
         "error": "codex_native_goal_failed",
-        "detail": "Codex-native goal clear returned invalid cleared flag.",
+        "detail": "MultiDex-native goal clear returned invalid cleared flag.",
     }
 
 
@@ -434,7 +436,7 @@ async def test_handle_event_rejects_non_codex_session() -> None:
     assert response.status_code == 400
     assert _json_response(response) == {
         "error": "invalid_input",
-        "detail": "Codex goal controls require a codex-native session",
+        "detail": "MultiDex goal controls require a codex-native session",
     }
 
 

@@ -60,7 +60,7 @@ class FeatureDefinition:
 FEATURE_DEFINITIONS: tuple[FeatureDefinition, ...] = (
     FeatureDefinition(
         feature=Feature.CODEX_PLAN_AT_LAUNCH,
-        description="Start Codex in Plan mode with host compatibility checks",
+        description="Start MultiDex in Plan mode with host compatibility checks",
         owner="server",
         review_by_release="0.22.0",
         default_enabled=True,
@@ -146,7 +146,7 @@ FEATURE_DEFINITIONS: tuple[FeatureDefinition, ...] = (
     FeatureDefinition(
         feature=Feature.MCP_DISABLED_SERVERS_CODEX,
         frontend_visible=False,
-        description="Codex MCP enablement at launch",
+        description="MultiDex MCP enablement at launch",
         owner="server",
         review_by_release="0.24.0",
     ),

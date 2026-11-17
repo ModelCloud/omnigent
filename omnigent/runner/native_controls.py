@@ -588,7 +588,7 @@ def build_native_controls(
                 status_code=504,
                 content={
                     "error": "codex_native_settings_update_timeout",
-                    "detail": "Codex was still starting; the next turn applies the settings.",
+                    "detail": "MultiDex was still starting; the next turn applies the settings.",
                 },
             ), settings
         if state is None:
@@ -599,7 +599,7 @@ def build_native_controls(
                 status_code=503,
                 content={
                     "error": "codex_native_settings_update_failed",
-                    "detail": "Codex-native settings update requires a loaded Codex bridge.",
+                    "detail": "MultiDex-native settings update requires a loaded MultiDex bridge.",
                 },
             ), settings
 
@@ -628,7 +628,7 @@ def build_native_controls(
                 status_code=400,
                 content={
                     "error": "invalid_input",
-                    "detail": "Codex effort reset requires a current model",
+                    "detail": "MultiDex effort reset requires a current model",
                 },
             ), settings
         if isinstance(settings.get("effort"), str) and not isinstance(model, str):
@@ -731,7 +731,7 @@ def build_native_controls(
                     status_code=504,
                     content={
                         "error": "codex_native_settings_update_timeout",
-                        "detail": "Codex did not confirm the settings update in time.",
+                        "detail": "MultiDex did not confirm the settings update in time.",
                     },
                 ), settings
         except Exception as exc:
@@ -849,7 +849,9 @@ def build_native_controls(
                 status_code=503,
                 content={
                     "error": "codex_native_settings_update_failed",
-                    "detail": "Codex-native plan-mode update requires a loaded Codex bridge.",
+                    "detail": (
+                        "MultiDex-native plan-mode update requires a loaded MultiDex bridge."
+                    ),
                 },
             )
         model, effort = await _codex_native_model_and_effort_for_settings_update(conv_id)
@@ -863,7 +865,7 @@ def build_native_controls(
                 status_code=503,
                 content={
                     "error": "codex_native_settings_update_failed",
-                    "detail": "Codex-native plan-mode update requires a current model.",
+                    "detail": "MultiDex-native plan-mode update requires a current model.",
                 },
             )
         # A non-null developer_instructions here replaces the mode's built-in
@@ -910,7 +912,7 @@ def build_native_controls(
                 status_code=503,
                 content={
                     "error": "codex_native_approval_mode_failed",
-                    "detail": "Codex terminal is not running; reconnect first.",
+                    "detail": "MultiDex terminal is not running; reconnect first.",
                 },
             )
         state = await _codex_native_bridge_state_for_session(
@@ -924,7 +926,7 @@ def build_native_controls(
                 content={
                     "error": "codex_native_approval_mode_busy",
                     "detail": (
-                        "Codex is working on a turn. Change the approval mode after "
+                        "MultiDex is working on a turn. Change the approval mode after "
                         "it finishes, or stop the turn first."
                     ),
                 },
@@ -962,14 +964,15 @@ def build_native_controls(
             # so point the user at the reachable path instead of a phantom switch.
             if preset.value == "read-only":
                 detail = (
-                    "Codex's /permissions popup doesn't offer Read Only on this "
-                    "platform — Codex lists it only on Windows or when a permission "
+                    "MultiDex's /permissions popup doesn't offer Read Only on this "
+                    "platform — MultiDex lists it only on Windows or when a permission "
                     "profile is active. To run read-only, start a new session in "
                     "read-only mode."
                 )
             else:
                 detail = (
-                    f"Codex's /permissions popup on this session doesn't offer {preset.label!r}."
+                    "MultiDex's /permissions popup on this session "
+                    f"doesn't offer {preset.label!r}."
                 )
             return JSONResponse(
                 status_code=503,
@@ -984,7 +987,7 @@ def build_native_controls(
                 content={
                     "error": "codex_native_approval_mode_failed",
                     "detail": (
-                        f"Codex didn't confirm the switch to {preset.label!r} within "
+                        f"MultiDex didn't confirm the switch to {preset.label!r} within "
                         f"{_CODEX_PERMISSION_CONFIRM_BUDGET_S:g}s; please try again."
                     ),
                 },
@@ -1011,7 +1014,9 @@ def build_native_controls(
             missing_state_log_level=logging.DEBUG,
         )
         if state is None:
-            raise _CodexNativeModelOptionsNotReady("Codex-native model options are not ready yet.")
+            raise _CodexNativeModelOptionsNotReady(
+                "MultiDex-native model options are not ready yet."
+            )
 
         # Idle reaping closes the native pane and its app-server, but the bridge
         # file can still name the old listener. Recreate the pane before using
@@ -1021,7 +1026,7 @@ def build_native_controls(
             state = await _ready_codex_bridge_for_settings(conv_id)
             if state is None:
                 raise _CodexNativeModelOptionsNotReady(
-                    "Codex-native model options are not ready yet."
+                    "MultiDex-native model options are not ready yet."
                 )
             bridge_dir = bridge_dir_for_codex_home(Path(state.codex_home))
 
@@ -1045,7 +1050,7 @@ def build_native_controls(
                         raise
                     if await _ready_codex_bridge_for_settings(conv_id) is None:
                         raise _CodexNativeModelOptionsNotReady(
-                            "Codex-native model options are not ready yet."
+                            "MultiDex-native model options are not ready yet."
                         ) from None
                     return await _codex_native_model_options(conv_id, retry_unreachable=False)
             rows = await list_codex_model_options(codex_client)
@@ -2003,7 +2008,7 @@ def build_native_controls(
                 status_code=503,
                 content={
                     "error": "codex_native_compact_failed",
-                    "detail": "Codex terminal is not running; reconnect first.",
+                    "detail": "MultiDex terminal is not running; reconnect first.",
                 },
             )
 
@@ -2013,7 +2018,7 @@ def build_native_controls(
                 status_code=503,
                 content={
                     "error": "codex_native_compact_failed",
-                    "detail": "Codex-native compaction requires a loaded Codex bridge.",
+                    "detail": "MultiDex-native compaction requires a loaded MultiDex bridge.",
                 },
             )
 
@@ -2069,7 +2074,7 @@ def build_native_controls(
                 status_code=503,
                 content={
                     "error": f"codex_native_{action}_failed",
-                    "detail": "Codex terminal is not running; reconnect first.",
+                    "detail": "MultiDex terminal is not running; reconnect first.",
                 },
             )
 

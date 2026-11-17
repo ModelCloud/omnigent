@@ -420,7 +420,7 @@ def test_row2_codex_databricks_picker_is_populated_and_decorated(
     shaped_host("codex-databricks")
     with browser_ui(rig.base_url) as ui:
         ui.open_landing()
-        ui.pick_agent("Codex")
+        ui.pick_agent("MultiDex")
         ui.open_landing_config()
         label = ui.wait_landing_model_label(r"Default \(.+\)|Models unavailable")
         options = ui.open_model_dropdown("new-chat-landing-config-model")
@@ -474,7 +474,7 @@ def test_row11_gear_rows_equal_new_chat_rows(
     }
     with browser_ui(rig.base_url) as ui:
         ui.open_landing()
-        session_id, pane = _create_session(ui, "Codex")
+        session_id, pane = _create_session(ui, "MultiDex")
         pane.wait_for_text(r"›")
         ui.wait_composer_label(r"\S", timeout_s=90)
         ui.open_gear()
@@ -493,7 +493,7 @@ def test_row7_codex_chip_matches_config_copy_and_pane(
     shaped_host("codex-databricks")
     with browser_ui(rig.base_url) as ui:
         ui.open_landing()
-        session_id, pane = _create_session(ui, "Codex")
+        session_id, pane = _create_session(ui, "MultiDex")
         pane_text = pane.wait_for_text(r"›")
         chip = ui.wait_composer_label(r"\S", timeout_s=90)
 
@@ -524,7 +524,7 @@ def test_row3_codex_subscription_rows_come_from_the_account(
     shaped_host("codex-subscription")
     with browser_ui(rig.base_url) as ui:
         ui.open_landing()
-        ui.pick_agent("Codex")
+        ui.pick_agent("MultiDex")
         ui.open_landing_config()
         label = ui.landing_model_label()
         options = ui.open_model_dropdown("new-chat-landing-config-model")
@@ -548,7 +548,7 @@ def test_row9_codex_subscription_default_first_turn_succeeds(
     shaped_host("codex-subscription")
     with browser_ui(rig.base_url) as ui:
         ui.open_landing()
-        session_id, pane = _create_session(ui, "Codex")
+        session_id, pane = _create_session(ui, "MultiDex")
 
         def _turn_settled() -> str | None:
             text = pane.capture()

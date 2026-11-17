@@ -896,8 +896,8 @@ function harnessWarningMessage(
   if (reason === "needs-auth" && isCodex) {
     return (
       <>
-        {agentName} needs Codex authentication on {hostName} — run <code>codex login</code> on that
-        machine.
+        {agentName} needs MultiDex authentication on {hostName} — run <code>codex login</code> on
+        that machine.
       </>
     );
   }
@@ -7393,7 +7393,7 @@ function NewChatLandingContent({
                         planUnavailableReason={
                           selectedNativeHarness === "codex-native"
                             ? !codexPlanLaunchEnabled
-                              ? "This server does not support starting Codex in Plan mode"
+                              ? "This server does not support starting MultiDex in Plan mode"
                               : effectiveAgentId === PENDING_AGENT_ID
                                 ? "Turn Plan mode on after this custom agent's session starts"
                                 : undefined

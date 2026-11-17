@@ -1172,10 +1172,10 @@ def _routing_request(host: Host | None) -> Any:  # type: ignore[explicit-any]
 @pytest.mark.parametrize(
     ("gateway", "named"),
     [
-        ({"claude-native": True, "codex-native": False}, "Codex"),
+        ({"claude-native": True, "codex-native": False}, "MultiDex"),
         ({"claude-native": False, "codex-native": True}, "Claude"),
         # No Unity Gateway anywhere: both arms are named.
-        ({"claude-native": False, "codex-native": False}, "Claude and Codex"),
+        ({"claude-native": False, "codex-native": False}, "Claude and MultiDex"),
     ],
 )
 async def test_auto_routing_is_refused_when_no_router_can_serve_an_off_gateway_arm(

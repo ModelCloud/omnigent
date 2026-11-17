@@ -144,14 +144,8 @@ _DELTA_POST_TIMEOUT_SECONDS = 5.0
 # Preserve healthy queued deltas briefly at ordering boundaries. If they do not
 # drain, shed the remaining previews and wait only for the current bounded POST.
 _DELTA_FLUSH_GRACE_SECONDS = 1.0
-# Provider round-trip probe: a health-checked ``GET {base_url}/models`` every
-# 30s whose measured RTT is subtracted from delta spans so turn rates exclude
-# network transfer.
+# Keep the in-session provider health cache fresh.
 _PROVIDER_RTT_PROBE_INTERVAL_SECONDS = 30.0
-# The probed network offset can never honestly own more than this share of an
-# observed delta window: capping it bounds the inflation an over-subtracted
-# span could produce to 1/(1-fraction).
-_RTT_SPAN_FRACTION_MAX = 0.5
 # Bound the post-shedding wait below the runner's 10s cancellation budget and
 # above the delta POST deadline.
 _DELTA_MARKER_TIMEOUT_SECONDS = 6.0
@@ -239,8 +233,8 @@ _THREAD_GOAL_READ_TIMEOUT_SECONDS = 5.0
 _EXTERNAL_BACKGROUND_WORK_TYPE = "external_background_work"
 # Goal states that stop the goal, mapped to the failure the sidebar shows.
 _GOAL_STOPPED_FAILURE_OUTPUT = {
-    "usageLimited": "Codex stopped the goal: usage limit reached.",
-    "budgetLimited": "Codex stopped the goal: token budget reached.",
+    "usageLimited": "MultiDex stopped the goal: usage limit reached.",
+    "budgetLimited": "MultiDex stopped the goal: token budget reached.",
 }
 _CODEX_BACKGROUND_TERMINALS_LIST_METHOD = "thread/backgroundTerminals/list"
 # A running background terminal is listed again at this interval until none is left.
@@ -248,7 +242,7 @@ _BACKGROUND_TERMINAL_POLL_SECONDS = 3.0
 # A settled turn's terminal event waits on one listing, so the wait is bounded.
 _BACKGROUND_TERMINAL_LIST_TIMEOUT_SECONDS = 5.0
 _SYSTEM_ERROR_FAILURE_OUTPUT = (
-    "Codex reported a system error on this thread. Open the terminal for details."
+    "MultiDex reported a system error on this thread. Open the terminal for details."
 )
 # Codex bounds each MCP server's spawn+handshake by its per-server
 # ``startup_timeout_sec`` (codex default 10s); the round cannot outlive
@@ -799,8 +793,8 @@ class _CodexForwarderState:
     # chunks (for example, ``TThe usehe``).  Preserve summary-only providers,
     # but ignore a summary when its raw counterpart has already arrived.
     raw_reasoning_item_ids: set[str] = field(default_factory=set)
-    # Bounds for ONE completion, consumed by its tokenUsage.last receipt.
-    # Arrival timing is only an estimate: upstream buffering is unknown.
+    # Include the wait before buffered output arrives, not just its drain time.
+    completion_rate_started_at: float | None = None
     turn_reasoning_first_at: float | None = None
     turn_reasoning_last_at: float | None = None
     turn_output_first_at: float | None = None
@@ -812,9 +806,6 @@ class _CodexForwarderState:
     # still counts the unobserved head — partial windows can't yield a rate.
     turns_started_observed: set[str] = field(default_factory=set)
     completion_rate_window_from_start: bool = False
-    # Shared health-probe RTT adjusts the estimate, not exact server timing.
-    provider_rtt_seconds: float | None = None
-    provider_rtt_avg_seconds: float | None = None
     turn_diff_by_turn: dict[str, str] = field(default_factory=dict)
     # Whether model output has already settled the synthesized MCP startup
     # round. The round is seeded once per forwarder connection (never on
@@ -1575,7 +1566,7 @@ def _error_payload_message(payload: _JsonObject) -> str:
         value = payload.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
-    return "Codex turn ended with an unspecified error."
+    return "MultiDex turn ended with an unspecified error."
 
 
 def _codex_terminal_launch_args_from_settings(payload: _JsonObject) -> list[str] | None:
@@ -2756,7 +2747,7 @@ async def supervise_forwarder(
             name="codex-native-forwarder-side-chat",
         )
         rtt_probe_task = asyncio.create_task(
-            _provider_rtt_probe_loop(bridge_dir, forwarder_state),
+            _provider_rtt_probe_loop(bridge_dir),
             name="codex-native-forwarder-rtt-probe",
         )
         await _sleep(0)
@@ -2879,30 +2870,15 @@ async def supervise_forwarder(
                 raise cleanup_errors[0]
 
 
-async def _provider_rtt_probe_loop(
-    bridge_dir: Path, forwarder_state: _CodexForwarderState
-) -> None:
-    """Measure the provider's HTTP round-trip latency every 30s.
-
-    Times an authenticated ``GET {base_url}/models`` via the same probe
-    machinery that drives the picker's health dots and keeps the latest +
-    rolling-average RTT on ``forwarder_state`` so
-    :func:`_completion_token_rate_fields` can adjust estimates using the probe RTT
-    from each delta span. The endpoint re-resolves from config.toml every
-    pass so an in-TUI ``/model`` provider switch applies on the next probe.
-    A failed probe keeps the last measurement rather than zeroing it — a
-    stale-but-real RTT is closer than none. Runs until cancelled.
-    """
+async def _provider_rtt_probe_loop(bridge_dir: Path) -> None:
+    """Refresh provider health every 30s, re-resolving in-terminal model switches."""
     while True:
         endpoint = read_codex_config_provider_endpoint(bridge_dir)
         if endpoint is not None:
             provider, base_url, token = endpoint
             # Records into provider_health's shared cache, so the in-session
             # picker's online dots ride these probes instead of pinging again.
-            _online, rtt, average = await probe_provider_rtt(provider, base_url, token)
-            if rtt is not None:
-                forwarder_state.provider_rtt_seconds = rtt
-                forwarder_state.provider_rtt_avg_seconds = average
+            await probe_provider_rtt(provider, base_url, token)
         await _sleep(_PROVIDER_RTT_PROBE_INTERVAL_SECONDS)
 
 
@@ -3151,7 +3127,7 @@ async def _create_thread_replacement_session(
     created = create_resp.json()
     new_session_id = created.get("id")
     if not isinstance(new_session_id, str) or not new_session_id:
-        raise RuntimeError("Codex thread replacement response did not include id")
+        raise RuntimeError("MultiDex thread replacement response did not include id")
 
     if isinstance(runner_id, str) and runner_id:
         bind_resp = await client.patch(
@@ -3223,7 +3199,7 @@ async def _fetch_session_snapshot(client: httpx.AsyncClient, session_id: str) ->
     resp.raise_for_status()
     payload = resp.json()
     if not isinstance(payload, dict):
-        raise RuntimeError("Codex session snapshot response was not an object")
+        raise RuntimeError("MultiDex session snapshot response was not an object")
     return payload
 
 
@@ -4492,7 +4468,7 @@ async def _read_thread_goal(
             forwarder_state.goal_unknown = True
             return
         log_info_once(
-            _logger, "Codex app-server has no thread goals; treating the thread as goal-free"
+            _logger, "MultiDex app-server has no thread goals; treating the thread as goal-free"
         )
     except Exception:  # the goal status is kept when the read fails.
         _logger.warning("Codex thread goal read failed", exc_info=True)
@@ -4628,7 +4604,7 @@ async def _refresh_background_terminals(
                 forwarder_state.background_terminals = None
                 log_info_once(
                     _logger,
-                    "Codex app-server cannot list background terminals; "
+                    "MultiDex app-server cannot list background terminals; "
                     "they do not keep sessions working",
                 )
             else:
@@ -5087,16 +5063,20 @@ async def _maybe_handle_turn_event(
             await forwarder_state.forget_posted_terminals()
         return True
     if method == "turn/started":
+        if forwarder_state is not None:
+            turn = params.get("turn")
+            started_turn_id = _turn_id_from_payload(turn) or _turn_id_from_payload(params)
+            if started_turn_id is not None:
+                forwarder_state.turns_started_observed.add(started_turn_id)
+            if (
+                forwarder_state.completion_rate_turn_id != started_turn_id
+                or forwarder_state.completion_rate_started_at is None
+            ):
+                _reset_completion_rate_window(forwarder_state, started_turn_id)
         async with _conversation_item_delivery_scope(session_id):
             if delta_coalescer is not None:
                 await delta_coalescer.flush()
             await _handle_turn_started(client, session_id, bridge_dir, params)
-            if forwarder_state is not None:
-                turn = params.get("turn")
-                started_turn_id = _turn_id_from_payload(turn) or _turn_id_from_payload(params)
-                if started_turn_id is not None:
-                    forwarder_state.turns_started_observed.add(started_turn_id)
-                _reset_completion_rate_window(forwarder_state, started_turn_id)
             if forwarder_state is not None and bridge_dir is not None:
                 # A new turn opens a fresh reasoning block: the next reasoning
                 # delta must emit ``response.reasoning.started`` again.
@@ -5234,7 +5214,7 @@ async def _maybe_handle_delta_event(
     """
     if method == "item/agentMessage/delta":
         if delta_coalescer is None:
-            raise RuntimeError("Codex assistant delta handling requires a text-delta coalescer")
+            raise RuntimeError("MultiDex assistant delta handling requires a text-delta coalescer")
         _note_completion_rate_delta(params, forwarder_state, reasoning=False)
         await _handle_agent_message_delta(
             client,
@@ -5247,7 +5227,7 @@ async def _maybe_handle_delta_event(
         return True
     if method == "item/plan/delta":
         if delta_coalescer is None:
-            raise RuntimeError("Codex plan delta handling requires a text-delta coalescer")
+            raise RuntimeError("MultiDex plan delta handling requires a text-delta coalescer")
         await _handle_plan_delta(
             client,
             session_id,
@@ -5260,7 +5240,7 @@ async def _maybe_handle_delta_event(
     if method == "item/commandExecution/outputDelta":
         if delta_coalescer is None:
             raise RuntimeError(
-                "Codex command-output delta handling requires a text-delta coalescer"
+                "MultiDex command-output delta handling requires a text-delta coalescer"
             )
         call_id = _item_id_from_delta_params(params)
         delta = params.get("delta")
@@ -5282,7 +5262,7 @@ async def _maybe_handle_delta_event(
         return True
     if method in {"item/reasoning/textDelta", "item/reasoning/summaryTextDelta"}:
         if delta_coalescer is None:
-            raise RuntimeError("Codex reasoning delta handling requires a text-delta coalescer")
+            raise RuntimeError("MultiDex reasoning delta handling requires a text-delta coalescer")
         if method == "item/reasoning/textDelta":
             _note_completion_rate_delta(params, forwarder_state, reasoning=True)
         await _handle_reasoning_delta(
@@ -5318,6 +5298,18 @@ async def _handle_completed_event(
     :param file_observer_bridge_dir: Runner relay directory shared by native children.
     :returns: None.
     """
+    if forwarder_state is not None:
+        item = params.get("item")
+        if (
+            isinstance(item, dict)
+            and item.get("type")
+            in _TOOL_ITEM_TYPES | {"mcpToolCall", "dynamicToolCall", _CODEX_COLLAB_AGENT_ITEM_TYPE}
+            and _turn_id_from_payload(params) == forwarder_state.completion_rate_turn_id
+            and forwarder_state.completion_rate_window_from_start
+            and forwarder_state.turn_reasoning_first_at is None
+            and forwarder_state.turn_output_first_at is None
+        ):
+            forwarder_state.completion_rate_started_at = time.monotonic()
     if delta_coalescer is not None:
         await delta_coalescer.flush()
     if forwarder_state is not None:
@@ -8358,9 +8350,9 @@ def _codex_tool_call_from_item(item: _JsonObject) -> _CodexToolCall | None:
 # Access" preset's ``danger-full-access`` (or a config ``sandbox_mode``) does.
 _CODEX_SANDBOX_NAMESPACE_ERROR_MARKER = "No permissions to create new namespace"
 _CODEX_SANDBOX_BYPASS_GUIDANCE = (
-    "Omnigent: Codex's command sandbox could not start because this container "
+    "Omnigent: MultiDex's command sandbox could not start because this container "
     "disallows unprivileged user namespaces, so the command did not run. To run "
-    'shell commands here, start a new Codex session with the "Full Access" '
+    'shell commands here, start a new MultiDex session with the "Full Access" '
     "approval preset (New chat → permissions dropdown), or set "
     'sandbox_mode = "danger-full-access" in ~/.codex/config.toml on the runner.'
 )
@@ -9067,7 +9059,7 @@ async def _persist_codex_compaction_item(
             )
 
     data: dict[str, object] = {
-        "summary": "[Codex compaction — context was compacted in the terminal]",
+        "summary": "[MultiDex compaction — context was compacted in the terminal]",
         "last_item_id": last_item_id,
         "model": "unknown",
         "token_count": 0,
@@ -9434,7 +9426,7 @@ def _reset_completion_rate_window(
     state: _CodexForwarderState,
     turn_id: str | None,
 ) -> None:
-    """Discard delta bounds at a completion or turn boundary."""
+    """Open an observed completion window at a turn or usage boundary."""
     state.completion_rate_turn_id = turn_id
     state.turn_reasoning_first_at = None
     state.turn_reasoning_last_at = None
@@ -9442,6 +9434,9 @@ def _reset_completion_rate_window(
     state.turn_output_last_at = None
     state.completion_rate_window_from_start = (
         turn_id is not None and turn_id in state.turns_started_observed
+    )
+    state.completion_rate_started_at = (
+        time.monotonic() if state.completion_rate_window_from_start else None
     )
 
 
@@ -9474,7 +9469,7 @@ def _completion_token_rate_fields(
     forwarder_state: _CodexForwarderState | None,
 ) -> _JsonObject:
     """
-    Consume one completion's usage and delta bounds as an estimated rate.
+    Consume one completion's usage as observed end-to-end throughput.
 
     :param params: Codex ``thread/tokenUsage/updated`` params.
     :param forwarder_state: Forwarder state carrying delta timestamps.
@@ -9508,48 +9503,32 @@ def _completion_token_rate_fields(
         # was missed: tokenUsage.last covers deltas this connection never saw,
         # so any rate computed here is inflated past meaning — emit nothing.
         return {"completion_tps": {}}
+    started_at = forwarder_state.completion_rate_started_at
+    span = time.monotonic() - started_at if started_at is not None else 0.0
     fields: dict[str, float] = {}
-    # The rolling average damps single-probe spikes; the subtraction itself can
-    # never own more than half the observed window (a transit offset shifts
-    # every delta together, so it must not dominate a first->last span).
-    rtt = forwarder_state.provider_rtt_avg_seconds or forwarder_state.provider_rtt_seconds
-    overhead = rtt if isinstance(rtt, (int, float)) and rtt > 0 else 0.0
-
-    def _adjusted_span(first: float | None, last_at: float | None) -> float | None:
-        if first is None or last_at is None:
-            return None
-        raw_span = last_at - first
-        return raw_span - min(overhead, raw_span * _RTT_SPAN_FRACTION_MAX)
-
+    # Chunks can arrive together after seconds of remote generation. A models
+    # probe cannot recover that generation time or justify subtracting latency.
     reasoning_tokens = last.get("reasoningOutputTokens")
-    reasoning_span = _adjusted_span(
-        forwarder_state.turn_reasoning_first_at,
-        forwarder_state.turn_reasoning_last_at,
-    )
     if (
         type(reasoning_tokens) is int
         and reasoning_tokens > 0
-        and reasoning_span is not None
-        and reasoning_span > 0
+        and forwarder_state.turn_reasoning_first_at is not None
+        and span > 0
     ):
-        fields["reasoning"] = round(reasoning_tokens / reasoning_span, 1)
+        fields["reasoning"] = round(reasoning_tokens / span, 1)
     output_tokens = last.get("outputTokens")
     visible_output = (
         output_tokens - reasoning_tokens
         if type(output_tokens) is int and type(reasoning_tokens) is int
         else None
     )
-    output_span = _adjusted_span(
-        forwarder_state.turn_output_first_at,
-        forwarder_state.turn_output_last_at,
-    )
     if (
         type(visible_output) is int
         and visible_output > 0
-        and output_span is not None
-        and output_span > 0
+        and forwarder_state.turn_output_first_at is not None
+        and span > 0
     ):
-        fields["output"] = round(visible_output / output_span, 1)
+        fields["output"] = round(visible_output / span, 1)
     _reset_completion_rate_window(forwarder_state, turn_id)
     return {"completion_tps": fields}
 
@@ -10352,7 +10331,7 @@ async def wait_for_thread_started(
             thread_id = _thread_id_from_started_event(event)
             if thread_id is not None:
                 return thread_id
-    raise RuntimeError("Codex app-server event stream ended before thread startup.")
+    raise RuntimeError("MultiDex app-server event stream ended before thread startup.")
 
 
 def _thread_id_from_params(params: _JsonObject) -> str | None:

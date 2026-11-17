@@ -258,7 +258,7 @@ export function BlockRenderer({
         key="completion-tps"
         data-testid="completion-tps"
         className="text-ui text-muted-foreground"
-        title="API token counts divided by this completion's observed stream span, adjusted by the health-check RTT. Buffering can inflate this estimate; this is not a per-block or exact server generation rate."
+        title="Average tokens per second over the latest completion, including waiting and network time. This is not a per-block or exact server generation rate."
       >
         Latest completion estimate: {rateLabels.join(" · ")}
       </div>

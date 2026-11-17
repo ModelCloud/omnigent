@@ -85,7 +85,7 @@ def test_codex_spawn_activity_appears_in_agents_rail(
     rail.get_by_role("tab", name=re.compile("^Agents")).click()
     child_row = rail.locator('[data-testid="subagent-row"]')
     expect(child_row).to_have_count(1, timeout=30_000)
-    expect(child_row).to_contain_text("Codex")
+    expect(child_row).to_contain_text("MultiDex")
     expect(child_row.get_by_test_id("subagent-status-avatar")).to_have_attribute(
         "aria-label", "Done"
     )

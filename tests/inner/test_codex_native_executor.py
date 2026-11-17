@@ -1315,13 +1315,13 @@ def test_similar_draining_errors_are_not_retried(
     [
         pytest.param(
             {"input_error_code": "input_too_large", "max_chars": 1048576, "actual_chars": 1271319},
-            "This message is too long for Codex (1,271,319 characters; the limit is "
+            "This message is too long for MultiDex (1,271,319 characters; the limit is "
             "1,048,576), so it was not delivered.",
             id="with-sizes",
         ),
         pytest.param(
             {"input_error_code": "input_too_large"},
-            "This message is too long for Codex, so it was not delivered.",
+            "This message is too long for MultiDex, so it was not delivered.",
             id="without-sizes",
         ),
     ],
@@ -2351,7 +2351,7 @@ def test_overlong_goal_command_fails_clearly_without_reaching_app_server(
     # app-server would have produced.
     assert "4000" in message
     assert "-32600" not in message
-    assert "Codex native executor error" not in message
+    assert "MultiDex native executor error" not in message
     # The doomed objective never reaches the app-server.
     assert _FakeCodexNativeClient.requests == []
 
@@ -3948,7 +3948,7 @@ def test_run_turn_surfaces_recorded_startup_error(
     monkeypatch.setattr(asyncio, "sleep", _no_sleep)
     write_bridge_startup_error(
         tmp_path,
-        "Codex app-server never started a thread within the startup timeout.",
+        "MultiDex app-server never started a thread within the startup timeout.",
     )
     write_bridge_startup_timeout(tmp_path, 120.0)
     executor = CodexNativeExecutor(bridge_dir=tmp_path)
@@ -3960,7 +3960,7 @@ def test_run_turn_surfaces_recorded_startup_error(
     assert isinstance(error, ExecutorError)
     assert "never started" in error.message
     assert "startup timeout" in error.message
-    assert error.message != "Codex native bridge state is missing"
+    assert error.message != "MultiDex native bridge state is missing"
     assert sleep_calls == 0
 
 
@@ -3981,9 +3981,9 @@ def test_run_turn_surfaces_coded_startup_failure(
     monkeypatch.setattr(asyncio, "sleep", _no_sleep)
     write_bridge_startup_error(
         tmp_path,
-        "Codex is waiting for a sign-in in this session's terminal.",
+        "MultiDex is waiting for a sign-in in this session's terminal.",
         code="databricks_sign_in_pending",
-        title="Codex can't start until you sign in to Databricks",
+        title="MultiDex can't start until you sign in to Databricks",
         remediation="Open https://signin.example.com/device and enter code HQ7M-2KPD.",
     )
     executor = CodexNativeExecutor(bridge_dir=tmp_path)
@@ -3994,9 +3994,9 @@ def test_run_turn_surfaces_coded_startup_failure(
     assert len(events) == 1
     error = events[0]
     assert isinstance(error, ExecutorError)
-    assert error.message == "Codex is waiting for a sign-in in this session's terminal."
+    assert error.message == "MultiDex is waiting for a sign-in in this session's terminal."
     assert error.code == "databricks_sign_in_pending"
-    assert error.title == "Codex can't start until you sign in to Databricks"
+    assert error.title == "MultiDex can't start until you sign in to Databricks"
     assert error.remediation is not None
     assert "HQ7M-2KPD" in error.remediation
     # The message never reached Codex: the sender's queued copy is the record.
@@ -4042,7 +4042,7 @@ class _UnreachableClient(_FakeCodexNativeClient):
     [
         ConnectionRefusedError(111, "Connect call failed ('127.0.0.1', 9876)"),
         FileNotFoundError(2, "No such file or directory"),
-        ConnectionError("Codex app-server disconnected before responding to initialize"),
+        ConnectionError("MultiDex app-server disconnected before responding to initialize"),
         InvalidMessage("did not receive a valid HTTP response"),
         ConnectionClosedError(None, None),
     ],
@@ -4428,7 +4428,7 @@ def test_run_turn_polls_startup_error_at_fast_startup_interval(
     assert sleep_delays == [0.05]
     assert len(events) == 1
     assert isinstance(events[0], ExecutorError)
-    assert events[0].message == "Codex native thread never started: app-server exited"
+    assert events[0].message == "MultiDex native thread never started: app-server exited"
 
 
 def test_bridge_state_polling_backs_off_after_fast_window(
@@ -4506,7 +4506,7 @@ def test_run_turn_without_marker_keeps_bounded_legacy_wait(
     assert set(sleep_delays) == {0.05, 0.25}
     assert len(events) == 1
     assert isinstance(events[0], ExecutorError)
-    assert events[0].message == "Codex native bridge state is missing"
+    assert events[0].message == "MultiDex native bridge state is missing"
     assert events[0].undelivered is True
     [record] = [
         r
@@ -4641,7 +4641,7 @@ def test_run_turn_rechecks_marker_before_reporting_the_generic_miss(
     assert len(events) == 1
     error = events[0]
     assert isinstance(error, ExecutorError)
-    assert error.message == "Codex native bridge state is missing"
+    assert error.message == "MultiDex native bridge state is missing"
 
 
 @pytest.mark.asyncio

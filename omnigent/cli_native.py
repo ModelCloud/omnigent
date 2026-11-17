@@ -326,7 +326,7 @@ def register_native_commands(cli: click.Group) -> None:
         default=None,
         help=(
             "Remote omnigent URL. Ensures the host daemon, asks the "
-            "daemon-spawned runner to launch Codex, and attaches this TTY. "
+            "daemon-spawned runner to launch MultiDex, and attaches this TTY. "
             'Pass --server "" to auto-spawn a persistent local server in the '
             "background and use that instead of a remote one."
         ),
@@ -352,12 +352,12 @@ def register_native_commands(cli: click.Group) -> None:
         hidden=True,
         help="Deprecated alias for ``--resume <id>``; kept for one release.",
     )
-    @click.option("--model", default=None, help="Codex model to use for the native thread.")
+    @click.option("--model", default=None, help="MultiDex model to use for the native thread.")
     @click.option(
         "-p",
         "--prompt",
         default=None,
-        help="Send this as the first message after the Codex TUI starts.",
+        help="Send this as the first message after the MultiDex TUI starts.",
     )
     @click.option(
         "--smart-routing",

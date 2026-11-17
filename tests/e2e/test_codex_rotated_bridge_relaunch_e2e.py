@@ -238,7 +238,7 @@ def test_rotated_codex_session_relaunches_into_its_bridge_directory(
         )
         assert launched is not None, "The host must identify the runner this test owns"
         registered = json.loads((state_root / "process-registry.json").read_text())
-        assert registered, "The real Codex app-server must be registered before stopping"
+        assert registered, "The real MultiDex app-server must be registered before stopping"
         owned_pids = {int(launched.group(1)), *(entry["pid"] for entry in registered)}
         owned_pids.add(int(_tmux(terminal, "display-message", "-p", "#{pane_pid}").strip()))
         owned_processes = [psutil.Process(pid) for pid in owned_pids]

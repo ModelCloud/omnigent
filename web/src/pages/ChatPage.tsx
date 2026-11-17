@@ -3554,7 +3554,7 @@ function ComposerImpl(
           arg
         ) {
           const harnessName = {
-            "codex-native": "Codex",
+            "codex-native": "MultiDex",
             "pi-native": "Pi",
             "claude-sdk": "Claude SDK",
           }[sessionHarness];

@@ -123,31 +123,31 @@ _DELIVERY_RPC_TIMEOUT_SECONDS = 30.0
 # confirm whether an input whose RPC reply was lost actually landed.
 _DELIVERY_RECEIPT_TIMEOUT_SECONDS = 2.0
 _CODEX_COMPACTING_FAILURE = CodexStartupFailure(
-    message="Codex is still compacting, so this message was not delivered.",
+    message="MultiDex is still compacting, so this message was not delivered.",
     code="codex_compacting",
-    title="Codex is compacting",
+    title="MultiDex is compacting",
     remediation="Wait for compaction to finish, then send your message again.",
 )
 _CODEX_PROVIDER_CHANGED_FAILURE = CodexStartupFailure(
-    message="Codex rejected this message because the conversation's model provider "
+    message="MultiDex rejected this message because the conversation's model provider "
     "differs from, or is missing in, its current configuration.",
     code="codex_provider_changed",
-    title="Codex provider configuration changed",
+    title="MultiDex provider configuration changed",
     remediation="Select and configure the intended provider, restart the session terminal, "
     "then retry this message.",
 )
 _CODEX_PROJECT_CONFIG_INVALID_FAILURE = CodexStartupFailure(
-    message="Codex could not read this project's hooks configuration, so this message "
+    message="MultiDex could not read this project's hooks configuration, so this message "
     "was not delivered.",
     code="codex_project_config_invalid",
-    title="Codex project configuration needs attention",
+    title="MultiDex project configuration needs attention",
     remediation="Check that the project's .codex path is a directory and its config.toml "
     "is readable, then retry this message.",
 )
 _CODEX_DELIVERY_UNCONFIRMED_FAILURE = CodexStartupFailure(
-    message="Codex did not confirm this message. It may already be running.",
+    message="MultiDex did not confirm this message. It may already be running.",
     code="codex_delivery_unconfirmed",
-    title="Codex delivery is unconfirmed",
+    title="MultiDex delivery is unconfirmed",
     remediation="Check the native terminal for the message before sending it again.",
 )
 _CODEX_SHELL_AUTHORIZATION_REQUIRED = CodexStartupFailure(
@@ -168,7 +168,7 @@ def _input_too_large_failure(actual_chars: int, max_chars: int) -> CodexStartupF
         else ""
     )
     return CodexStartupFailure(
-        message=f"This message is too long for Codex{sizes}, so it was not delivered.",
+        message=f"This message is too long for MultiDex{sizes}, so it was not delivered.",
         code="codex_input_too_large",
         title="Message too long",
         remediation="Shorten the message or attach large content as a file, then send it again.",
@@ -254,7 +254,7 @@ def _require_codex_binding(bridge_dir: Path, expected: CodexNativeBridgeState) -
     if current is None or not _codex_binding_matches(current, expected):
         raise _CodexNativeInputUndelivered(
             CodexStartupFailure(
-                message="Codex native session changed before this message could be delivered.",
+                message="MultiDex native session changed before this message could be delivered.",
                 remediation="Send the message again in the current session.",
             ),
             preserve_session=True,
@@ -525,7 +525,7 @@ async def _native_delivery_request_once(
             # No ack either way: the input may have landed. Ambiguous (not
             # undelivered) keeps the sender from resubmitting blindly.
             raise InjectionDeliveryAmbiguous(
-                f"Codex app-server did not respond to {method} within "
+                f"MultiDex app-server did not respond to {method} within "
                 f"{_DELIVERY_RPC_TIMEOUT_SECONDS:g}s"
             ) from exc
         raise
@@ -584,7 +584,7 @@ async def _start_codex_turn(
         log_once(
             _logger,
             logging.INFO,
-            "Codex effort %s has no known model; skipping capability validation",
+            "MultiDex effort %s has no known model; skipping capability validation",
             effort,
         )
     if settings_overrides:
@@ -675,7 +675,7 @@ _SHELL_TURN_POLL_SECONDS = 0.25
 _SHELL_COMPLETION_WAIT_SECONDS = 60.0
 _SHELL_RECONCILIATION_RPC_SECONDS = 2.0
 _CODEX_SHELL_WAIT_FAILURE = CodexStartupFailure(
-    message="Codex has not confirmed that the shell command finished, "
+    message="MultiDex has not confirmed that the shell command finished, "
     "so this message was not delivered.",
     code="codex_shell_busy",
     title="Waiting for the shell command",
@@ -768,7 +768,7 @@ async def _wait_for_shell_completion(
                 return state
             raise _CodexNativeInputUndelivered(
                 CodexStartupFailure(
-                    message="Codex native session changed while waiting for the shell command; "
+                    message="MultiDex native session changed while waiting for the shell command; "
                     "this message was not delivered.",
                     remediation="Send the message again in the current session.",
                 ),
@@ -848,7 +848,7 @@ async def _wait_for_compaction_turn(
                 outcome = "session_changed"
                 raise _CodexNativeInputUndelivered(
                     CodexStartupFailure(
-                        message="Codex native session changed while waiting for compaction; "
+                        message="MultiDex native session changed while waiting for compaction; "
                         "this message was not delivered.",
                         remediation="Send the message again in the current session.",
                     )
@@ -914,7 +914,7 @@ async def _inject_codex_turn_once(
     clear_active_turn_id_if_matches(bridge_dir, expected_turn_id)
     recovered_state = read_bridge_state(bridge_dir)
     if recovered_state is None or recovered_state.session_id != state.session_id:
-        raise RuntimeError("Codex native bridge changed while recovering a stale turn")
+        raise RuntimeError("MultiDex native bridge changed while recovering a stale turn")
     if recovered_state.active_turn_id is not None:
         _logger.info(
             "Codex native stale steer raced with a newer turn; steering turn_id=%s",
@@ -1316,7 +1316,7 @@ class CodexNativeExecutor(Executor):
             else _content_to_input_items(latest_user_content, self._bridge_dir)
         )
         if not input_items:
-            yield ExecutorError(message="Codex native turn had no user input to send")
+            yield ExecutorError(message="MultiDex native turn had no user input to send")
             return
         # Wait for the bridge to boot OUTSIDE the injection lock. Poll quickly
         # during the expected startup window, then back off. Once state exists,
@@ -1402,9 +1402,9 @@ class CodexNativeExecutor(Executor):
                     error_msg = (
                         startup_failure.message
                         if startup_failure is not None
-                        else f"Codex native thread never started: {startup_error}"
+                        else f"MultiDex native thread never started: {startup_error}"
                         if startup_error
-                        else "Codex native bridge state is missing"
+                        else "MultiDex native bridge state is missing"
                     )
                     _logger.info(
                         "Codex native bridge unavailable before input delivery",
@@ -1424,7 +1424,7 @@ class CodexNativeExecutor(Executor):
                     )
                     undelivered = True
                 elif not _session_is_active(state.session_id, self._request_session_id):
-                    error_msg = "Codex native session is no longer active"
+                    error_msg = "MultiDex native session is no longer active"
                     undelivered = True
                 elif (client := await _connect_to_app_server(state)) is None:
                     # Nothing reached the app-server, so the sender's copy is the only record.
@@ -1527,7 +1527,7 @@ class CodexNativeExecutor(Executor):
                         error_msg = (
                             startup_failure.message
                             if startup_failure is not None
-                            else f"Codex native executor error: {exc}"
+                            else f"MultiDex native executor error: {exc}"
                         )
                         # Name the servers a still-unsettled MCP startup is
                         # blocked on — the most common cause of an injection

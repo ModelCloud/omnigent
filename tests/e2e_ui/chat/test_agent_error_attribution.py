@@ -57,7 +57,7 @@ def _expect_named_error(page: Page, display_name: str, message: str) -> None:
     ("agent_name", "harness", "display_name"),
     [
         ("claude-native-ui", "claude-native", "Claude Code"),
-        ("codex-native-ui", "codex-native", "Codex"),
+        ("codex-native-ui", "codex-native", "MultiDex"),
     ],
     ids=["claude-code", "codex"],
 )

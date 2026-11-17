@@ -48,7 +48,7 @@ def report_capture_start_failure(*, session_id: str | None, pid: int, error_type
     """Best-effort, payload-free warning without logging I/O on the pipe reader."""
     report_stderr_capture_start_failure(
         logger=_logger,
-        label="Codex",
+        label="MultiDex",
         harness=_HARNESS,
         source_kind=_SOURCE_KIND,
         thread_prefix="codex-stderr",
@@ -68,7 +68,7 @@ class CodexStderrDiagnostics(HarnessStderrExporter):
 
         super().__init__(
             logger=_logger,
-            label="Codex",
+            label="MultiDex",
             harness=_HARNESS,
             source_kind=_SOURCE_KIND,
             thread_prefix=_THREAD_PREFIX,

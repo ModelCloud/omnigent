@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -224,14 +225,12 @@ def _usage_frame() -> dict[str, object]:
     }
 
 
-def test_completion_token_rate_fields_computes_estimates() -> None:
-    """Rates divide one completion's token counts by its delta spans.
-
-    Reasoning tokens are a subset of ``outputTokens``, so the visible-output
-    rate subtracts them; spans come from the first→last delta bounds.
-    """
+def test_completion_token_rate_fields_computes_estimates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Channel token counts share the observed end-to-end completion window."""
+    monkeypatch.setattr(fwd, "time", SimpleNamespace(monotonic=lambda: 30.0))
     state = fwd._CodexForwarderState()
     state.completion_rate_window_from_start = True
+    state.completion_rate_started_at = 10.0
     state.turn_reasoning_first_at = 10.0
     state.turn_reasoning_last_at = 16.0  # 30 reasoning tok / 6s = 5.0 t/s
     state.turn_output_first_at = 20.0
@@ -239,7 +238,7 @@ def test_completion_token_rate_fields_computes_estimates() -> None:
 
     fields = fwd._completion_token_rate_fields(_usage_frame(), state)
 
-    assert fields == {"completion_tps": {"reasoning": 5.0, "output": 10.0}}
+    assert fields == {"completion_tps": {"reasoning": 1.5, "output": 4.5}}
     assert state.turn_reasoning_first_at is None
     assert state.turn_output_last_at is None
 
@@ -255,44 +254,128 @@ def test_completion_token_rate_fields_clears_unmeasurable_channels(span: float |
     assert fwd._completion_token_rate_fields(_usage_frame(), state) == {"completion_tps": {}}
 
 
-def test_completion_token_rate_fields_subtracts_probed_rtt() -> None:
-    """The probed round-trip is removed from the measured delta span."""
+@pytest.mark.asyncio
+@pytest.mark.parametrize("drain_seconds", [0.0, 0.001, 0.1, 1.0])
+async def test_buffered_remote_completion_includes_wait_before_first_delta(
+    drain_seconds: float, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A buffered remote completion must not report its much faster drain speed."""
+    now = 10.0
+    monkeypatch.setattr(fwd, "time", SimpleNamespace(monotonic=lambda: now))
+    client = _RecordingClient()
     state = fwd._CodexForwarderState()
-    state.completion_rate_window_from_start = True
-    state.turn_output_first_at = 20.0
-    state.turn_output_last_at = 29.0
-    state.provider_rtt_seconds = 3.0  # 90 tok / (9s - 3s) = 15.0 t/s
+    usage = fwd._SessionUsageCoalescer(client, "conv_1")
+    tracker = fwd._CodexElicitationTaskTracker()
+    deltas = fwd._OutputTextDeltaCoalescer(client, "conv_1")
+    try:
+        await fwd._handle_event(
+            client,
+            session_id="conv_1",
+            bridge_dir=tmp_path,
+            event={"method": "turn/started", "params": {"turn": {"id": "turn_abc"}}},
+            usage_coalescer=usage,
+            elicitation_tracker=tracker,
+            delta_coalescer=deltas,
+            forwarder_state=state,
+        )
+        now = 19.0 - drain_seconds
+        for method in ("item/reasoning/textDelta", "item/agentMessage/delta"):
+            await fwd._handle_event(
+                client,
+                session_id="conv_1",
+                bridge_dir=tmp_path,
+                event={
+                    "method": method,
+                    "params": {"turnId": "turn_abc", "itemId": method, "delta": "text"},
+                },
+                usage_coalescer=usage,
+                elicitation_tracker=tracker,
+                delta_coalescer=deltas,
+                forwarder_state=state,
+            )
+        now = 19.0
+        fwd._handle_usage_update(usage, _usage_frame(), state)
+        await usage.flush()
+        data = next(
+            body["data"] for _, body in client.posts if body["type"] == "external_session_usage"
+        )
+        assert data["response_id"] == "codex_turn_abc"
+        assert data["completion_tps"] == {"reasoning": 3.3, "output": 10.0}
+    finally:
+        await deltas.close()
+        await usage.close()
+        await tracker.close()
 
-    fields = fwd._completion_token_rate_fields(_usage_frame(), state)
 
-    assert fields == {"completion_tps": {"output": 15.0}}
-
-
-def test_completion_token_rate_fields_caps_rtt_at_half_the_span() -> None:
-    """An outsized probe sample eats at most half the measured window."""
+@pytest.mark.asyncio
+async def test_tool_execution_does_not_lower_the_next_completion_rate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = 10.0
+    monkeypatch.setattr(fwd, "time", SimpleNamespace(monotonic=lambda: now))
     state = fwd._CodexForwarderState()
-    state.completion_rate_window_from_start = True
-    state.turn_output_first_at = 20.0
-    state.turn_output_last_at = 21.0
-    state.provider_rtt_seconds = 5.0  # capped: 90 tok / (1s - 0.5s) = 180 t/s
-
+    state.turns_started_observed.add("turn_abc")
+    fwd._reset_completion_rate_window(state, "turn_abc")
+    fwd._note_completion_rate_delta(
+        {"turnId": "turn_abc", "delta": "first"}, state, reasoning=True
+    )
+    now = 16.0
     assert fwd._completion_token_rate_fields(_usage_frame(), state) == {
-        "completion_tps": {"output": 180.0}
+        "completion_tps": {"reasoning": 5.0}
+    }
+    now = 100.0
+    await fwd._handle_completed_event(
+        _RecordingClient(),
+        session_id="conv_1",
+        delta_coalescer=None,
+        forwarder_state=state,
+        params={
+            "turnId": "turn_abc",
+            "item": {
+                "type": "commandExecution",
+                "id": "tool_1",
+                "command": "true",
+                "status": "completed",
+                "exitCode": 0,
+                "aggregatedOutput": "",
+            },
+        },
+    )
+    now = 103.0
+    fwd._note_completion_rate_delta(
+        {"turnId": "turn_abc", "delta": "second"}, state, reasoning=True
+    )
+    usage = _usage_frame()
+    usage["tokenUsage"]["total"]["outputTokens"] = 320
+    assert fwd._completion_token_rate_fields(usage, state) == {
+        "completion_tps": {"reasoning": 10.0}
     }
 
 
-def test_completion_token_rate_fields_prefers_the_rolling_rtt_average() -> None:
-    """A single spiky probe must not inflate the estimate; the average wins."""
-    state = fwd._CodexForwarderState()
-    state.completion_rate_window_from_start = True
-    state.turn_output_first_at = 20.0
-    state.turn_output_last_at = 29.0
-    state.provider_rtt_seconds = 5.0
-    state.provider_rtt_avg_seconds = 3.0  # 90 tok / (9s - 3s) = 15.0 t/s
+@pytest.mark.parametrize("started_at", [None, 20.0, 21.0])
+def test_missing_or_nonpositive_completion_window_clears_rates(
+    started_at: float | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(fwd, "time", SimpleNamespace(monotonic=lambda: 20.0))
+    state = fwd._CodexForwarderState(
+        completion_rate_window_from_start=True,
+        completion_rate_started_at=started_at,
+        turn_reasoning_first_at=19.0,
+        turn_output_first_at=19.0,
+    )
+    assert fwd._completion_token_rate_fields(_usage_frame(), state) == {"completion_tps": {}}
 
-    assert fwd._completion_token_rate_fields(_usage_frame(), state) == {
-        "completion_tps": {"output": 15.0}
-    }
+
+def test_summary_only_reasoning_does_not_measure_hidden_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(fwd, "time", SimpleNamespace(monotonic=lambda: 20.0))
+    state = fwd._CodexForwarderState(
+        completion_rate_window_from_start=True,
+        completion_rate_started_at=10.0,
+    )
+    assert fwd._completion_token_rate_fields(_usage_frame(), state) == {"completion_tps": {}}
 
 
 def test_completion_token_rate_fields_suppresses_mid_turn_windows() -> None:
@@ -323,12 +406,14 @@ def test_reset_marks_window_from_start_only_for_observed_turns() -> None:
 
 
 @pytest.mark.asyncio
-async def test_usage_post_carries_response_id_and_rates() -> None:
+async def test_usage_post_carries_response_id_and_rates(monkeypatch: pytest.MonkeyPatch) -> None:
     """The usage post pins rates to the turn's response id."""
     client = _RecordingClient()
     coalescer = fwd._SessionUsageCoalescer(client, "conv_1")
     state = fwd._CodexForwarderState()
+    monkeypatch.setattr(fwd, "time", SimpleNamespace(monotonic=lambda: 104.5))
     state.completion_rate_window_from_start = True
+    state.completion_rate_started_at = 100.0
     state.turn_output_first_at = 100.0
     state.turn_output_last_at = 104.5  # 90 visible tok / 4.5s = 20 t/s
 
@@ -350,15 +435,14 @@ async def test_successive_completions_have_independent_rates_and_keep_response_i
     coalescer = fwd._SessionUsageCoalescer(client, "conv_1")
     state = fwd._CodexForwarderState()
     state.turns_started_observed.add("turn_abc")
+    now = 10.0
+    monkeypatch.setattr(fwd, "time", SimpleNamespace(monotonic=lambda: now))
     fwd._reset_completion_rate_window(state, "turn_abc")
-    times = iter([10.0, 16.0, 100.0, 103.0])
     params = {"turnId": "turn_abc", "delta": "trace"}
 
     for index in range(2):
-        with monkeypatch.context() as clock:
-            clock.setattr(fwd.time, "monotonic", lambda: next(times))
-            for _ in range(2):
-                fwd._note_completion_rate_delta(params, state, reasoning=True)
+        now = 16.0 if index == 0 else 19.0
+        fwd._note_completion_rate_delta(params, state, reasoning=True)
         usage = _usage_frame()
         if index:
             usage["tokenUsage"]["total"]["outputTokens"] = 320
@@ -392,13 +476,17 @@ def test_new_turn_discards_previous_timing_and_rejects_old_usage() -> None:
 
 
 @pytest.mark.asyncio
-async def test_equal_estimates_on_different_turns_keep_both_identities() -> None:
+async def test_equal_estimates_on_different_turns_keep_both_identities(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     client = _RecordingClient()
     coalescer = fwd._SessionUsageCoalescer(client, "conv_1")
+    monkeypatch.setattr(fwd, "time", SimpleNamespace(monotonic=lambda: 16.0))
     state = fwd._CodexForwarderState()
     state.turns_started_observed.update(("turn_a", "turn_b"))
     for turn_id in ("turn_a", "turn_b"):
         fwd._reset_completion_rate_window(state, turn_id)
+        state.completion_rate_started_at = 10.0
         state.turn_reasoning_first_at = 10.0
         state.turn_reasoning_last_at = 16.0
         usage = _usage_frame()

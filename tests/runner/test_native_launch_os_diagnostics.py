@@ -31,7 +31,7 @@ def test_native_launch_error_has_os_facts(
             error = raised
     with caplog.at_level(logging.WARNING, logger=orchestration.__name__):
         response = orchestration._native_terminal_start_error_response(
-            error, "Codex", session_id="session-test"
+            error, "MultiDex", session_id="session-test"
         )
     envelope = json.loads(response.body)
     payload = envelope["error"]

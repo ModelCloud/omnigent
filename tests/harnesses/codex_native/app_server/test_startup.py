@@ -1064,7 +1064,7 @@ async def test_wait_until_ready_timeout_reports_listen_target_and_budget(
     budget = codex_native_app_server._APP_SERVER_READY_TIMEOUT_SECONDS
     target = listen_url or f"unix://{server.socket_path}"
     assert message.startswith(
-        f"Timed out after {budget:g}s waiting for the Codex app-server at {target}: "
+        f"Timed out after {budget:g}s waiting for the MultiDex app-server at {target}: "
     )
     assert "Connect call failed" in message
     assert (str(server.socket_path) in message) is (listen_url is None)
@@ -1307,7 +1307,7 @@ async def test_readiness_failure_records_app_server_state_before_cleanup(
     with (
         caplog.at_level(logging.INFO),
         pytest.raises(
-            RuntimeError, match=r"^Timed out after 1s waiting for the Codex app-server at "
+            RuntimeError, match=r"^Timed out after 1s waiting for the MultiDex app-server at "
         ),
     ):
         await server.start()

@@ -105,7 +105,7 @@ def require_codex_plan_launch_support(
         return
     if not host_registry.host_may_support(host_id, CAP_CODEX_PLAN_AT_LAUNCH):
         raise OmnigentError(
-            "This host is too old to start a Codex session in Plan mode. Update "
+            "This host is too old to start a MultiDex session in Plan mode. Update "
             "omnigent on the host and reconnect it, or turn Plan mode off, then try again.",
             code=ErrorCode.CONFLICT,
         )

@@ -103,7 +103,7 @@ PI_ANTHROPIC_BUDGET_THINKING = StaticModelFallback(
 _CODEX_ARM_PREFERENCE = StaticModelFallback(
     model_ids=("gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.5"),
     owner="Databricks model discovery (omnigent.models.databricks_model_discovery)",
-    provenance="Omnigent's release-curated Codex arm ordering",
+    provenance="Omnigent's release-curated MultiDex arm ordering",
     discovery_gap="a workspace listing ranks models by neither recency nor capability",
 )
 
@@ -217,13 +217,13 @@ _SMART_ROUTING_FALLBACKS: dict[str, StaticModelFallback] = {
     ),
     "codex_native_excluded": StaticModelFallback(
         model_ids=("databricks-gpt-5-4-nano", "system.ai.databricks-gpt-5-4-nano"),
-        owner="Native Codex Smart Routing",
+        owner="Native MultiDex Smart Routing",
         provenance="the model rejects native tool_search input with invalid_request_error",
         discovery_gap="model availability listings omit native tool-search compatibility",
     ),
     "codex_catalog_clone_source": StaticModelFallback(
         model_ids=("gpt-5.6-luna",),
-        owner="Codex extended catalog (omnigent.inner.codex_executor)",
+        owner="MultiDex extended catalog (omnigent.inner.codex_executor)",
         provenance="codex's own bundled catalog slug for the cheapest current arm",
         discovery_gap="codex's bundled catalog carries no entry for a gateway-only arm to clone",
     ),

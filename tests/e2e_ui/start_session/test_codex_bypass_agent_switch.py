@@ -37,7 +37,7 @@ def _codex_and_claude_agents_body() -> str:
                 {
                     "id": "ag_codex_e2e",
                     "name": "codex-native-ui",
-                    "display_name": "Codex",
+                    "display_name": "MultiDex",
                     "description": "OpenAI's coding agent",
                     "harness": "codex-native",
                     "skills": [],

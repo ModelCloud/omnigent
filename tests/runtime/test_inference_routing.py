@@ -261,7 +261,10 @@ def test_bound_codex_does_not_fallback_when_credential_disappears(
 ) -> None:
     monkeypatch.delenv("BIFROST_TEST_KEY")
     monkeypatch.delenv("OMNIGENT_BIFROST_TEST_KEY", raising=False)
-    with inference_config_scope(_profile()), pytest.raises(ValueError, match="cannot route Codex"):
+    with (
+        inference_config_scope(_profile()),
+        pytest.raises(ValueError, match="cannot route MultiDex"),
+    ):
         resolve_native_codex_launch(model=None)
 
 

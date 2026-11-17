@@ -492,7 +492,7 @@ def _format_codex_error_params(params: object) -> str:
         out what failed.
     """
     if not isinstance(params, dict) or not params:
-        return "Codex App Server error (no params)"
+        return "MultiDex App Server error (no params)"
     parts: list[str] = []
     message = params.get("message")
     if isinstance(message, str) and message.strip():
@@ -526,7 +526,7 @@ def _format_codex_error_params(params: object) -> str:
     if not parts:
         # No standard JSON-RPC fields populated; dump the raw params
         # so the user can still see what codex sent.
-        return f"Codex App Server error: raw_params={params!r}"
+        return f"MultiDex App Server error: raw_params={params!r}"
     return "; ".join(parts)
 
 
@@ -677,8 +677,8 @@ async def _require_brokered_codex_version(codex_path: str) -> None:
     ):
         shown = raw or "unparseable"
         raise RuntimeError(
-            "unsupported Codex wire version "
-            f"{shown}; brokered authentication requires a stable Codex 0.146.0 or newer"
+            "unsupported MultiDex wire version "
+            f"{shown}; brokered authentication requires a stable MultiDex 0.146.0 or newer"
         )
 
 
@@ -1603,7 +1603,7 @@ def materialize_codex_provider_config(
     declared_providers = document.get("model_providers")
     if declared_providers is not None:
         if not isinstance(declared_providers, MutableMapping):
-            raise ValueError("Codex model_providers config must be a TOML table")
+            raise ValueError("MultiDex model_providers config must be a TOML table")
         providers = declared_providers
 
     if provider_overrides:
@@ -1614,7 +1614,7 @@ def materialize_codex_provider_config(
             fragment = tomlkit.parse(override)
             generated = fragment.get("model_providers")
             if not isinstance(generated, MutableMapping) or not generated:
-                raise ValueError("Codex provider override must define model_providers")
+                raise ValueError("MultiDex provider override must define model_providers")
             for provider_name, provider_config in generated.items():
                 providers[provider_name] = provider_config
 
@@ -2442,15 +2442,19 @@ def write_required_brokered_model_catalog(
             check=False,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        raise RuntimeError("signer-backed Codex requires a valid bundled model catalog") from exc
+        raise RuntimeError(
+            "signer-backed MultiDex requires a valid bundled model catalog"
+        ) from exc
     if completed.returncode != 0 or len(completed.stdout) > _BROKERED_MODEL_CATALOG_MAX_BYTES:
-        raise RuntimeError("signer-backed Codex requires a valid bundled model catalog")
+        raise RuntimeError("signer-backed MultiDex requires a valid bundled model catalog")
     try:
         catalog = json.loads(completed.stdout)
     except (UnicodeDecodeError, ValueError) as exc:
-        raise RuntimeError("signer-backed Codex requires a valid bundled model catalog") from exc
+        raise RuntimeError(
+            "signer-backed MultiDex requires a valid bundled model catalog"
+        ) from exc
     if not _valid_brokered_model_catalog(catalog):
-        raise RuntimeError("signer-backed Codex requires a valid bundled model catalog")
+        raise RuntimeError("signer-backed MultiDex requires a valid bundled model catalog")
 
     target_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(target_dir, 0o700)
@@ -2468,14 +2472,16 @@ def write_required_brokered_model_catalog(
     except OSError as exc:
         with suppress(OSError):
             catalog_path.unlink()
-        raise RuntimeError("signer-backed Codex requires a valid bundled model catalog") from exc
+        raise RuntimeError(
+            "signer-backed MultiDex requires a valid bundled model catalog"
+        ) from exc
     finally:
         with suppress(FileNotFoundError):
             os.unlink(tmp_name)
     if not set_codex_model_catalog_path(target_dir / "config.toml", catalog_path):
         with suppress(OSError):
             catalog_path.unlink()
-        raise RuntimeError("signer-backed Codex requires a valid bundled model catalog")
+        raise RuntimeError("signer-backed MultiDex requires a valid bundled model catalog")
     return catalog_path
 
 
@@ -3540,7 +3546,7 @@ class _CodexAppServerSession:
                 self._worker_prepare_task = None
             if self._closing:
                 await asyncio.to_thread(worker_launch.close)
-                raise RuntimeError("Codex session closed during worker preparation")
+                raise RuntimeError("MultiDex session closed during worker preparation")
             self._worker_launch = worker_launch
             from omnigent.mcp_disabled_servers import (
                 RELAUNCH_WITHOUT_OVERRIDES_EVENT,
@@ -3646,7 +3652,7 @@ class _CodexAppServerSession:
             _proc.remember_process_group(self._proc)
             _proc.refresh_process_tree(self._proc)
             if self._closing:
-                raise RuntimeError("Codex session closed during worker spawn")
+                raise RuntimeError("MultiDex session closed during worker spawn")
             await self._require_live_signer()
         finally:
             if liveness_read_fd is not None:
@@ -3676,12 +3682,12 @@ class _CodexAppServerSession:
                 proc,
                 terminate_timeout=_WORKER_SHUTDOWN_TIMEOUT_SECONDS,
                 kill_timeout=1,
-                label="Codex app-server",
+                label="MultiDex app-server",
                 terminate_tree=_terminate_process_tree,
                 kill_tree=_kill_process_tree,
             )
             if not reaped:
-                raise RuntimeError("Codex early-exit worker could not be reaped")
+                raise RuntimeError("MultiDex early-exit worker could not be reaped")
         tasks = [
             task
             for task in (self._reader_task, self._stderr_task, self._worker_census_task)
@@ -3789,7 +3795,7 @@ class _CodexAppServerSession:
                         proc,
                         terminate_timeout=_WORKER_SHUTDOWN_TIMEOUT_SECONDS,
                         kill_timeout=1,
-                        label="Codex app-server",
+                        label="MultiDex app-server",
                         terminate_tree=_terminate_process_tree,
                         kill_tree=_kill_process_tree,
                     )
@@ -4172,7 +4178,7 @@ class _CodexAppServerSession:
                 seen_cursors.add(cursor)
                 params["cursor"] = cursor
         raise RuntimeError(
-            f"Cannot restore Codex default reasoning effort for {self._thread_model!r}: "
+            f"Cannot restore MultiDex default reasoning effort for {self._thread_model!r}: "
             "the app-server did not provide a default. Select an explicit effort or "
             "start a new session."
         )
@@ -4330,7 +4336,7 @@ class _CodexAppServerSession:
             self._applied_effort = reasoning_effort
         raw_active_turn_id = start_response.get("result", {}).get("turn", {}).get("id")
         if not isinstance(raw_active_turn_id, str) or not raw_active_turn_id:
-            yield ExecutorError(message="Codex App Server did not return a turn id")
+            yield ExecutorError(message="MultiDex App Server did not return a turn id")
             return
         active_turn_id: str = raw_active_turn_id
         self.active_turn_id = active_turn_id
@@ -4724,7 +4730,7 @@ class _CodexAppServerSession:
                     error_text = str(
                         params.get("message")
                         or turn.get("error")
-                        or "Codex App Server turn failed"
+                        or "MultiDex App Server turn failed"
                     )
                     # Only a connection-level failure is the certificate's doing;
                     # a tool or provider error keeps its own retryable text.
@@ -4983,7 +4989,7 @@ class _CodexAppServerSession:
                     continue
                 message = json.loads(raw)
                 if not isinstance(message, dict):
-                    raise ValueError("Codex app-server frame is not an object")
+                    raise ValueError("MultiDex app-server frame is not an object")
                 if (
                     "id" in message
                     and "method" not in message
@@ -4995,12 +5001,14 @@ class _CodexAppServerSession:
                     continue
                 self._note_native_activity(message)
                 await self._events.put(message)
-            self._note_transport_closed("Codex app-server closed stdout", clean_eof=True)
+            self._note_transport_closed("MultiDex app-server closed stdout", clean_eof=True)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 — reader loop logs and exits on any unexpected error  # pragma: no cover - defensive
             logger.debug("Codex App Server reader loop ended: %s", exc)
-            self._note_transport_closed(f"Codex app-server reader failed: {exc}", clean_eof=False)
+            self._note_transport_closed(
+                f"MultiDex app-server reader failed: {exc}", clean_eof=False
+            )
         finally:
             if not self._closing and not self._starting:
                 await self._close_signer()
@@ -5270,14 +5278,14 @@ class CodexExecutor(Executor):
         self._codex_config_overrides: list[str] = []
         if signer_launch_config is not None:
             if os_env is None or os_env.sandbox is None or os_env.sandbox.type == "none":
-                raise OSError("signer-backed Codex worker requires an active sandbox")
+                raise OSError("signer-backed MultiDex worker requires an active sandbox")
             if os_env.sandbox.egress_rules:
                 raise ValueError(
-                    "signer-backed Codex does not support os_env.sandbox.egress_rules; "
+                    "signer-backed MultiDex does not support os_env.sandbox.egress_rules; "
                     "brokered sessions are model-only"
                 )
             if model is None:
-                raise ValueError("signer-backed Codex requires an explicit model")
+                raise ValueError("signer-backed MultiDex requires an explicit model")
             if (
                 any(
                     value is not None
@@ -5291,7 +5299,7 @@ class CodexExecutor(Executor):
                 or gateway
             ):
                 raise ValueError(
-                    "signer-backed Codex uses only its trusted endpoint and cannot "
+                    "signer-backed MultiDex uses only its trusted endpoint and cannot "
                     "combine with gateway or provider overrides"
                 )
             self._codex_config_overrides.extend(
@@ -5533,7 +5541,7 @@ class CodexExecutor(Executor):
                 break
             closed_session = await self._close_state_app_session(state)
             if closed_session is not None and not getattr(closed_session, "cleaned", True):
-                raise RuntimeError("previous Codex session cleanup is incomplete")
+                raise RuntimeError("previous MultiDex session cleanup is incomplete")
             if (
                 self._session_states.get(session_key) is state
                 and state.app_session is closed_session
@@ -5577,7 +5585,9 @@ class CodexExecutor(Executor):
             await _require_brokered_codex_version(self._codex_path)
             validated_identity = _codex_binary_identity(self._codex_path)
             if binary_identity is not None and validated_identity != binary_identity:
-                raise RuntimeError("Codex executable changed during brokered version validation")
+                raise RuntimeError(
+                    "MultiDex executable changed during brokered version validation"
+                )
             self._brokered_version_identity = validated_identity
         session_key = _session_key(messages)
         state = self._session_states.setdefault(session_key, _CodexSessionState())
@@ -5637,4 +5647,4 @@ class CodexExecutor(Executor):
         except (HarnessTransportClosedError, ProviderAuthRequired):
             raise
         except Exception as exc:  # noqa: BLE001 — executor boundary converts any error into an ExecutorError event
-            yield ExecutorError(message=f"Codex executor error: {exc}")
+            yield ExecutorError(message=f"MultiDex executor error: {exc}")

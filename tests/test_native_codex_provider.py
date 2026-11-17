@@ -639,7 +639,7 @@ def test_spec_provider_auth_routes_when_machine_has_nothing(_isolated: Path) -> 
     assert 'base_url="https://spec.example.com/v1"' in joined
     assert "printf %s sk-spec" in joined
     assert launch.model == "spec-model"
-    assert "Codex CLI login" not in launch.summary
+    assert "MultiDex CLI login" not in launch.summary
 
 
 def test_spec_provider_auth_beats_machine_default(_isolated: Path) -> None:
@@ -770,7 +770,7 @@ def test_spec_subscription_logged_in_uses_cli_login(
     assert launch.config_overrides == ['model_provider="openai"']
     assert launch.profile is None
     assert "codex-sub" in launch.summary
-    assert "Codex is logged in" in launch.summary
+    assert "MultiDex is logged in" in launch.summary
 
 
 # ── login_required: headless fail-fast marker ──────────────────────────────
@@ -798,7 +798,7 @@ def test_no_provider_but_codex_logged_in_is_not_login_required(
 
     launch = resolve_native_codex_launch(model=None)
 
-    assert "Codex CLI login" in launch.summary
+    assert "MultiDex CLI login" in launch.summary
     assert launch.login_required is False
 
 
@@ -846,7 +846,7 @@ def test_subscription_default_logged_in_is_not_login_required(
 
     launch = resolve_native_codex_launch(model=None)
 
-    assert "Codex is logged in" in launch.summary
+    assert "MultiDex is logged in" in launch.summary
     assert launch.login_required is False
 
 
@@ -990,7 +990,7 @@ def test_explicit_profile_selecting_openai_overrides_ambient_builtin(
 
     launch = resolve_native_codex_launch(model=None, terminal_launch_args=["--profile", "openai"])
 
-    assert "Codex CLI login" in launch.summary
+    assert "MultiDex CLI login" in launch.summary
     assert "amazon-bedrock" not in launch.summary
     assert codex_session_meta_model_provider(launch) == "openai"
     assert launch.login_required is (not logged_in)
@@ -1038,11 +1038,11 @@ def test_unknown_profile_does_not_pin_ambient_builtin(_isolated: Path) -> None:
 @pytest.mark.parametrize(
     ("args", "error"),
     [
-        (("--profile",), "Codex requires exactly one value for --profile"),
-        (("--profile", "../invalid"), "Invalid Codex config profile name"),
+        (("--profile",), "MultiDex requires exactly one value for --profile"),
+        (("--profile", "../invalid"), "Invalid MultiDex config profile name"),
         (
             ("--profile", "one", "--profile", "two"),
-            "Codex requires exactly one value for --profile",
+            "MultiDex requires exactly one value for --profile",
         ),
     ],
 )

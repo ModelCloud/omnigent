@@ -56,7 +56,7 @@ _CLAUDE = _agent(
     "claude-native",
 )
 _CODEX = _agent(
-    _CODEX_AGENT_ID, "codex-native-ui", "Codex", "OpenAI's coding agent", _CODEX_HARNESS
+    _CODEX_AGENT_ID, "codex-native-ui", "MultiDex", "OpenAI's coding agent", _CODEX_HARNESS
 )
 _CURSOR = _agent(
     _CURSOR_AGENT_ID, "cursor-native-ui", "Cursor", "Cursor's coding agent", "cursor-native"
@@ -266,7 +266,7 @@ def test_missing_harness_is_disabled_with_repair_tooltip(
     contract.json(
         "/v1/harnesses",
         {
-            "data": [{"id": "codex", "label": "Codex"}],
+            "data": [{"id": "codex", "label": "MultiDex"}],
             "setup_steps": {
                 _CODEX_HARNESS: [
                     {
@@ -313,7 +313,7 @@ def test_missing_harness_is_disabled_with_repair_tooltip(
     codex_option = _agent_row(page, _CODEX_AGENT_ID)
     expect(codex_option).to_be_visible(timeout=60_000)
     expect(codex_option).to_have_attribute("aria-disabled", "true")
-    codex_option.get_by_text("Codex", exact=True).hover()
+    codex_option.get_by_text("MultiDex", exact=True).hover()
     expect(
         page.get_by_test_id(f"new-chat-landing-agent-tooltip-{_CODEX_AGENT_ID}")
     ).to_contain_text(f"Codex isn't configured on {_HOST_NAME} — run omni setup on that machine.")
