@@ -132,7 +132,7 @@ class _RecordingCodexAppServerClient:
     [
         (
             {"type": "model_change", "model": "gpt-5.4"},
-            {"threadId": "thread_codex", "model": "gpt-5.4"},
+            {"threadId": "thread_codex", "model": "gpt-5.4", "modelProvider": "openai"},
         ),
         (
             {"type": "effort_change", "effort": "xhigh"},
@@ -571,7 +571,12 @@ async def test_codex_native_model_switch_inherits_an_effort_whose_config_write_f
         assert switched.status_code == 204, switched.text
 
     updates = [params for method, params in fake.requests if method == "thread/settings/update"]
-    assert updates[-1] == {"threadId": "thread_codex", "model": "gpt-5.4", "effort": "xhigh"}
+    assert updates[-1] == {
+        "threadId": "thread_codex",
+        "model": "gpt-5.4",
+        "modelProvider": "openai",
+        "effort": "xhigh",
+    }
     assert codex_native_bridge.read_codex_config_effort(bridge_dir) == expected_config_effort
 
 
@@ -913,10 +918,15 @@ async def test_codex_native_concurrent_settings_use_the_applied_model(
             responses = await asyncio.wait_for(asyncio.gather(*tasks), timeout=2)
         assert all(response.status_code == 204 for response in responses)
     assert updates == [
-        {"threadId": "thread_codex", "model": "gpt-5.4", "effort": "xhigh"},
+        {
+            "threadId": "thread_codex",
+            "model": "gpt-5.4",
+            "modelProvider": "openai",
+            "effort": "xhigh",
+        },
         {"threadId": "thread_codex", "effort": "xhigh"},
     ]
-    assert native_settings == {"model": "gpt-5.4", "effort": "xhigh"}
+    assert native_settings == {"model": "gpt-5.4", "modelProvider": "openai", "effort": "xhigh"}
     assert codex_native_bridge.read_codex_config_model(bridge_dir) == "gpt-5.4"
     assert codex_native_bridge.read_codex_config_effort(bridge_dir) == "xhigh"
 
@@ -1744,6 +1754,7 @@ async def test_codex_native_model_options_query_model_list(
         },
     ]
     for model_row in expected_models:
+        model_row.update(speed=1.0, providerHealth="online")
         if model_row["id"] == expected_default:
             model_row["isDefault"] = True
     # Provider-source decoration is host configuration metadata, independent
@@ -2009,7 +2020,8 @@ async def test_codex_model_catalog_writeback_uses_session_provider(
             response = await client.get(f"/v1/sessions/{session_id}/codex-model-options")
             assert response.status_code == 200, response.text
             assert response.json()["models"] == codex.mark_launch_default(
-                live_rows, "second-picker"
+                [dict(row, speed=1.0, providerHealth="online") for row in live_rows],
+                "second-picker",
             )
             await asyncio.gather(
                 *[
@@ -3689,19 +3701,16 @@ async def test_events_codex_native_stop_after_completed_turn_is_noop_not_503(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure_stage", ["response_error", "connect", "request", "close"])
-@pytest.mark.parametrize("event_type", ["interrupt", "stop_session"])
 async def test_events_codex_native_interrupt_genuine_app_server_error_still_503(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     failure_stage: str,
-    event_type: str,
 ) -> None:
-    """Failed and unanswered Codex controls return 503 without clearing the turn.
+    """Failed and unanswered Codex interrupts return 503 without clearing the turn.
 
     The reconcile is narrow: only Codex's recognized stale-turn rejection is
-    swallowed. Any other error (e.g. ``-32603`` thread-store) means the stop did
-    not land, so the handler keeps returning 503 and leaves the recorded turn
-    intact instead of falsely reporting idle.
+    swallowed. Explicit stop separately tears down the pane and backend and
+    succeeds if that cleanup completes, even when the interrupt RPC fails.
     """
     from omnigent.harnesses.codex_native.app_server import CodexAppServerResponseError
     from omnigent.runner.native import interrupt as native_interrupt
@@ -3745,16 +3754,16 @@ async def test_events_codex_native_interrupt_genuine_app_server_error_still_503(
         assert create_resp.status_code == 201, create_resp.text
 
         async with asyncio.timeout(budget(5)):
-            stop_resp = await client.post(
+            interrupt_resp = await client.post(
                 f"/v1/sessions/{conv_id}/events",
-                json={"type": event_type},
+                json={"type": "interrupt"},
             )
 
-    assert stop_resp.status_code == 503, (
+    assert interrupt_resp.status_code == 503, (
         f"a genuine interrupt failure must stay a 503; "
-        f"got {stop_resp.status_code}: {stop_resp.text}"
+        f"got {interrupt_resp.status_code}: {interrupt_resp.text}"
     )
-    assert stop_resp.json().get("error") == "codex_native_interrupt_failed"
+    assert interrupt_resp.json().get("error") == "codex_native_interrupt_failed"
     assert cancelled == ([] if failure_stage == "response_error" else [failure_stage])
     assert fake_client.closed is (failure_stage != "close")
     # The turn is still recorded: a genuine failure must not drop it.
