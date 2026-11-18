@@ -382,7 +382,7 @@ async def test_get_rejects_malformed_read_envelopes(
     assert response.status_code == 503
     assert _json_response(response) == {
         "error": "codex_native_goal_failed",
-        "detail": f"Codex-native goal read returned {detail}.",
+        "detail": f"MultiDex-native goal read returned {detail}.",
     }
 
 
@@ -399,7 +399,7 @@ async def test_get_rejects_an_unavailable_native_goal(
     assert response.status_code == 503
     assert _json_response(response) == {
         "error": "codex_native_goal_failed",
-        "detail": "Codex-native goal read returned invalid availability.",
+        "detail": "MultiDex-native goal read returned invalid availability.",
     }
 
 

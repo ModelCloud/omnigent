@@ -612,7 +612,7 @@ async def test_get_goal_without_a_runner_preserves_legacy_or_strict_semantics(
     resp = await client.get(f"/v1/sessions/{codex_session}/codex_goal", headers=headers)
     if read_mode == "strict":
         assert resp.status_code == 503, resp.text
-        assert "Could not read Codex goal" in resp.json()["error"]["message"]
+        assert "Could not read MultiDex goal" in resp.json()["error"]["message"]
         assert staged.events == [{"type": "goal_get", "require_live": True}]
     else:
         assert resp.status_code == 200, resp.text
@@ -722,7 +722,7 @@ async def test_get_goal_strict_transport_failure_is_unavailable(
         )
 
     assert resp.status_code == 503, resp.text
-    assert "Could not read Codex goal" in resp.json()["error"]["message"]
+    assert "Could not read MultiDex goal" in resp.json()["error"]["message"]
 
 
 @pytest.mark.parametrize("strict", [False, True])
