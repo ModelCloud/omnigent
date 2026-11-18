@@ -1,3 +1,4 @@
+import { isAdminViewEnabled } from "@/lib/adminView";
 import { z } from "zod";
 import { getOmnigentServerIdentity } from "./host";
 import { getCurrentUserId } from "./identity";
@@ -56,7 +57,7 @@ export function modelCatalogCacheKey(
   const server = getOmnigentServerIdentity();
   const user = getCurrentUserId();
   if (server === null || user === null || !targetId || !harness) return null;
-  return `omnigent:model-catalog:v1:${JSON.stringify([server, user, target, targetId, harness, target === "sandbox" ? agentId : null])}`;
+  return `omnigent:model-catalog:v1:${JSON.stringify([server, user, target, targetId, harness, target === "sandbox" ? agentId : null, isAdminViewEnabled()])}`;
 }
 
 /**
@@ -71,7 +72,7 @@ export function sandboxSessionCatalogKey(
   const server = getOmnigentServerIdentity();
   const user = getCurrentUserId();
   if (server === null || user === null || !provider || !harness || !agentId) return null;
-  return `omnigent:model-catalog:v1:${JSON.stringify([server, user, "sandbox-session", provider, harness, agentId])}`;
+  return `omnigent:model-catalog:v1:${JSON.stringify([server, user, "sandbox-session", provider, harness, agentId, isAdminViewEnabled()])}`;
 }
 
 /** The raw stored entry, comparable across renders. */

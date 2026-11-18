@@ -234,7 +234,7 @@ describe("ComposerAddMenu", () => {
     expect(onPlan).toHaveBeenCalledOnce();
   });
 
-  it.each(["goal", "side-chat"] as const)(
+  it.each(["goal", "side-chat", "workflow"] as const)(
     "lets the %s action keep focus after the menu closes",
     async (action) => {
       const user = userEvent.setup();
@@ -246,6 +246,7 @@ describe("ComposerAddMenu", () => {
             onAttach={vi.fn()}
             onGoal={action === "goal" ? openAction : undefined}
             onSideChat={action === "side-chat" ? openAction : undefined}
+            onWorkflow={action === "workflow" ? openAction : undefined}
             planActive={false}
           />
           <textarea data-testid="action-input" />
@@ -1357,6 +1358,7 @@ function setupLandingMocks() {
   vi.mocked(useInstallingHarnesses).mockReturnValue(new Set<string>());
   setOmnigentHostConfig({});
   resetLandingDraft();
+  sessionStorage.clear();
   clearSessionDrafts();
   localStorage.clear();
   // host_1's most-recent workspace seeds the field (so submit can enable
@@ -1431,11 +1433,14 @@ function LandingNavigationProbe() {
   );
 }
 
+const hostNavigationCalls = vi.fn();
+
 function useHostNavigate(): ReturnType<typeof useNavigate> {
   const navigate = useNavigate();
   // Embedded hosts serialize partial paths; createPath defaults a missing pathname to "/".
   return useCallback(
     (to: To | number, options?: NavigateOptions) => {
+      hostNavigationCalls(to, options);
       if (typeof to === "number") return navigate(to);
       return navigate(typeof to === "string" ? to : createPath(to), options);
     },
@@ -1533,6 +1538,7 @@ function tooltipKeys(tooltip: HTMLElement): string[] {
 
 describe("prompt URL handoff", () => {
   beforeEach(setupLandingMocks);
+  beforeEach(() => hostNavigationCalls.mockClear());
 
   it.each(["/omnigent", "/omnigent/", "/tools/omnigent"])(
     "keeps an embedded prompt link under %s with host navigation",
@@ -1547,6 +1553,7 @@ describe("prompt URL handoff", () => {
         `${pathname}?o=123#composer`,
       );
       expect(authenticatedFetchMock).not.toHaveBeenCalled();
+      expect(hostNavigationCalls).not.toHaveBeenCalled();
     },
   );
 
@@ -3558,6 +3565,8 @@ describe("desktop Arclet credential preflight", () => {
       await waitFor(() => expect(screen.getByTestId("new-chat-landing-submit")).toBeEnabled());
       vi.mocked(getDesktopFeatures).mockReturnValueOnce(pendingFeatures);
       fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+      // A prompt link arrives while the check is pending; its fallback must outlive this create.
+      fireEvent.click(screen.getByRole("button", { name: "Open another prompt link" }));
       expect(screen.getByTestId("new-chat-landing-input")).toBeDisabled();
       expect(screen.getByRole("button", { name: "Skip" })).toBeEnabled();
       expect(checkDbcert).not.toHaveBeenCalled();
@@ -3576,6 +3585,10 @@ describe("desktop Arclet credential preflight", () => {
         "conv_new",
         expect.objectContaining({ text: "Keep this task during the capability check" }),
       );
+      const keptPrompts = Object.keys(sessionStorage)
+        .filter((key) => key.startsWith("omnigent:linked-prompt"))
+        .map((key) => JSON.parse(sessionStorage.getItem(key) ?? "{}").text);
+      expect(keptPrompts).toEqual(["Another request"]);
     },
   );
 
@@ -5156,10 +5169,10 @@ describe("NewChatLandingScreen", () => {
       openAgentConfig("a_acp");
       expect(screen.getByTestId("new-chat-landing-config-harness")).toHaveTextContent(label);
       expect(screen.queryByTestId("new-chat-landing-permission-chip")).toBeNull();
-      pickSelectOption("new-chat-landing-config-harness", "Codex");
+      pickSelectOption("new-chat-landing-config-harness", "MultiDex");
       saveConfig();
       openAgentConfig("a_acp");
-      expect(screen.getByTestId("new-chat-landing-config-harness")).toHaveTextContent("Codex");
+      expect(screen.getByTestId("new-chat-landing-config-harness")).toHaveTextContent("MultiDex");
     } finally {
       cleanup();
       catalog.mockRestore();
@@ -7548,7 +7561,7 @@ describe("NewChatLandingScreen", () => {
     expect(warning).not.toHaveAttribute("title");
     fireEvent.focus(warning);
     expect(await screen.findByRole("tooltip")).toHaveTextContent(
-      "Codex needs Codex authentication on machine-1 — run codex login on that machine.",
+      "Codex needs MultiDex authentication on machine-1 — run codex login on that machine.",
     );
   });
 
@@ -7560,7 +7573,7 @@ describe("NewChatLandingScreen", () => {
       harness: "codex-native",
       readiness: "needs-auth",
       badgeName: "needs auth",
-      warning: "Codex needs Codex authentication on machine-1 — run codex login",
+      warning: "Codex needs MultiDex authentication on machine-1 — run codex login",
     },
     {
       id: "a_cursor",
@@ -7607,7 +7620,7 @@ describe("NewChatLandingScreen", () => {
       harness: "codex",
       readiness: "needs-auth",
       badgeName: "needs auth",
-      warning: "Polly needs Codex authentication on machine-1 — run codex login",
+      warning: "Polly needs MultiDex authentication on machine-1 — run codex login",
     },
   ])(
     "renders the $readiness availability warning for $displayName",
@@ -8632,7 +8645,7 @@ describe("NewChatLandingScreen", () => {
     expect(screen.queryByTestId("new-chat-landing-repo-select")).toBeNull();
   });
 
-  it("creates a managed session without host_id/workspace and no provisioning subtext", async () => {
+  it("creates a managed session with a minted host_id and no workspace and no provisioning subtext", async () => {
     // Controlled promise so the in-flight state is observable
     // deterministically before the create resolves.
     let resolveCreate!: (res: Response) => void;
@@ -8641,7 +8654,7 @@ describe("NewChatLandingScreen", () => {
         resolveCreate = resolve;
       }),
     );
-    renderLanding({ managed_sandboxes_enabled: true });
+    renderLanding({ managed_sandboxes_enabled: true, request_managed_sandbox_host_id: true });
     fireEvent.pointerDown(screen.getByTestId("new-chat-landing-host-chip"), { button: 0 });
     fireEvent.click(screen.getByTestId("new-chat-landing-sandbox-option"));
     fireEvent.change(screen.getByTestId("new-chat-landing-input"), {
@@ -8663,7 +8676,7 @@ describe("NewChatLandingScreen", () => {
     const body = JSON.parse((init as RequestInit).body as string) as Record<string, unknown>;
     expect(body.host_type).toBe("managed");
     expect(body.agent_id).toBe("a1");
-    expect("host_id" in body).toBe(false);
+    expect(body.host_id).toMatch(/^[0-9a-f]{32}$/);
     expect("workspace" in body).toBe(false);
     expect("git" in body).toBe(false);
     resolveCreate({
@@ -8927,6 +8940,7 @@ describe("NewChatLandingScreen", () => {
     // capability; agent_sandbox does.
     renderLanding({
       managed_sandboxes_enabled: true,
+      request_managed_sandbox_host_id: true,
       sandbox_provider: "agent_sandbox",
       sandbox_provider_capabilities: { agent_sandbox: { multi_repo: true } },
     });
@@ -8957,7 +8971,7 @@ describe("NewChatLandingScreen", () => {
     // in parallel. host_id/git stay absent (422 otherwise).
     expect(body.workspaces).toEqual(["https://github.com/org/api", "https://github.com/org/web"]);
     expect(body.host_type).toBe("managed");
-    expect("host_id" in body).toBe(false);
+    expect(body.host_id).toMatch(/^[0-9a-f]{32}$/);
     expect("git" in body).toBe(false);
   });
 
@@ -9038,8 +9052,10 @@ describe("NewChatLandingScreen", () => {
       target: { value: "start fresh" },
     });
     fireEvent.submit(screen.getByTestId("new-chat-landing-composer"));
-    await waitFor(() => expect(authenticatedFetchMock).toHaveBeenCalledTimes(1));
-    const [, init] = authenticatedFetchMock.mock.calls[0];
+    await waitFor(() =>
+      expect(authenticatedFetchMock.mock.calls.some(([url]) => url === "/v1/sessions")).toBe(true),
+    );
+    const [, init] = authenticatedFetchMock.mock.calls.find(([url]) => url === "/v1/sessions")!;
     const body = JSON.parse((init as RequestInit).body as string) as Record<string, unknown>;
     expect(body.host_type).toBe("managed");
     // No selections carried over → an empty workspaces list (empty server-created
@@ -9206,11 +9222,11 @@ describe("NewChatLandingScreen", () => {
         );
         fireEvent.pointerDown(screen.getByTestId("new-chat-landing-host-chip"), { button: 0 });
         fireEvent.click(screen.getByTestId("new-chat-landing-sandbox-option"));
-        fireEvent.click(
-          await screen.findByRole("button", { name: "Sandbox profile: Choose profile" }),
-        );
-        fireEvent.click(screen.getByText("Large workspace"));
-        await waitFor(() => expect(screen.queryByText("Loading sandbox profiles…")).toBeNull());
+        // Back on the first provider, the profile picked there is picked again.
+        expect(
+          await screen.findByRole("button", { name: "Sandbox profile: Large workspace" }),
+        ).toBeVisible();
+        await waitFor(() => expect(screen.getByTestId("new-chat-landing-submit")).toBeEnabled());
       }
       const file = new File(["build context"], "context.txt", { type: "text/plain" });
       if (attachments)
@@ -9235,6 +9251,52 @@ describe("NewChatLandingScreen", () => {
       });
     },
   );
+
+  it("opens the next composer on the profile last picked", async () => {
+    const profile = {
+      id: "large",
+      name: "Large workspace",
+      description: "For builds",
+      provider: "agent_sandbox",
+      revision: "revision-1",
+    };
+    vi.mocked(fetchSandboxProfiles).mockResolvedValue({
+      profiles: [profile, { ...profile, id: "small", name: "Small workspace" }],
+      managed_providers: ["agent_sandbox"],
+      default_profile_ids: { agent_sandbox: "small" },
+      next_cursor: null,
+    });
+    authenticatedFetchMock.mockResolvedValue(new Response(JSON.stringify({ id: "conv_profile" })));
+    const info = {
+      features: { sandbox_profiles: true },
+      managed_sandboxes_enabled: true,
+      sandbox_provider: "agent_sandbox",
+      sandbox_providers: ["agent_sandbox"],
+    };
+    renderLanding(info);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Sandbox profile: Small workspace" }),
+    );
+    fireEvent.click(screen.getByText("Large workspace"));
+    cleanup();
+    // A fresh composer, not this one's draft.
+    resetLandingDraft();
+
+    renderLanding(info);
+    expect(
+      await screen.findByRole("button", { name: "Sandbox profile: Large workspace" }),
+    ).toBeVisible();
+    fireEvent.change(screen.getByTestId("new-chat-landing-input"), {
+      target: { value: "build it again" },
+    });
+    await waitFor(() => expect(screen.getByTestId("new-chat-landing-submit")).toBeEnabled());
+    fireEvent.submit(screen.getByTestId("new-chat-landing-composer"));
+    await waitFor(() => expect(authenticatedFetchMock).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(authenticatedFetchMock.mock.calls[0][1]?.body as string)).toMatchObject({
+      sandbox_profile_id: "large",
+      sandbox_profile_revision: "revision-1",
+    });
+  });
 
   it.each([403, 409])(
     "refreshes rejected profile choices after HTTP %s without silently reselecting",
@@ -9552,6 +9614,7 @@ describe("NewChatLandingScreen skills menu", () => {
       );
       renderLanding({
         managed_sandboxes_enabled: true,
+        request_managed_sandbox_host_id: true,
         sandbox_provider: "arclet",
         durable_initial_input: true,
       });
@@ -9586,7 +9649,7 @@ describe("NewChatLandingScreen skills menu", () => {
           },
         },
       });
-      expect(body.host_id).toBeUndefined();
+      expect(body.host_id).toMatch(/^[0-9a-f]{32}$/);
     },
   );
 
@@ -11138,7 +11201,7 @@ describe("NewChatLandingScreen custom-agent sandbox gating", () => {
       skills: [],
     };
     vi.mocked(installAgentBundle).mockResolvedValue({ id: "ag_orion", name: "orion" });
-    vi.mocked(fetchUserAgents).mockResolvedValue([orion]);
+    vi.mocked(fetchUserAgents).mockResolvedValue({ agents: [orion], truncated: false });
     mockAgents([...DEFAULT_LANDING_AGENTS, orion]);
     renderLanding({ agent_install: true });
 
@@ -11158,7 +11221,7 @@ describe("NewChatLandingScreen custom-agent sandbox gating", () => {
 
   it("says so when an imported agent is missing from the picker list", async () => {
     vi.mocked(installAgentBundle).mockResolvedValue({ id: "ag_orion", name: "orion" });
-    vi.mocked(fetchUserAgents).mockResolvedValue([]);
+    vi.mocked(fetchUserAgents).mockResolvedValue({ agents: [], truncated: false });
     // The refreshed picker list exists but lacks the import.
     const lists = vi
       .spyOn(QueryClient.prototype, "getQueriesData")
@@ -13123,6 +13186,116 @@ describe("managed sandbox inference models", () => {
     },
   );
 
+  it("offers Codex a model choice on a sandbox without an inference catalog", () => {
+    mockHosts([]);
+    renderLanding({
+      managed_sandboxes_enabled: true,
+      sandbox_provider: "agent_sandbox",
+      sandbox_provider_capabilities: { agent_sandbox: { multi_repo: true } },
+    });
+    openAgentModels("a2");
+    expect(screen.getByTestId("new-chat-landing-agent-select")).toHaveAccessibleName(/Codex/);
+    const menu = screen
+      .getByTestId("new-chat-landing-agent-models")
+      .closest<HTMLElement>('[role="menu"]')!;
+    expect(within(menu).queryByText("Models unavailable")).toBeNull();
+    expect(within(menu).queryAllByTestId(/^new-chat-landing-agent-model-/)).not.toHaveLength(0);
+  });
+
+  function sandboxModelMenu(): HTMLElement {
+    return screen
+      .getByTestId("new-chat-landing-agent-models")
+      .closest<HTMLElement>('[role="menu"]')!;
+  }
+
+  it.each([
+    ["Codex", "a2"],
+    ["Devin", "a3"],
+    ["Pi", "a4"],
+  ])(
+    "launches %s with the harness default from a sandbox without inference config",
+    async (name, agentId) => {
+      mockHosts([]);
+      mockAgents([
+        ...DEFAULT_LANDING_AGENTS,
+        testAgent("a3", "devin-native-ui", { display_name: "Devin", harness: "devin-native" }),
+        testAgent("a4", "pi-native-ui", { display_name: "Pi", harness: "pi-native" }),
+      ]);
+      authenticatedFetchMock.mockResolvedValue({
+        ok: true,
+        json: async () => ({ id: "conv_new" }),
+      } as Response);
+      renderLanding({
+        managed_sandboxes_enabled: true,
+        sandbox_provider: "agent_sandbox",
+        sandbox_provider_capabilities: { agent_sandbox: { multi_repo: true } },
+      });
+      openAgentModels(agentId);
+      expect(screen.getByTestId("new-chat-landing-agent-select")).toHaveAccessibleName(
+        new RegExp(name),
+      );
+      const menu = sandboxModelMenu();
+      expect(within(menu).queryByText("Models unavailable")).toBeNull();
+      const modelRows = within(menu)
+        .queryAllByTestId(/^new-chat-landing-agent-model-/)
+        .filter((row) => row.getAttribute("role") === "menuitemcheckbox");
+      expect(modelRows.map((row) => row.dataset.testid)).toEqual([
+        "new-chat-landing-agent-model-default",
+      ]);
+      expect(modelRows[0]).toHaveAttribute("aria-checked", "true");
+      closeMenu();
+      const { body } = await submitAndReadBody();
+      expect(body.host_type).toBe("managed");
+      expect(body.model_override).toBeUndefined();
+    },
+  );
+
+  it("offers the harness default when inference discovery reports the harness unconfigured", async () => {
+    mockHosts([]);
+    authenticatedFetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: "conv_new" }),
+    } as Response);
+    renderConfiguredSandbox({ managed_sandboxes_enabled: true, sandbox_provider: "agent_sandbox" });
+    openAgentModels("a2");
+    expect(useSandboxModelOptions).toHaveBeenLastCalledWith(
+      "agent_sandbox",
+      "codex-native",
+      "a2",
+      null,
+      true,
+    );
+    const menu = sandboxModelMenu();
+    expect(within(menu).queryByText("Models unavailable")).toBeNull();
+    expect(screen.getByTestId("new-chat-landing-agent-model-default")).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    closeMenu();
+    const { body } = await submitAndReadBody();
+    expect(body.host_type).toBe("managed");
+    expect(body.model_override).toBeUndefined();
+    expect(body.inference_configuration_revision).toBeUndefined();
+  });
+
+  it("offers a sandbox the harness default only once server capabilities resolve", () => {
+    mockHosts([]);
+    const { rerenderWith } = renderLanding("loading");
+    expect(screen.queryByTestId("new-chat-landing-agent-select")).toBeNull();
+    rerenderWith({
+      managed_sandboxes_enabled: true,
+      sandbox_provider: "agent_sandbox",
+      sandbox_provider_capabilities: { agent_sandbox: { multi_repo: true } },
+    });
+    openAgentModels("a2");
+    const menu = sandboxModelMenu();
+    expect(within(menu).queryByText("Models unavailable")).toBeNull();
+    expect(within(menu).getByTestId("new-chat-landing-agent-model-default")).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+  });
+
   it("does not preview inference for an ordinary host on an opted-in server", () => {
     preview(catalog, new Error("Gateway unavailable"));
     mockHosts([host("online")]);
@@ -13346,6 +13519,7 @@ describe("managed sandbox gateway preview", () => {
   function renderGatewaySandbox() {
     return renderLanding({
       managed_sandboxes_enabled: true,
+      request_managed_sandbox_host_id: true,
       sandbox_provider: "arclet",
       sandbox_provider_capabilities: { arclet: { default_models: true } },
     });
@@ -13405,7 +13579,7 @@ describe("managed sandbox gateway preview", () => {
       model_override: astra.id,
       reasoning_effort: "max",
     });
-    expect(body.host_id).toBeUndefined();
+    expect(body.host_id).toMatch(/^[0-9a-f]{32}$/);
     expect(body.inference_configuration_revision).toBeUndefined();
     expect(useSandboxModelOptions).toHaveBeenLastCalledWith(
       "arclet",

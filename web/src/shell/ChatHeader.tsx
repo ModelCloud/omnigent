@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { isIndentedSibling } from "@/lib/sessionFamilies";
 import {
   ArrowLeftIcon,
@@ -8,6 +9,7 @@ import {
   GitCompareIcon,
   GitForkIcon,
   GitPullRequestIcon,
+  ListChecksIcon,
   InfoIcon,
   ListIcon,
   Maximize2Icon,
@@ -112,6 +114,12 @@ interface MobileSessionMenuProps {
   githubPanelOpen: boolean;
   /** Open the mobile Pull Requests drawer. */
   onOpenGithub: () => void;
+  /** True while the mobile Tasks drawer is open. */
+  tasksPanelOpen: boolean;
+  /** Whether the session has a Tasks tab. */
+  showTasks: boolean;
+  /** Open the mobile Tasks drawer. */
+  onOpenTasks: () => void;
   /** True while the mobile Content search drawer is open. */
   contentSearchPanelOpen: boolean;
   /** Whether workspace content search is available for this session. */
@@ -134,6 +142,8 @@ interface MobileSessionMenuProps {
  * stays in one place.
  */
 interface ChatHeaderProps {
+  /** Session cost control from the shell, or nothing when the overview is off. */
+  sessionOverviewControl?: ReactNode;
   /** Whether the left sidebar is open (hides the open-sidebar button). */
   sidebarOpen: boolean;
   /** Open the left sidebar. */
@@ -338,6 +348,7 @@ function PendingHeaderActions({ isMobile }: { isMobile: boolean }) {
  * All state lives in AppShell — this is a pure presentational component.
  */
 export function ChatHeader({
+  sessionOverviewControl,
   sidebarOpen,
   onOpenSidebar,
   settingsMode = false,
@@ -424,6 +435,7 @@ export function ChatHeader({
     !mobileMenu.subagentsPanelOpen &&
     !mobileMenu.shellsPanelOpen &&
     !mobileMenu.githubPanelOpen &&
+    !mobileMenu.tasksPanelOpen &&
     !mobileMenu.contentSearchPanelOpen &&
     !mobileMenu.sideChatsPanelOpen &&
     (hasRailContent || mobileMenu.debugMode || thinkingItem) ? (
@@ -493,6 +505,16 @@ export function ChatHeader({
               : mobileMenu.agentCount}
           </span>
         </DropdownMenuItem>
+        {mobileMenu.showTasks && (
+          <DropdownMenuItem
+            onSelect={mobileMenu.onOpenTasks}
+            className="mobile-touch-target gap-2.5 px-2.5 py-2 text-ui"
+            data-testid="mobile-tasks-action"
+          >
+            <ListChecksIcon className="size-4" />
+            Tasks
+          </DropdownMenuItem>
+        )}
         {mobileMenu.showSideChats && (
           <DropdownMenuItem
             onSelect={mobileMenu.onOpenSideChats}
@@ -608,6 +630,8 @@ export function ChatHeader({
         // Mobile keeps only the individual glass button surfaces.
         "chat-header absolute inset-x-0 top-0 z-30 flex h-[76px] md:h-12 items-center justify-between px-4 py-4 md:py-3 md:right-[var(--workspace-panel-offset,0px)]",
         conversationId && !isMobile && "session-header-glass",
+        // Pages scroll under the header without a background, so only its controls take clicks.
+        !conversationId && "pointer-events-none *:pointer-events-auto",
         settingsMode && "settings-mobile-header",
       )}
     >
@@ -686,6 +710,7 @@ export function ChatHeader({
         {/* Desktop (md+) action buttons. On mobile these collapse into
             the three-dot "Session actions" menu below. Fork is also
             available from the session menus and assistant messages. */}
+        {!pending && conversationId && sessionOverviewControl}
         {pending && <PendingHeaderActions isMobile={isMobile} />}
         {/* Agent info: tools & policies for the bound agent. Desktop-only
             popover; self-hides when the agent has neither configured. */}

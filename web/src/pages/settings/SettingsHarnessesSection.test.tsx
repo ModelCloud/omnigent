@@ -15,9 +15,15 @@ import type { HarnessInventory, HostMcpServer } from "@/hooks/useHarnessInventor
 import { toast } from "sonner";
 import { ApiError } from "@/lib/sessionsApi";
 import type { HarnessStartup, Host } from "@/hooks/useHosts";
+import { NATIVE_CODING_AGENTS } from "@/lib/nativeCodingAgents";
 import { SettingsHarnessesSection } from "./SettingsHarnessesSection";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+
+let curatedOut: ReadonlySet<string> = new Set();
+vi.mock("@/hooks/useCuratedOutHarnesses", () => ({
+  useCuratedOutHarnesses: () => curatedOut,
+}));
 
 const setEnabled = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/mcpServerEnabledApi", () => ({ setMcpServerEnabled: setEnabled }));
@@ -279,9 +285,30 @@ afterEach(() => {
   hostsPending = false;
   startupData = STARTUP;
   startupError = null;
+  curatedOut = new Set();
 });
 
 describe("Harnesses grid", () => {
+  it("leaves out the harnesses the deployment curated out, even by direct link", () => {
+    hosts = [ONLINE];
+    curatedOut = new Set(["codex-native"]);
+    renderHarnesses("codex-native");
+
+    // A link to a curated-out harness lands on the grid, like an unknown one.
+    expect(screen.getByRole("heading", { name: "Harnesses" })).toBeInTheDocument();
+    expect(card("claude-native")).toBeInTheDocument();
+    expect(screen.queryByTestId("harness-card-codex-native")).toBeNull();
+    expect(startupCalls).not.toHaveBeenCalledWith("h1", "codex-native");
+  });
+
+  it("says so when the deployment offers no harness", () => {
+    hosts = [ONLINE];
+    curatedOut = new Set(NATIVE_CODING_AGENTS.map((spec) => spec.harness));
+    renderHarnesses();
+
+    expect(screen.getByText("This server offers no harnesses to set up.")).toBeInTheDocument();
+  });
+
   it("requests accounts only for a selected capable host while setup is enabled", () => {
     hosts = [{ ...ONLINE, harness_accounts_supported: true }];
     renderHarnesses();
@@ -398,12 +425,13 @@ describe("Harnesses grid", () => {
     },
   );
 
-  it("does not offer one-click install for a not-installed Cursor harness", () => {
+  it("offers the same Set-up action for a not-installed Cursor harness", () => {
     hosts = [{ ...ONLINE, configured_harnesses: { "cursor-native": "binary-missing" } }];
     renderHarnesses();
 
-    expect(screen.queryByTestId("harness-action-cursor-native")).toBeNull();
-    expect(screen.getByTestId("harness-settings-cursor-native")).toBeTruthy();
+    expect(screen.queryByTestId("harness-settings-cursor-native")).toBeNull();
+    fireEvent.click(screen.getByTestId("harness-action-cursor-native"));
+    expect(screen.getByTestId("fix-dialog")).toHaveAttribute("data-mode", "install");
   });
 
   it("uses the existing inventory label instead of guessing a personal subscription", () => {

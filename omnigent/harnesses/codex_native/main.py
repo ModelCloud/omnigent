@@ -816,7 +816,7 @@ def _run_with_remote_server(
     # headers, so it rides the header (emitted only on a host-sharded deployment).
     host_id = load_or_create_host_identity().host_id
     headers = _remote_headers(server_url=base_url, host_id=host_id)
-    attach_auth = _server_auth(server_url=base_url, session_id=None)
+    attach_auth = _server_auth(server_url=base_url)
     try:
         resolved_session_id = _resolve_session_id_for_resume(
             base_url=base_url,
@@ -2186,6 +2186,8 @@ def _codex_resume_compaction_covers_history(
 async def _fetch_session_items_for_codex_resume(
     client: httpx.AsyncClient,
     session_id: str,
+    *,
+    through_item_id: str | None = None,
 ) -> list[_JsonObject]:
     """
     Fetch the committed resume window, returning chronological items.
@@ -2196,6 +2198,8 @@ async def _fetch_session_items_for_codex_resume(
 
     :param client: HTTP client pointed at the Omnigent server.
     :param session_id: Omnigent conversation id, e.g. ``"conv_abc123"``.
+    :param through_item_id: For a side chat, read the saved parent prefix
+        from the start through this item, even if the parent later compacted.
     :returns: Flat API item dicts from
         ``GET /v1/sessions/{id}/items``.
     :raises _CodexResumeHistoryUnavailableError: If transport or server errors,
@@ -2213,7 +2217,10 @@ async def _fetch_session_items_for_codex_resume(
     started = time.monotonic()
     pages = 0
     while True:
-        params: dict[str, str | int] = {"limit": 1000, "order": "desc"}
+        params: dict[str, str | int] = {
+            "limit": 1000,
+            "order": "asc" if through_item_id is not None else "desc",
+        }
         if after is not None:
             params["after"] = after
         for attempt in range(1, _CODEX_HISTORY_FETCH_ATTEMPTS + 1):
@@ -2271,6 +2278,11 @@ async def _fetch_session_items_for_codex_resume(
                     f"History fetch for {session_id!r} returned a non-object "
                     f"item at index {index}."
                 )
+            if through_item_id is not None:
+                items.append(item)
+                if item.get("id") == through_item_id:
+                    return items
+                continue
             response_id = _session_item_response_id(item)
             if response_id is not None:
                 if _is_interrupted_assistant_session_item(item):
@@ -2308,7 +2320,8 @@ async def _fetch_session_items_for_codex_resume(
                 not payload.get("has_more"),
                 time.monotonic() - started,
             )
-            items.reverse()
+            if through_item_id is None:
+                items.reverse()
             return items
         last_id = payload.get("last_id")
         if not isinstance(last_id, str) or not last_id:
@@ -2391,7 +2404,13 @@ def _codex_rollout_records_from_session_items(
         interrupted_response_ids=interrupted_response_ids,
     )
     items = _codex_items_with_outputs_in_call_order(
-        [item for item in items if _session_item_response_id(item) not in interrupted_response_ids]
+        _codex_items_with_outputs_after_their_calls(
+            [
+                item
+                for item in items
+                if _session_item_response_id(item) not in interrupted_response_ids
+            ]
+        )
     )
     for index, item in enumerate(items):
         item_call_id = item.get("call_id")
@@ -2518,6 +2537,72 @@ def _codex_rollout_records_from_session_items(
         if event_msg is not None:
             records.append(event_msg)
     return records
+
+
+def _codex_items_with_outputs_after_their_calls(
+    items: list[_JsonObject],
+) -> list[_JsonObject]:
+    """
+    Move tool outputs stored after later content back up to their calls.
+
+    The forwarder persists a tool output when the tool completes, so a
+    long-running command's output can be stored after assistant messages and
+    other tool exchanges. Providers that require each call's result before the
+    next message or tool exchange (e.g. Kimi) reject that history. When a
+    content item or a new tool exchange starts, emit the stored outputs of
+    calls still waiting for one. Outputs never move across a compaction
+    snapshot.
+
+    :param items: Flat Omnigent item dicts in chronological order.
+    :returns: Items with each displaced output moved to the end of its call's
+        tool exchange.
+    """
+    first_output_positions: dict[tuple[int, str], int] = {}
+    segments: list[int] = []
+    segment = 0
+    for position, item in enumerate(items):
+        if item.get("type") == "compaction":
+            segment += 1
+        segments.append(segment)
+        call_id = item.get("call_id")
+        if item.get("type") == "function_call_output" and isinstance(call_id, str):
+            first_output_positions.setdefault((segment, call_id), position)
+    ordered: list[_JsonObject] = []
+    moved_positions: set[int] = set()
+    waiting_call_ids: list[str] = []
+    exchange_has_output = False
+
+    def close_exchange(position: int) -> None:
+        nonlocal exchange_has_output
+        for waiting_call_id in list(waiting_call_ids):
+            output_position = first_output_positions.get((segments[position], waiting_call_id))
+            if output_position is not None and output_position > position:
+                ordered.append(items[output_position])
+                moved_positions.add(output_position)
+                waiting_call_ids.remove(waiting_call_id)
+        exchange_has_output = False
+
+    for position, item in enumerate(items):
+        item_type = item.get("type")
+        call_id = item.get("call_id")
+        if item_type == "function_call_output":
+            if position in moved_positions:
+                continue
+            if isinstance(call_id, str) and call_id in waiting_call_ids:
+                waiting_call_ids.remove(call_id)
+            exchange_has_output = True
+        elif item_type == "function_call":
+            if exchange_has_output:
+                close_exchange(position)
+            if isinstance(call_id, str):
+                waiting_call_ids.append(call_id)
+        elif item_type == "compaction":
+            # Replay carries unfinished calls into the snapshot until their outputs arrive.
+            exchange_has_output = False
+        elif item_type not in NON_CONTENT_ITEM_TYPES:
+            close_exchange(position)
+        ordered.append(item)
+    return ordered
 
 
 def _codex_items_with_outputs_in_call_order(

@@ -29,6 +29,8 @@ import {
 } from "@/lib/projectFolderPaginationPreferences";
 import { readSessionWorkspaceState, writeSessionWorkspaceState } from "@/lib/sessionWorkspaceState";
 import * as host from "@/lib/host";
+import * as adminView from "@/lib/adminView";
+import { SERVER_INFO_OFFLINE_FALLBACK } from "@/lib/bootCapabilities";
 import { UI_FONT_SIZE_MOBILE_QUERY } from "@/lib/uiFontPreferences";
 import {
   readTerminalClipboardPreference,
@@ -53,11 +55,16 @@ const mocks = vi.hoisted(() => ({
   // single_user: explicit single-user marker; false for accounts/OIDC/
   // multi-user-header. Gates the settings-route single-user redirect.
   singleUser: false,
+  adminViewSupported: true as boolean | undefined,
+  bootFallback: false,
   sessionTitleInstructions: false,
   nestedAgents: false,
+  advisorAvailable: false,
+  authenticatedFetch: vi.fn(),
   // Identity from the mode-agnostic `/v1/me` probe (resolveIdentity returns
   // the id, getCurrentIsAdmin the flag). null → unauthenticated.
   me: { id: "alice", is_admin: false } as { id: string; is_admin: boolean } | null,
+  effectiveAdmin: undefined as boolean | undefined,
   conversations: [] as Conversation[],
   conversationQuery: vi.fn(),
   // Optional multi-page dataset (array of per-page row arrays) for pagination
@@ -79,14 +86,19 @@ vi.mock("next-themes", () => ({
   }),
 }));
 vi.mock("@/lib/CapabilitiesContext", () => ({
-  useServerInfo: () => ({
-    accounts_enabled: mocks.accountsEnabled,
-    login_url: mocks.loginUrl,
-    single_user: mocks.singleUser,
-    sibling_sessions: mocks.nestedAgents,
-    enabled_connections: mocks.enabledConnections,
-    session_title_instructions: mocks.sessionTitleInstructions,
-  }),
+  useServerInfo: () =>
+    mocks.bootFallback
+      ? SERVER_INFO_OFFLINE_FALLBACK
+      : {
+          accounts_enabled: mocks.accountsEnabled,
+          login_url: mocks.loginUrl,
+          single_user: mocks.singleUser,
+          admin_view: mocks.adminViewSupported,
+          sibling_sessions: mocks.nestedAgents,
+          enabled_connections: mocks.enabledConnections,
+          session_title_instructions: mocks.sessionTitleInstructions,
+          proactive_agent_available: mocks.advisorAvailable,
+        },
 }));
 vi.mock("@/components/SessionTitleInstructionsControl", () => ({
   SessionTitleInstructionsControl: () => <div data-testid="mock-session-title-instructions" />,
@@ -99,8 +111,10 @@ vi.mock("@/lib/accountsApi", () => ({
   changePassword: vi.fn(),
 }));
 vi.mock("@/lib/identity", () => ({
+  authenticatedFetch: (...args: unknown[]) => mocks.authenticatedFetch(...args),
   resolveIdentity: () => Promise.resolve(mocks.me?.id ?? null),
-  getCurrentIsAdmin: () => mocks.me?.is_admin ?? false,
+  getCurrentIsAdmin: () => mocks.effectiveAdmin ?? mocks.me?.is_admin ?? false,
+  getCurrentAdminEligibility: () => mocks.me?.is_admin ?? false,
   getCurrentUserId: () => mocks.me?.id ?? null,
   subscribeIdentity: () => () => {},
 }));
@@ -280,12 +294,17 @@ beforeEach(() => {
   mocks.theme = "system";
   mocks.isEmbedded = false;
   mocks.accountsEnabled = true;
+  mocks.adminViewSupported = true;
+  mocks.bootFallback = false;
   mocks.sessionTitleInstructions = false;
   mocks.nestedAgents = false;
+  mocks.advisorAvailable = false;
+  mocks.authenticatedFetch.mockReset();
   mocks.importSessionsPanel.mockClear();
   mocks.enabledConnections = [];
   mocks.loginUrl = "/login";
   mocks.me = { id: "alice", is_admin: false };
+  mocks.effectiveAdmin = undefined;
   mocks.conversations = [];
   mocks.pages = undefined;
   mocks.projectNames = [];
@@ -316,6 +335,34 @@ describe("Import sessions", () => {
     expect(screen.getByRole("heading", { name: "Import from a machine" })).toBeTruthy();
     expect(mocks.importSessionsPanel).toHaveBeenCalled();
     expect(screen.queryByRole("heading", { name: "Harness imports" })).toBeNull();
+  });
+});
+
+describe("Omni Advisor", () => {
+  it("shows a settings load failure with a retry instead of dropping the switch", async () => {
+    mocks.advisorAvailable = true;
+    mocks.authenticatedFetch.mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          workspace_enabled: true,
+          user_enabled: true,
+          enabled: true,
+          can_manage_workspace: false,
+        }),
+        { status: 200 },
+      ),
+    );
+    renderPage();
+
+    const group = await screen.findByTestId("settings-group-proactive-agent");
+    expect(await within(group).findByRole("alert")).toHaveTextContent(
+      "Couldn’t load Omni Advisor settings.",
+    );
+    expect(within(group).queryByRole("switch")).toBeNull();
+
+    fireEvent.click(within(group).getByRole("button", { name: "Retry" }));
+    expect(await within(group).findByRole("switch", { name: "Omni Advisor" })).toBeChecked();
+    expect(mocks.authenticatedFetch).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -374,6 +421,61 @@ function installUpdateBridge(config: UpdateConfig = DEFAULT_UPDATE_CONFIG) {
 }
 
 describe("SettingsPage", () => {
+  it.each([
+    { supported: false, enabled: true, bootFallback: false },
+    { supported: false, enabled: false, bootFallback: false },
+    { supported: undefined, enabled: true, bootFallback: false },
+    { supported: undefined, enabled: false, bootFallback: true },
+  ])(
+    "hides admin view with support=$supported, preference=$enabled, boot=$bootFallback",
+    ({ supported, enabled, bootFallback }) => {
+      mocks.me = { id: "admin", is_admin: true };
+      mocks.adminViewSupported = supported;
+      mocks.bootFallback = bootFallback;
+      if (!enabled) document.cookie = "omnigent_admin_view=off; Path=/";
+      try {
+        renderPage("/settings/general");
+        expect(screen.queryByRole("switch", { name: "Admin view" })).toBeNull();
+      } finally {
+        document.cookie = "omnigent_admin_view=; Max-Age=0; Path=/";
+      }
+    },
+  );
+
+  it("hides admin view in a workspace while on", () => {
+    mocks.me = { id: "admin", is_admin: true };
+    vi.spyOn(host, "isDatabricksWorkspace").mockReturnValue(true);
+    renderPage("/settings/general");
+    expect(screen.queryByRole("switch", { name: "Admin view" })).toBeNull();
+  });
+
+  it.each([
+    { workspace: false, supported: true, enabled: true },
+    { workspace: false, supported: true, enabled: false },
+    { workspace: true, supported: true, enabled: false },
+    { workspace: false, supported: undefined, enabled: false },
+  ])(
+    "changes admin view from $enabled (workspace=$workspace, support=$supported)",
+    ({ workspace, supported, enabled }) => {
+      mocks.me = { id: "admin", is_admin: true };
+      mocks.effectiveAdmin = enabled;
+      mocks.adminViewSupported = supported;
+      mocks.singleUser = false;
+      vi.spyOn(host, "isDatabricksWorkspace").mockReturnValue(workspace);
+      if (!enabled) document.cookie = "omnigent_admin_view=off; Path=/";
+      const update = vi.spyOn(adminView, "setAdminViewEnabled").mockImplementation(() => {});
+      try {
+        renderPage("/settings/general");
+        const control = screen.getByRole("switch", { name: "Admin view" });
+        expect(control).toHaveAttribute("aria-checked", String(enabled));
+        fireEvent.click(control);
+        expect(update).toHaveBeenCalledWith(!enabled);
+      } finally {
+        document.cookie = "omnigent_admin_view=; Max-Age=0; Path=/";
+      }
+    },
+  );
+
   beforeEach(() => {
     localStorage.removeItem(BACKGROUND_SESSION_TITLES_STORAGE_KEY);
     localStorage.removeItem(OPEN_SUBAGENTS_IN_PANEL_STORAGE_KEY);
@@ -383,6 +485,7 @@ describe("SettingsPage", () => {
     renderPage("/settings/general");
 
     expect(screen.getByText("Configure general Omnigent behavior.")).toHaveClass("max-md:hidden");
+    expect(screen.queryByRole("switch", { name: "Admin view" })).toBeNull();
 
     for (const testId of [
       "settings-group-composer",
@@ -769,8 +872,8 @@ describe("SettingsPage", () => {
 
     const group = screen.getByRole("radiogroup", { name: "Default Workspace tab" });
     const options = within(group).getAllByRole("radio");
-    expect(options).toHaveLength(4);
-    ["Files", "Changes", "Pull Requests", "Agents"].forEach((label, index) => {
+    expect(options).toHaveLength(5);
+    ["Files", "Changes", "Pull Requests", "Agents", "Tasks"].forEach((label, index) => {
       expect(options[index]).toHaveAccessibleName(label);
     });
     expect(screen.getByTestId("workspace-tab-default-files")).toHaveAttribute(
@@ -786,7 +889,7 @@ describe("SettingsPage", () => {
     );
     expect(
       screen.getByRole("img", {
-        name: "Sidebar preview: Agents, Files, Changes, Pull Requests pinned.",
+        name: "Sidebar preview: Agents, Files, Changes, Pull Requests, Tasks pinned.",
       }),
     ).toBeInTheDocument();
     expect(localStorage.getItem("omnigent:default-workspace-tab")).toBe("subagents");
@@ -802,7 +905,7 @@ describe("SettingsPage", () => {
     );
     expect(
       screen.getByRole("img", {
-        name: "Sidebar preview: Changes, Files, Pull Requests, Agents pinned.",
+        name: "Sidebar preview: Changes, Files, Pull Requests, Agents, Tasks pinned.",
       }),
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Pin Changes" }));
@@ -830,7 +933,7 @@ describe("SettingsPage", () => {
       selectedBrowserId: "one",
     });
     const page = renderPage("/settings/appearance");
-    for (const label of ["Files", "Changes", "Pull Requests", "Agents"]) {
+    for (const label of ["Files", "Changes", "Pull Requests", "Tasks", "Agents"]) {
       const toggle = screen.getByRole("button", { name: `Pin ${label}` });
       expect(toggle).toHaveAttribute("aria-pressed", "true");
       fireEvent.click(toggle);

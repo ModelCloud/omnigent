@@ -370,6 +370,7 @@ _BUILTIN_CAPABILITIES: dict[str, HarnessCapabilities] = {
         shell_tool_name="Bash",
         shell_tool_prompt=_BASH_PROMPT,
         instruction_delivery=_ID.AGENT_STARTUP_ADDITIVE,
+        workspace_file_mentions=True,
     ),
     "codex-native": _C(
         _IM.NATIVE_TUI,
@@ -385,6 +386,7 @@ _BUILTIN_CAPABILITIES: dict[str, HarnessCapabilities] = {
         shell_tool_name="shell",
         shell_tool_prompt=_SHELL_PROMPT,
         instruction_delivery=_ID.AGENT_STARTUP_ADDITIVE,
+        workspace_file_mentions=True,
     ),
     # streaming is declared True unless a live bench run proves a harness does
     # NOT emit token-level deltas. Only kiro-native is so proven (0 deltas over
@@ -406,6 +408,7 @@ _BUILTIN_CAPABILITIES: dict[str, HarnessCapabilities] = {
         shell_tool_name="Bash",
         shell_tool_prompt=_BASH_PROMPT,
         instruction_delivery=_ID.AGENT_STARTUP_ADDITIVE,
+        workspace_file_mentions=True,
     ),
     # streaming=False is LIVE-VERIFIED: a bench run observed 0 text deltas.
     "cursor-native": _C(
@@ -422,6 +425,7 @@ _BUILTIN_CAPABILITIES: dict[str, HarnessCapabilities] = {
         # No shell-tool provocation: cursor-native was intentionally absent from
         # the bench's table (its tool probe is skipped), so leave shell_tool_* None.
         instruction_delivery=_ID.NOT_DELIVERED,
+        workspace_file_mentions=True,
     ),
     # kiro_native_permissions.py: "TUI ACP recorder -> web elicitation".
     # streaming=False is LIVE-VERIFIED: a full SSE capture recorded 0 text
@@ -440,6 +444,7 @@ _BUILTIN_CAPABILITIES: dict[str, HarnessCapabilities] = {
         shell_tool_name="shell",
         shell_tool_prompt=_SHELL_PROMPT,
         instruction_delivery=_ID.NOT_DELIVERED,
+        workspace_file_mentions=True,
     ),
     "antigravity-native": _C(
         _IM.NATIVE_TUI,
@@ -455,6 +460,7 @@ _BUILTIN_CAPABILITIES: dict[str, HarnessCapabilities] = {
         shell_tool_name="run_command",
         shell_tool_prompt=_SHELL_PROMPT,
         instruction_delivery=_ID.NOT_DELIVERED,
+        workspace_file_mentions=True,
     ),
     "goose-native": _C(
         _IM.NATIVE_TUI,
@@ -470,6 +476,7 @@ _BUILTIN_CAPABILITIES: dict[str, HarnessCapabilities] = {
         shell_tool_name="developer__shell",
         shell_tool_prompt=_SHELL_PROMPT,
         instruction_delivery=_ID.NOT_DELIVERED,
+        workspace_file_mentions=True,
     ),
     # streaming=False is LIVE-VERIFIED: a bench run observed 0 text deltas.
     "qwen-native": _C(
@@ -486,6 +493,7 @@ _BUILTIN_CAPABILITIES: dict[str, HarnessCapabilities] = {
         shell_tool_name="run_shell_command",
         shell_tool_prompt=_SHELL_PROMPT,
         instruction_delivery=_ID.NOT_DELIVERED,
+        workspace_file_mentions=True,
     ),
     "kimi-native": _C(
         _IM.NATIVE_TUI,
@@ -501,6 +509,7 @@ _BUILTIN_CAPABILITIES: dict[str, HarnessCapabilities] = {
         shell_tool_name="Bash",
         shell_tool_prompt=_BASH_PROMPT,
         instruction_delivery=_ID.NOT_DELIVERED,
+        workspace_file_mentions=True,
     ),
     # OpenCode 2.x: streaming is backed by session.text.delta /
     # session.reasoning.delta events (see tests/fixtures/opencode_v2/events.ndjson).
@@ -524,6 +533,7 @@ _BUILTIN_CAPABILITIES: dict[str, HarnessCapabilities] = {
         # shell_tool_* stay None.
         # The composed prompt is written once per launch to the per-session AGENTS.md.
         instruction_delivery=_ID.COMPOSED_SESSION_SNAPSHOT,
+        workspace_file_mentions=True,
     ),
     # devin-native wraps the resident `devin` TUI. Every axis below was
     # live-verified against devin 3000.10.21:
@@ -571,6 +581,7 @@ _BUILTIN_CAPABILITIES: dict[str, HarnessCapabilities] = {
         # Windsurf rule in the workspace (Devin's only per-turn system-prompt
         # channel; it has no --append-system-prompt). See write_devin_agent_rule.
         instruction_delivery=_ID.AGENT_STARTUP_ADDITIVE,
+        workspace_file_mentions=True,
     ),
     "hermes-native": _C(
         _IM.NATIVE_TUI,
@@ -586,6 +597,7 @@ _BUILTIN_CAPABILITIES: dict[str, HarnessCapabilities] = {
         shell_tool_name="terminal",
         shell_tool_prompt=_SHELL_PROMPT,
         instruction_delivery=_ID.NOT_DELIVERED,
+        workspace_file_mentions=True,
     ),
     # SDK / subprocess harnesses (run the vendor model directly). The first four
     # are bench-verified interrupt=streaming=True.
@@ -600,6 +612,7 @@ _BUILTIN_CAPABILITIES: dict[str, HarnessCapabilities] = {
         interrupt=True,
         streaming=True,
         instruction_delivery=_ID.COMPOSED_SESSION_SNAPSHOT,
+        workspace_file_mentions=True,
     ),
     "pi": _C(
         _IM.CLI_SUBPROCESS,
