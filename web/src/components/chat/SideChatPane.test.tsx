@@ -141,6 +141,89 @@ describe("undelivered startup messages", () => {
   });
 });
 
+describe("editing a sent side-chat message", () => {
+  function seedSentMessage(text = "Why did this build fail?") {
+    conversationRegistry.acquire(childId).setState({
+      sessionStatus: "idle",
+      blocks: itemsToBlocks([
+        {
+          id: "sent",
+          response_id: "turn",
+          type: "message",
+          role: "user",
+          status: "completed",
+          content: [
+            { type: "input_file", file_id: "file_log", filename: "build.log" },
+            { type: "input_text", text },
+          ],
+        },
+      ]),
+    });
+  }
+
+  it("copies the message's text and @-mention into this side chat's composer", async () => {
+    // The side-chat composer has no mention picker, so the mention returns as the
+    // marker it was sent with.
+    const withMention = "[Attached: src/app.ts]\n\nWhy did this build fail?";
+    seedSentMessage(withMention);
+    useChatStore.setState({
+      sideChatComposers: {
+        [childId]: { text: "", files: [], settings: { modelOverride: "m" } },
+      },
+    });
+    renderPane(<SideChatPane childId={childId} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit and resend" }));
+
+    const input = screen.getByTestId("side-chat-input");
+    await waitFor(() => expect(input).toHaveValue(withMention));
+    const composer = useChatStore.getState().sideChatComposers[childId];
+    expect(composer?.files).toEqual([]);
+    expect(composer?.settings).toEqual({ modelOverride: "m" });
+    expect(input).toHaveFocus();
+    // The sent message stays in the side chat's transcript.
+    expect(screen.getByText("Why did this build fail?", { selector: "p, p *" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Send side question" }));
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    expect(send.mock.calls[0]![0]).toBe(withMention);
+  });
+
+  it("asks before replacing the side chat's draft", async () => {
+    seedSentMessage();
+    const draft = { text: "", files: [], quotes: [{ id: "q", before: "", text: "quoted" }] };
+    useChatStore.setState({ sideChatComposers: { [childId]: draft } });
+    renderPane(<SideChatPane childId={childId} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit and resend" }));
+    fireEvent.click(
+      within(await screen.findByRole("dialog", { name: "Replace your draft?" })).getByRole(
+        "button",
+        { name: "Keep draft" },
+      ),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(useChatStore.getState().sideChatComposers[childId]?.quotes).toEqual(draft.quotes);
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit and resend" }));
+    const dialog = await screen.findByRole("dialog", { name: "Replace your draft?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Replace draft" }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("side-chat-input")).toHaveValue("Why did this build fail?"),
+    );
+    expect(useChatStore.getState().sideChatComposers[childId]).toMatchObject({ quotes: [] });
+    await waitFor(() => expect(screen.getByTestId("side-chat-input")).toHaveFocus());
+  });
+
+  it("is not offered in a read-only side chat", () => {
+    seedSentMessage();
+    renderPane(<SideChatPane childId={childId} readOnly />);
+    expect(screen.getByText("Why did this build fail?")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Edit and resend" })).toBeNull();
+  });
+});
+
 describe("side-chat working indicator", () => {
   it("shows the full session history and live state without exposing a read-only composer", () => {
     const entry = conversationRegistry.acquire(childId);
@@ -508,6 +591,30 @@ describe("side chat opened from a + button", () => {
     act(() => conversationRegistry.acquire(childId).setState({ boundAgentId: "agent_side" }));
     expect(screen.getByTestId("side-chat-input")).toBeEnabled();
     expect(screen.getByTestId("other-field")).toHaveFocus();
+  });
+
+  it("continues a restored draft from its end when the input takes focus", () => {
+    conversationRegistry.acquire(childId).setState({ boundAgentId: null, sessionStatus: "idle" });
+    const draft = "Add a step that opens the upgrade PRs";
+    useChatStore.setState({
+      sideChatComposers: { [childId]: { text: draft, files: [], autoFocus: true } },
+    });
+    renderPane(<SideChatPane childId={childId} />);
+    const input = screen.getByTestId<HTMLTextAreaElement>("side-chat-input");
+    // Browsers can leave a restored value's caret before its first word.
+    input.setSelectionRange(0, 0);
+
+    act(() => conversationRegistry.acquire(childId).setState({ boundAgentId: "agent_side" }));
+
+    expect(input).toHaveFocus();
+    expect(input.selectionStart).toBe(draft.length);
+    expect(input.selectionEnd).toBe(draft.length);
+
+    // Asked again while it already has focus, the input keeps the user's caret.
+    input.setSelectionRange(3, 3);
+    act(() => useChatStore.getState().requestSideChatFocus(childId));
+    expect(input).toHaveFocus();
+    expect(input.selectionStart).toBe(3);
   });
 
   it("leaves a text input that already had focus before the pane mounted alone", () => {
@@ -1380,6 +1487,14 @@ describe("unsent composer state survives the pane moving", () => {
       expect(useChatStore.getState().sideChatComposers["other-pane"].text).toBe("keep me");
     },
   );
+
+  it("is one row tall only in a grid cell", () => {
+    const view = renderPane(<SideChatPane childId={childId} fullSession />);
+    expect(screen.getByTestId("side-chat-input")).not.toHaveAttribute("rows");
+    view.unmount();
+    renderPane(<SideChatPane childId={childId} fullSession gridComposer={{}} />);
+    expect(screen.getByTestId("side-chat-input")).toHaveAttribute("rows", "1");
+  });
 });
 
 describe("history a side chat copied from its parent", () => {
@@ -1545,9 +1660,16 @@ describe("history a side chat copied from its parent", () => {
   });
 });
 
-describe("side chat sealed by the server", () => {
-  it("is read-only once the server marks the child closed", () => {
-    mockSession.labels = { "omnigent.closed": "true" };
+describe("side chat closed by the server", () => {
+  it.each<Record<string, string>>([
+    { "omnigent.closed": "true" },
+    {
+      "omnigent.closed": "true",
+      "omnigent.wrapper": "codex-native-ui-subagent",
+      "omnigent.codex_native.agent_nickname": "Side chat",
+    },
+  ])("is read-only when closed without recovery support (%j)", (labels) => {
+    mockSession.labels = labels;
     renderPane(<SideChatPane childId={childId} />);
 
     expect(
@@ -1555,6 +1677,38 @@ describe("side chat sealed by the server", () => {
     ).toBeInTheDocument();
     expect(screen.queryByTestId("side-chat-input")).toBeNull();
     expect(sessionsApi.stopSession).not.toHaveBeenCalled();
+  });
+
+  it("sends another message to a closed Codex side chat", async () => {
+    mockSession.labels = {
+      "omnigent.closed": "true",
+      "omnigent.wrapper": "codex-native-ui-subagent",
+      "omnigent.codex_native.agent_nickname": "Side chat",
+      "omnigent.codex_native.side_chat_resume": "true",
+    };
+    conversationRegistry.acquire(childId).setState({ sessionStatus: "idle" });
+    renderPane(<SideChatPane childId={childId} />);
+
+    fireEvent.change(screen.getByTestId("side-chat-input"), { target: { value: "Continue" } });
+    fireEvent.keyDown(screen.getByTestId("side-chat-input"), { key: "Enter" });
+
+    await waitFor(() =>
+      expect(send).toHaveBeenCalledWith("Continue", "agent_side", undefined, {
+        pinnedConversationId: childId,
+      }),
+    );
+  });
+
+  it("preserves read-only access for a closed Codex side chat", () => {
+    mockSession.labels = {
+      "omnigent.closed": "true",
+      "omnigent.wrapper": "codex-native-ui-subagent",
+      "omnigent.codex_native.agent_nickname": "Side chat",
+      "omnigent.codex_native.side_chat_resume": "true",
+    };
+    renderPane(<SideChatPane childId={childId} readOnly />);
+
+    expect(screen.queryByTestId("side-chat-input")).toBeNull();
   });
 
   it("re-reads the child's labels after the opening /side send settles", async () => {

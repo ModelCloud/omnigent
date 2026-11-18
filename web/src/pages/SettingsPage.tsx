@@ -42,8 +42,10 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import { useViewerId } from "@/hooks/useViewerId";
+import { useProactiveAgentSettings } from "@/hooks/useProactiveAgentSettings";
 import {
   ArchiveRestoreIcon,
   AlertTriangleIcon,
@@ -53,8 +55,12 @@ import {
   FilesIcon,
   GitPullRequestIcon,
   KeyRoundIcon,
+  ListChecksIcon,
   Loader2Icon,
   LogOutIcon,
+  EyeIcon,
+  EyeOffIcon,
+  FoldVerticalIcon,
   MessagesSquareIcon,
   MinusIcon,
   MonitorIcon,
@@ -77,6 +83,7 @@ import { useTheme } from "next-themes";
 import { PageScroll } from "@/components/PageScroll";
 import { SettingsGroup } from "@/components/SettingsGroup";
 import { SettingsLabel } from "@/components/SettingsLabel";
+import { ProactiveAgentSettingControl } from "@/components/ProactiveAgentSettingControl";
 import { SessionTitleInstructionsControl } from "@/components/SessionTitleInstructionsControl";
 import { McpRegistryConnections } from "@/components/McpRegistry";
 import { ThemeColorPicker } from "@/components/theme/ThemeColorPicker";
@@ -86,6 +93,7 @@ import { PaletteChip, PaletteSwatchPreview } from "@/components/theme/Appearance
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { BrowserAgentToolsSettingsGroup } from "@/components/BrowserPane/agentTools/BrowserAgentToolsSettingsGroup";
 import {
   Select,
   SelectContent,
@@ -118,8 +126,15 @@ import {
   fetchDatabricksStatus,
   type DatabricksConnectionStatus,
 } from "@/lib/databricksIntegration";
-import { getCurrentIsAdmin, resolveIdentity } from "@/lib/identity";
+import {
+  getCurrentIsAdmin,
+  getCurrentAdminEligibility,
+  resolveIdentity,
+  subscribeIdentity,
+} from "@/lib/identity";
+import { isAdminViewEnabled, setAdminViewEnabled } from "@/lib/adminView";
 import { useServerInfo } from "@/lib/CapabilitiesContext";
+import { isBootFallbackInfo } from "@/lib/bootCapabilities";
 import { useOmnigentAnalytics, useOmnigentPageView } from "@/lib/analytics";
 import {
   type Conversation,
@@ -194,6 +209,12 @@ import {
   writeTranscriptViewDefault,
   type TranscriptViewDefault,
 } from "@/lib/transcriptViewPreferences";
+import {
+  DEFAULT_PEER_SESSION_MESSAGE_DISPLAY,
+  usePeerSessionMessageDisplay,
+  writePeerSessionMessageDisplay,
+  type PeerSessionMessageDisplay,
+} from "@/lib/peerSessionMessagePreferences";
 import {
   DEFAULT_FOLD_ASSISTANT_NARRATION,
   FOLD_ASSISTANT_NARRATION_STORAGE_KEY,
@@ -277,7 +298,7 @@ import {
   writeCustomTheme,
 } from "@/lib/customTheme";
 import { useHostTheme } from "@/lib/embedded";
-import { getOmnigentThemeSettingsUrl } from "@/lib/host";
+import { getOmnigentThemeSettingsUrl, isDatabricksWorkspace } from "@/lib/host";
 import {
   applyImportedSettings,
   collectSettings,
@@ -296,6 +317,7 @@ import {
   updateBridge,
 } from "@/lib/nativeBridge";
 import { readOpenLinksInApp, writeOpenLinksInApp } from "@/lib/linkOpenPreferences";
+import { PROACTIVE_AGENT_DISPLAY_NAME } from "@/lib/proactiveInbox";
 import { cn } from "@/lib/utils";
 import {
   readBackgroundSessionTitlesEnabled,
@@ -448,6 +470,16 @@ const transcriptViewCards: {
   { value: "terminal", label: "Terminal", icon: TerminalIcon },
 ];
 
+const peerSessionMessageCards: {
+  value: PeerSessionMessageDisplay;
+  label: string;
+  icon: typeof MessagesSquareIcon;
+}[] = [
+  { value: "collapse", label: "Collapse", icon: FoldVerticalIcon },
+  { value: "show", label: "Show", icon: EyeIcon },
+  { value: "hide", label: "Hide", icon: EyeOffIcon },
+];
+
 const workspacePanelCards: {
   value: WorkspacePanelDefault;
   label: string;
@@ -466,6 +498,7 @@ const workspaceTabCards: {
   { value: "changes", label: "Changes", icon: FileDiffIcon },
   { value: "github", label: "Pull Requests", icon: GitPullRequestIcon },
   { value: "subagents", label: "Agents", icon: BotIcon },
+  { value: "tasks", label: "Tasks", icon: ListChecksIcon },
 ];
 
 /** Inline icon and label for compact settings choices. */
@@ -960,6 +993,33 @@ function HideUnconfiguredHarnessesControl() {
   );
 }
 
+/** How messages other sessions send appear in a chat, e.g. a supervisor's. */
+function PeerSessionMessageDisplayControl() {
+  const value = usePeerSessionMessageDisplay();
+  const labelId = useId();
+  return (
+    <ThemeSubsection
+      labelId={labelId}
+      title="Messages from other sessions"
+      helper="Collapse or hide messages that agents in other sessions send to a chat. The agent still reads them in full."
+    >
+      <CardRadioGroup<PeerSessionMessageDisplay>
+        compact
+        labelledBy={labelId}
+        value={value}
+        onSelect={writePeerSessionMessageDisplay}
+        componentId="settings.appearance.peer_session_messages"
+        className="flex flex-wrap gap-2"
+        items={peerSessionMessageCards.map((card) => ({
+          value: card.value,
+          testId: `peer-session-messages-${card.value}`,
+          body: iconButtonBody(card.icon, card.label),
+        }))}
+      />
+    </ThemeSubsection>
+  );
+}
+
 /** Opt-in: fold other agents' progress messages the way Codex turns fold. */
 function FoldAssistantNarrationControl() {
   const enabled = useFoldAssistantNarration();
@@ -1092,6 +1152,7 @@ function AppearanceSection() {
 
     writeHideUnconfiguredHarnesses(DEFAULT_HIDE_UNCONFIGURED_HARNESSES);
     writeFoldAssistantNarration(DEFAULT_FOLD_ASSISTANT_NARRATION);
+    writePeerSessionMessageDisplay(DEFAULT_PEER_SESSION_MESSAGE_DISPLAY);
     writeProjectFolderCollapse(DEFAULT_PROJECT_FOLDER_COLLAPSE);
     writeProjectFolderPageSize(PROJECT_FOLDER_PAGE_SIZE);
     writeSessionRowQuickActions(DEFAULT_SESSION_ROW_QUICK_ACTIONS);
@@ -1199,6 +1260,9 @@ function AppearanceSection() {
             </div>
             <div className="mt-4 border-t border-border pt-4">
               <FoldAssistantNarrationControl />
+            </div>
+            <div className="mt-4 border-t border-border pt-4">
+              <PeerSessionMessageDisplayControl />
             </div>
           </SettingsGroup>
 
@@ -1966,7 +2030,54 @@ function TerminalClipboardControl() {
   );
 }
 
+function AdminViewControl() {
+  const eligible = useSyncExternalStore(subscribeIdentity, getCurrentAdminEligibility, () => false);
+  const info = useServerInfo();
+  // Failed discovery has no capability flag; keep an existing off cookie recoverable.
+  if (
+    !eligible ||
+    info === "loading" ||
+    isBootFallbackInfo(info) ||
+    info.admin_view === false ||
+    (isAdminViewEnabled() && (!info.admin_view || info.single_user || isDatabricksWorkspace()))
+  )
+    return null;
+  return (
+    <SettingsGroup title="Administration">
+      <div className="flex items-center justify-between gap-4">
+        <SettingsLabel
+          label="Admin view"
+          description="Turn off to use your normal session access."
+        />
+        <Switch
+          aria-label="Admin view"
+          checked={isAdminViewEnabled()}
+          onCheckedChange={(enabled) => {
+            try {
+              setAdminViewEnabled(enabled);
+            } catch (error) {
+              toast.error(error instanceof Error ? error.message : "Could not change admin view.");
+            }
+          }}
+          componentId="settings.general.admin_view"
+        />
+      </div>
+    </SettingsGroup>
+  );
+}
+
 /** App-wide behavior settings. */
+/** The viewer's Omni Advisor switch, where the server offers it. */
+function ProactiveAgentGroup() {
+  const { available } = useProactiveAgentSettings();
+  if (!available) return null;
+  return (
+    <SettingsGroup title={PROACTIVE_AGENT_DISPLAY_NAME} testId="settings-group-proactive-agent">
+      <ProactiveAgentSettingControl scope="me" />
+    </SettingsGroup>
+  );
+}
+
 function GeneralSection() {
   const info = useServerInfo();
   const titleInstructions = info !== "loading" && info.session_title_instructions === true;
@@ -1993,16 +2104,19 @@ function GeneralSection() {
         <SettingsGroup title="Terminal" testId="settings-group-terminal">
           <TerminalClipboardControl />
         </SettingsGroup>
+        <ProactiveAgentGroup />
         {supportsBrowser() && (
           <SettingsGroup title="Links" testId="settings-group-links">
             <OpenLinksInAppControl />
           </SettingsGroup>
         )}
+        <BrowserAgentToolsSettingsGroup />
         {supportsGlobalShortcut() && (
           <SettingsGroup title="Desktop app" testId="settings-group-desktop-app">
             <GlobalShortcutControl />
           </SettingsGroup>
         )}
+        <AdminViewControl />
       </div>
     </Section>
   );
@@ -2724,6 +2838,7 @@ function UpdatesSection() {
 
 function AccountSection() {
   const info = useServerInfo();
+  const capabilitiesLoading = info === "loading" || isBootFallbackInfo(info);
   const accountsEnabled = info !== "loading" && info.accounts_enabled;
   // Identity for display. Sourced from the mode-agnostic `/v1/me` probe so it
   // works under OIDC too (the accounts-only `/auth/me` doesn't exist there).
@@ -2740,11 +2855,12 @@ function AccountSection() {
   const [pwDone, setPwDone] = useState(false);
 
   useEffect(() => {
+    if (capabilitiesLoading) return;
     void (async () => {
       const userId = await resolveIdentity();
       setMe(userId === null ? null : { id: userId, is_admin: getCurrentIsAdmin() });
     })();
-  }, []);
+  }, [capabilitiesLoading]);
 
   const onSignOut = useCallback(() => signOutOfBrowserSession(accountsEnabled), [accountsEnabled]);
 

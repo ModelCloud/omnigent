@@ -12,6 +12,7 @@
 
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 import { useThinkingPaneStore } from "@/store/thinkingPane";
+import { firstLine } from "@/lib/toolValue";
 
 interface ReasoningViewProps {
   text: string;
@@ -25,6 +26,29 @@ interface ReasoningViewProps {
    * open the thinking pane.
    */
   sectionKey?: string;
+}
+
+// Code fences and thematic breaks carry no prose worth previewing.
+const MARKUP_ONLY_LINE_RE = /^(?:`{3,}|~{3,}|[-*_](?:\s*[-*_]){2,}$)/;
+// Leading heading, blockquote, and list markers on the preview line.
+const LEADING_BLOCK_MARKERS_RE = /^(?:#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)+/;
+// `**` only: `__` would mangle dunder names like `__init__.py`.
+const STRONG_RE = /\*\*(.+?)\*\*/g;
+const INLINE_CODE_RE = /`([^`]+)`/g;
+
+/** First prose line of a thought as plain text, e.g. `"**Planning** the fix"` -> `"Planning the fix"`. */
+function reasoningPreview(text: string): string {
+  for (const rawLine of text.split("\n")) {
+    const line = firstLine(rawLine);
+    if (line.length === 0 || MARKUP_ONLY_LINE_RE.test(line)) continue;
+    const preview = line
+      .replace(LEADING_BLOCK_MARKERS_RE, "")
+      .replace(STRONG_RE, "$1")
+      .replace(INLINE_CODE_RE, "$1")
+      .trim();
+    if (preview.length > 0) return preview;
+  }
+  return "";
 }
 
 export function ReasoningView({
@@ -47,6 +71,16 @@ export function ReasoningView({
       ? () => openPane(conversationId, sectionKey)
       : undefined;
 
+  // A settled thought previews its first line so successive thoughts are
+  // distinguishable; empty thoughts keep the "Thought for ..." fallback.
+  const preview = isStreaming ? "" : reasoningPreview(text);
+  const getThinkingMessage = preview
+    ? () => (
+        <span>
+          <strong className="font-semibold">Thinking:</strong> {preview}
+        </span>
+      )
+    : undefined;
   return (
     <Reasoning
       isStreaming={isStreaming}
@@ -54,7 +88,7 @@ export function ReasoningView({
       expandable={expandable}
       onInspect={onInspect}
     >
-      <ReasoningTrigger />
+      <ReasoningTrigger getThinkingMessage={getThinkingMessage} />
       <ReasoningContent>{text}</ReasoningContent>
     </Reasoning>
   );
