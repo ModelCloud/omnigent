@@ -454,6 +454,10 @@ def multidex_provider_config_overrides(config: MultiDexConfig) -> tuple[str, ...
             }
         if model.provider == "multidex":
             provider_config.setdefault("supports_responses_continuation", True)
+            # Lite stores the response a ``previous_response_id`` names, so a
+            # continuation may omit unchanged ``tools``. Only this provider is
+            # Lite-backed; the flag is inert without continuation.
+            provider_config.setdefault("inherits_tools_on_continuation", True)
         existing = providers.get(runtime_id)
         if existing is not None and existing != provider_config:
             raise ValueError(f"MultiDex provider {model.provider!r} has inconsistent settings")

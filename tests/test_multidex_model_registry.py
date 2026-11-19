@@ -17,6 +17,30 @@ from omnigent.harnesses.multidex_native.config import (
 )
 
 
+def test_local_provider_inherits_tools_on_continuation(tmp_path: Path) -> None:
+    """Lite keeps the response a ``previous_response_id`` names, so the
+    session config must let a continuation omit unchanged ``tools``."""
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "[model_providers.multidex]\n"
+        'base_url = "http://127.0.0.1:2120/v1"\n'
+        'experimental_bearer_token = "test-token"\n'
+        'wire_api = "responses"\n'
+        "requires_openai_auth = false\n",
+        encoding="utf-8",
+    )
+    models_path = tmp_path / "models.toml"
+    models_path.write_text(
+        '[models."DS v4.1 Flash 1017"]\nprovider = "multidex"\n', encoding="utf-8"
+    )
+    config = load_multidex_config(config_path, models_path=models_path)
+    provider = tomllib.loads(multidex_provider_config_overrides(config)[0])["model_providers"][
+        "multidex"
+    ]
+    assert provider["supports_responses_continuation"] is True
+    assert provider["inherits_tools_on_continuation"] is True
+
+
 def test_wafer_registers_one_standard_deepseek_model_with_speed(tmp_path: Path) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text(
