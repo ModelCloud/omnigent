@@ -1305,9 +1305,8 @@ async def test_session_snapshot_status_probe_is_bounded_and_backed_off(
 ) -> None:
     """A runner that never answers costs one bounded probe, then none until the backoff ends.
 
-    The tunnel transport ignores httpx timeouts, so an unanswered probe used to
-    hold every snapshot of the session until the runner spoke or its tunnel
-    dropped, and nothing was cached, so the next snapshot waited again.
+    Even without a transport response, the probe deadline triggers backoff
+    rather than holding every snapshot until the runner responds.
     """
     from omnigent.server.routes import sessions as _mod
     from omnigent.server.routes._sessions import orchestration

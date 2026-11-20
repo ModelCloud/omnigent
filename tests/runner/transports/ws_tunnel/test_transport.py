@@ -13,9 +13,12 @@ import pytest
 
 from omnigent.runner.transports.ws_tunnel.frames import (
     HelloFrame,
+    RequestCancelFrame,
+    RequestFrame,
     ResponseBodyFrame,
     ResponseEndFrame,
     ResponseHeadFrame,
+    decode_frame,
 )
 from omnigent.runner.transports.ws_tunnel.registry import TunnelRegistry
 from omnigent.runner.transports.ws_tunnel.transport import (
@@ -86,6 +89,29 @@ async def test_handle_async_request_rejects_replaced_generation() -> None:
 
 
 # ── handle_async_request: successful response ──────────
+
+
+@pytest.mark.asyncio
+async def test_read_timeout_after_response_head_notifies_runner_and_cleans_up() -> None:
+    registry = TunnelRegistry()
+    session = registry.register("r1", _NoopWS(), _hello())
+    async with (
+        httpx.AsyncClient(
+            transport=WSTunnelTransport(registry, "r1"), base_url="http://runner"
+        ) as client,
+        asyncio.timeout(2),
+    ):
+        task = asyncio.create_task(client.get("/health", timeout=0.05))
+        request = decode_frame((await session.outbound_queue.get()).data)
+        assert isinstance(request, RequestFrame)
+        registry.route_response_frame("r1", ResponseHeadFrame(id=request.id, status=200))
+        with pytest.raises(httpx.ReadTimeout, match="runner response body") as exc:
+            await task
+        assert exc.value.request.url.path == "/health"
+        cancel = decode_frame((await session.outbound_queue.get()).data)
+        assert isinstance(cancel, RequestCancelFrame)
+        assert cancel.id == request.id
+        assert not session.in_flight
 
 
 @pytest.mark.asyncio

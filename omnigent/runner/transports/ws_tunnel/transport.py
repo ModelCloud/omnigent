@@ -22,9 +22,11 @@ abort propagates as a ``ConnectionError`` from the body iterator.
 
 from __future__ import annotations
 
+import asyncio
 import re
 import uuid
 from collections.abc import AsyncIterator
+from contextlib import suppress
 
 import httpx
 
@@ -52,17 +54,30 @@ class _TunneledByteStream(httpx.AsyncByteStream):
         runner_id: str,
         req_id: str,
         state: RequestState,
+        request: httpx.Request | None = None,
+        read_timeout: float | None = None,
     ) -> None:
         self._registry = registry
         self._runner_id = runner_id
         self._req_id = req_id
         self._state = state
+        self._request = request
+        self._read_timeout = read_timeout
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
         state = self._state
         try:
             while True:
-                item = await state.body_queue.get()
+                try:
+                    async with asyncio.timeout(self._read_timeout):
+                        item = await state.body_queue.get()
+                except TimeoutError as exc:
+                    with suppress(TimeoutError):
+                        async with asyncio.timeout(self._read_timeout):
+                            await self.aclose()
+                    raise httpx.ReadTimeout(
+                        "Timed out waiting for the runner response body", request=self._request
+                    ) from exc
                 if state.aborted_with is not None:
                     raise state.aborted_with
                 if item is None:
@@ -180,9 +195,16 @@ class WSTunnelTransport(httpx.AsyncBaseTransport):
             )
             if request.method == "POST" and _SESSION_EVENTS_PATH.match(request.url.path):
                 self._registry.note_work_dispatched(self._runner_id)
-            # Block until the response head arrives (or the tunnel
-            # aborts the request).
-            head = await state.head_future
+            read_timeout = request.extensions.get("timeout", {}).get("read")
+            try:
+                async with asyncio.timeout(read_timeout):
+                    head = await state.head_future
+            except TimeoutError as exc:
+                # The runner may have started a mutation. Stop waiting without
+                # cancelling or repeating the runner's work.
+                raise httpx.ReadTimeout(
+                    "Timed out waiting for the runner response headers", request=request
+                ) from exc
         except BaseException:
             # If we failed before getting head, clean up the slot so
             # we don't leak in_flight state.
@@ -192,7 +214,9 @@ class WSTunnelTransport(httpx.AsyncBaseTransport):
         # Wrap the body queue as an httpx AsyncByteStream. The stream
         # owns close_request() — cleanup happens when the response
         # iterator finishes or the consumer's `async with` exits.
-        stream = _TunneledByteStream(self._registry, self._runner_id, req_id, state)
+        stream = _TunneledByteStream(
+            self._registry, self._runner_id, req_id, state, request, read_timeout
+        )
         return httpx.Response(
             status_code=head.status,
             headers=[(k, v) for k, v in head.headers],
