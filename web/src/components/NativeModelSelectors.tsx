@@ -85,9 +85,11 @@ export function NativeModelSelectors({
     return rank(a) - rank(b);
   });
   const provider = effectiveSelected ? providerId(effectiveSelected) : undefined;
-  const variants = [
-    ...new Set(familyRows.filter((row) => providerId(row) === provider).map(variantId)),
-  ];
+  const variants = new Map(
+    familyRows
+      .filter((row) => providerId(row) === provider)
+      .map((row) => [variantId(row), row.variantLabel] as const),
+  );
   const variant = effectiveSelected ? variantId(effectiveSelected) : undefined;
   const efforts = effectiveSelected?.supportedReasoningEfforts ?? [];
   const choose = (nextFamily: string, nextProvider?: string, nextVariant?: string) => {
@@ -225,7 +227,7 @@ export function NativeModelSelectors({
       {field(
         "Speed",
         variant,
-        variants.map((v) => [v, labels[v] ?? v]),
+        [...variants].map(([id, label]) => [id, label ?? labels[id] ?? id]),
         (v) => family && choose(family, provider, v),
         undefined,
         speedByVariant,

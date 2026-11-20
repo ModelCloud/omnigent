@@ -79,6 +79,7 @@ def test_deepinfra_registers_auto_flex_and_priority_with_one_family(tmp_path: Pa
     config = load_multidex_config(config_path, models_path=models_path)
     rows = with_multidex_model_picker_row([], config)
     assert [row["variant"] for row in rows] == ["auto", "flex", "priority"]
+    assert [row["variantLabel"] for row in rows] == ["Auto", "Flex", "Priority"]
     assert {row["modelFamily"] for row in rows} == {"ds-v4.1-flash-1017"}
     assert {row["providerId"] for row in rows} == {"deepinfra"}
     assert {row["variant"]: row.get("speed") for row in rows} == {
@@ -112,6 +113,7 @@ def test_deepinfra_auto_live_row_is_grouped_without_local_registration() -> None
     assert row["modelFamily"] == "ds-v4.1-flash-1017"
     assert row["providerId"] == "deepinfra"
     assert row["variant"] == "auto"
+    assert row["variantLabel"] == "Auto"
 
 
 @pytest.mark.parametrize("explicit_fast", [False, True])

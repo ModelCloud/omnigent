@@ -231,7 +231,11 @@ it("prefixes provider options with an online/offline status dot", async () => {
 it("shows the relative speed on provider and variant options", async () => {
   const timed = options.map((row) =>
     row.providerId === "lithos"
-      ? { ...row, speed: row.variant === "ultra" ? 2.0 : row.variant === "fast" ? 1.5 : 1.25 }
+      ? {
+          ...row,
+          speed: row.variant === "ultra" ? 2.0 : row.variant === "fast" ? 1.5 : 1.25,
+          variantLabel: row.variant === "fast" ? "Express" : undefined,
+        }
       : { ...row, speed: row.providerId === "openrouter" ? 1.25 : 1.0 },
   );
   render(
@@ -258,7 +262,7 @@ it("shows the relative speed on provider and variant options", async () => {
   expect(variantTexts).toEqual(
     expect.arrayContaining([
       expect.stringContaining("Regular⚡⚡, speed 1.25"),
-      expect.stringContaining("Fast⚡⚡, speed 1.5"), // second bolt is masked half-faded
+      expect.stringContaining("Express⚡⚡, speed 1.5"), // second bolt is masked half-faded
       expect.stringContaining("Ultra⚡⚡, speed 2.0"),
     ]),
   );

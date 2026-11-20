@@ -48,6 +48,7 @@ DEEPINFRA_BASE_URL = "https://api.deepinfra.com/v1/openai"
 DEEPINFRA_AUTO_MODEL, DEEPINFRA_FLEX_MODEL, DEEPINFRA_PRIORITY_MODEL = (
     MULTIDEX_DEEPSEEK_DEEPINFRA.model_ids
 )
+DEEPINFRA_VARIANT_LABELS = {"auto": "Auto", "flex": "Flex", "priority": "Priority"}
 DEEPSEEK_MODEL_LABEL = "DeepSeek v4.1 Flash"
 DEEPSEEK_SELECTOR_MODELS = {
     MULTIDEX_MODEL: ("multidex", "regular"),
@@ -275,6 +276,10 @@ def with_multidex_model_picker_row(
             row.pop("isDefault", None)
     picker_rows = [*registered_rows, *remaining_rows]
     for row in picker_rows:
+        if row.get("providerId") == "deepinfra":
+            label = DEEPINFRA_VARIANT_LABELS.get(str(row.get("variant", "")))
+            if label is not None:
+                row["variantLabel"] = label
         # Omnigent stores disabled reasoning as ``none``; ``off`` is a reset
         # alias in its session API, but an explicit native MultiDex effort.
         if row.get("defaultReasoningEffort") == "off":
