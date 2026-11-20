@@ -52,7 +52,7 @@ export function NativeModelSelectors({
    * When set, the Model field gains a "no override" entry ahead of the
    * families: picking it calls `onModelChange("")` and shows while
    * `selectedModel` is empty. Dependent fields then resolve against the
-   * catalog's `isDefault` row so Provider/Speed/Reasoning still pick from the
+   * catalog's `isDefault` row so Provider/Variant/Reasoning still pick from the
    * model the default launches as.
    */
   modelDefaultLabel?: string;
@@ -225,7 +225,7 @@ export function NativeModelSelectors({
         speedByProvider,
       )}
       {field(
-        "Speed",
+        "Variant",
         variant,
         [...variants].map(([id, label]) => [id, label ?? labels[id] ?? id]),
         (v) => family && choose(family, provider, v),

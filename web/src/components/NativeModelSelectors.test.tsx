@@ -61,7 +61,7 @@ const options: NativeModelOption[] = [
   })),
 ];
 
-it("renders Model, Provider, Speed, Reasoning in order without wire ids in the labels", () => {
+it("renders Model, Provider, Variant, Reasoning in order without wire ids in the labels", () => {
   render(
     <NativeModelSelectors
       options={options}
@@ -74,7 +74,7 @@ it("renders Model, Provider, Speed, Reasoning in order without wire ids in the l
   expect(screen.getAllByRole("combobox").map((node) => node.getAttribute("aria-label"))).toEqual([
     "Model",
     "Provider",
-    "Speed",
+    "Variant",
     "Reasoning",
   ]);
   expect(screen.getByRole("combobox", { name: "Model" })).toHaveTextContent("DeepSeek v4.1 Flash");
@@ -85,7 +85,7 @@ it("selects a provider's regular model atomically and only shows its available s
   const change = vi.fn();
   const props = { options, effort: null, onModelChange: change, onEffortChange: vi.fn() };
   const { rerender } = render(<NativeModelSelectors {...props} selectedModel="local-1017" />);
-  expect(screen.queryByRole("combobox", { name: "Speed" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("combobox", { name: "Variant" })).not.toBeInTheDocument();
   fireEvent.keyDown(screen.getByRole("combobox", { name: "Provider" }), { key: "ArrowDown" });
   expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
     "Local",
@@ -95,7 +95,7 @@ it("selects a provider's regular model atomically and only shows its available s
   fireEvent.click(await screen.findByRole("option", { name: "Lithos" }));
   expect(change).toHaveBeenCalledWith("lithos-regular");
   rerender(<NativeModelSelectors {...props} selectedModel="lithos-regular" />);
-  fireEvent.keyDown(screen.getByRole("combobox", { name: "Speed" }), { key: "ArrowDown" });
+  fireEvent.keyDown(screen.getByRole("combobox", { name: "Variant" }), { key: "ArrowDown" });
   expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
     "Regular",
     "Ultra",
@@ -108,7 +108,7 @@ it("selects a provider's regular model atomically and only shows its available s
   fireEvent.click(await screen.findByRole("option", { name: "OpenRouter" }));
   expect(change).toHaveBeenLastCalledWith("openrouter-1017");
   rerender(<NativeModelSelectors {...props} selectedModel="openrouter-1017" />);
-  expect(screen.queryByRole("combobox", { name: "Speed" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("combobox", { name: "Variant" })).not.toBeInTheDocument();
   fireEvent.keyDown(screen.getByRole("combobox", { name: "Model" }), { key: "ArrowDown" });
   fireEvent.click(await screen.findByRole("option", { name: "Astra" }));
   expect(change).toHaveBeenLastCalledWith("openai-Astra");
@@ -184,14 +184,14 @@ it("defaults DeepInfra to Auto and still offers Flex and Priority", async () => 
   fireEvent.click(await screen.findByRole("option", { name: "DeepInfra, speed 1.0–1.1" }));
   expect(change).toHaveBeenLastCalledWith(deepinfra[0].id);
   rerender(<NativeModelSelectors {...props} selectedModel={deepinfra[0].id} />);
-  const speedPicker = screen.getByRole("combobox", { name: "Speed" });
-  expect(speedPicker.textContent).toBe("Auto");
-  fireEvent.keyDown(speedPicker, { key: "ArrowDown" });
+  const variantPicker = screen.getByRole("combobox", { name: "Variant" });
+  expect(variantPicker.textContent).toBe("Auto");
+  fireEvent.keyDown(variantPicker, { key: "ArrowDown" });
   expect(screen.getByRole("option", { name: "Auto" })).toBeTruthy();
   fireEvent.click(await screen.findByRole("option", { name: "Flex, speed 1.0" }));
   expect(change).toHaveBeenLastCalledWith(deepinfra[1].id);
   rerender(<NativeModelSelectors {...props} selectedModel={deepinfra[1].id} />);
-  fireEvent.keyDown(screen.getByRole("combobox", { name: "Speed" }), { key: "ArrowDown" });
+  fireEvent.keyDown(screen.getByRole("combobox", { name: "Variant" }), { key: "ArrowDown" });
   fireEvent.click(await screen.findByRole("option", { name: "Priority, speed 1.1" }));
   expect(change).toHaveBeenLastCalledWith(deepinfra[2].id);
 });
@@ -228,7 +228,7 @@ it("prefixes provider options with an online/offline status dot", async () => {
   expect(dots["OpenRouter"]).not.toContain("bg-muted-foreground");
 });
 
-it("shows the relative speed on provider and variant options", async () => {
+it("shows catalog variant labels and relative speed on provider and variant options", async () => {
   const timed = options.map((row) =>
     row.providerId === "lithos"
       ? {
@@ -257,7 +257,7 @@ it("shows the relative speed on provider and variant options", async () => {
     ]),
   );
   fireEvent.keyDown(screen.getByRole("listbox"), { key: "Escape" });
-  fireEvent.keyDown(screen.getByRole("combobox", { name: "Speed" }), { key: "ArrowDown" });
+  fireEvent.keyDown(screen.getByRole("combobox", { name: "Variant" }), { key: "ArrowDown" });
   const variantTexts = screen.getAllByRole("option").map((option) => option.textContent);
   expect(variantTexts).toEqual(
     expect.arrayContaining([
@@ -286,7 +286,7 @@ it("fades the fractional bolt in proportion to the speed remainder", async () =>
       onEffortChange={vi.fn()}
     />,
   );
-  fireEvent.keyDown(screen.getByRole("combobox", { name: "Speed" }), { key: "ArrowDown" });
+  fireEvent.keyDown(screen.getByRole("combobox", { name: "Variant" }), { key: "ArrowDown" });
   const fadedBolt = (label: string) =>
     screen
       .getAllByRole("option")
@@ -320,7 +320,7 @@ it.each(options.filter((row) => row.modelFamily === "ds").map((row) => row.id))(
   },
 );
 
-it.each(["openai-Astra", "openai-Sol"])("hides singleton provider and speed for %s", (id) => {
+it.each(["openai-Astra", "openai-Sol"])("hides singleton provider and variant for %s", (id) => {
   render(
     <NativeModelSelectors
       options={options}
@@ -371,7 +371,7 @@ it("shows the Default entry and resolves dependents off the catalog default", as
   };
   const { rerender } = render(<NativeModelSelectors {...props} selectedModel={null} />);
   expect(screen.getByRole("combobox", { name: "Model" })).toHaveTextContent("Default");
-  // Provider/Speed/Reasoning read off the catalog's isDefault row (local-1017),
+  // Provider/Variant/Reasoning read off the catalog's isDefault row (local-1017),
   // which is what launching with no override resolves to.
   expect(screen.getByRole("combobox", { name: "Provider" })).toHaveTextContent("Local");
   expect(screen.getByRole("combobox", { name: "Reasoning" })).toHaveTextContent("Max");

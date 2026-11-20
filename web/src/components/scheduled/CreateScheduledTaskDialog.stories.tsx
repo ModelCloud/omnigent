@@ -156,7 +156,7 @@ export const CodexHarness: Story = {
   },
 };
 
-/** MultiDex + pinned host: Model → Provider → Speed → Reasoning with bolts. */
+/** MultiDex + pinned host: Model → Provider → Variant → Reasoning with speed bolts. */
 export const CodexHarnessGrouped: Story = {
   render: () => <DialogStory />,
   play: async ({ canvasElement }) => {
