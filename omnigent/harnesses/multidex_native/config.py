@@ -45,11 +45,14 @@ MULTIDEX_MODEL = "DS v4.1 Flash 1017"
 WAFER_MODEL = "DeepSeek-V4.1-Flash-1017"
 WAFER_US_BASE_URL = "https://us.pass.wafer.ai/v1"
 DEEPINFRA_BASE_URL = "https://api.deepinfra.com/v1/openai"
-DEEPINFRA_FLEX_MODEL, DEEPINFRA_PRIORITY_MODEL = MULTIDEX_DEEPSEEK_DEEPINFRA.model_ids
+DEEPINFRA_AUTO_MODEL, DEEPINFRA_FLEX_MODEL, DEEPINFRA_PRIORITY_MODEL = (
+    MULTIDEX_DEEPSEEK_DEEPINFRA.model_ids
+)
 DEEPSEEK_MODEL_LABEL = "DeepSeek v4.1 Flash"
 DEEPSEEK_SELECTOR_MODELS = {
     MULTIDEX_MODEL: ("multidex", "regular"),
     WAFER_MODEL: ("wafer", "regular"),
+    DEEPINFRA_AUTO_MODEL: ("deepinfra", "auto"),
     DEEPINFRA_FLEX_MODEL: ("deepinfra", "flex"),
     DEEPINFRA_PRIORITY_MODEL: ("deepinfra", "priority"),
     **dict.fromkeys(MULTIDEX_DEEPSEEK_OPENROUTER.model_ids, ("openrouter", "regular")),
@@ -536,19 +539,17 @@ def load_multidex_config(
             },
         )
     if isinstance(providers.get("deepinfra"), dict):
-        for model_id, variant in (
-            (DEEPINFRA_FLEX_MODEL, "flex"),
-            (DEEPINFRA_PRIORITY_MODEL, "priority"),
-        ):
-            declared_models.setdefault(
-                model_id,
-                {
-                    "provider": "deepinfra",
-                    "model_family": "ds-v4.1-flash-1017",
-                    "model_label": DEEPSEEK_MODEL_LABEL,
-                    "variant": variant,
-                },
-            )
+        for model_id, (provider_id, variant) in DEEPSEEK_SELECTOR_MODELS.items():
+            if provider_id == "deepinfra":
+                declared_models.setdefault(
+                    model_id,
+                    {
+                        "provider": provider_id,
+                        "model_family": "ds-v4.1-flash-1017",
+                        "model_label": DEEPSEEK_MODEL_LABEL,
+                        "variant": variant,
+                    },
+                )
     if not declared_models:
         raise ValueError("MultiDex models.toml requires [models.<model-id>] entries")
 

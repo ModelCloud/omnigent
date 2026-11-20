@@ -60,6 +60,19 @@ describe("model/provider/variant selection", () => {
   it("uses regular on a provider switch regardless of catalog order", () => {
     expect(resolveModelSelection(rows, "ds", "lithos")?.id).toBe("deepseek-ai/DeepSeek-V4.1-Flash");
   });
+  it("chooses Auto for a DeepInfra-only family, falling back to Flex for older catalogs", () => {
+    const deepinfra = ["priority", "flex", "auto"].map((variant) => ({
+      id: `deepinfra-${variant}`,
+      modelFamily: "ds",
+      providerId: "deepinfra",
+      variant,
+    }));
+    expect(resolveModelSelection(deepinfra, "ds")?.id).toBe("deepinfra-auto");
+    expect(resolveModelSelection(deepinfra.slice(0, 2), "ds", "deepinfra")?.id).toBe(
+      "deepinfra-flex",
+    );
+    expect(resolveModelSelection([...deepinfra, ...rows], "ds")?.providerId).toBe("multidex");
+  });
   it("routes an explicit speed through its provider's wire model id", () => {
     expect(resolveModelSelection(rows, "ds", "lithos", "ultra")?.id).toBe(
       "deepseek-ai/DeepSeek-V4.1-Flash-ultra",

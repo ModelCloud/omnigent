@@ -148,15 +148,21 @@ it("groups Wafer beside Local at speed 1.0", async () => {
   expect(change).toHaveBeenCalledWith("DeepSeek-V4.1-Flash-1017");
 });
 
-it("shows DeepInfra flex and priority as speed variants", async () => {
+it("defaults DeepInfra to Auto and still offers Flex and Priority", async () => {
   const change = vi.fn();
-  const deepinfra = (["flex", "priority"] as const).map((variant, index): NativeModelOption => ({
+  const deepinfra = (
+    [
+      ["auto", undefined],
+      ["flex", 1.0],
+      ["priority", 1.1],
+    ] as const
+  ).map(([variant, speed]): NativeModelOption => ({
     id: `deepinfra/deepseek-v4.1-flash-1017-${variant}`,
     modelFamily: "ds",
     modelLabel: "DeepSeek v4.1 Flash",
     providerId: "deepinfra",
     variant,
-    speed: index === 0 ? 1.0 : 1.1,
+    speed,
     supportedReasoningEfforts: [{ reasoningEffort: "high" }],
     defaultReasoningEffort: "high",
   }));
@@ -178,9 +184,16 @@ it("shows DeepInfra flex and priority as speed variants", async () => {
   fireEvent.click(await screen.findByRole("option", { name: "DeepInfra, speed 1.0–1.1" }));
   expect(change).toHaveBeenLastCalledWith(deepinfra[0].id);
   rerender(<NativeModelSelectors {...props} selectedModel={deepinfra[0].id} />);
+  const speedPicker = screen.getByRole("combobox", { name: "Speed" });
+  expect(speedPicker.textContent).toBe("Auto");
+  fireEvent.keyDown(speedPicker, { key: "ArrowDown" });
+  expect(screen.getByRole("option", { name: "Auto" })).toBeTruthy();
+  fireEvent.click(await screen.findByRole("option", { name: "Flex, speed 1.0" }));
+  expect(change).toHaveBeenLastCalledWith(deepinfra[1].id);
+  rerender(<NativeModelSelectors {...props} selectedModel={deepinfra[1].id} />);
   fireEvent.keyDown(screen.getByRole("combobox", { name: "Speed" }), { key: "ArrowDown" });
   fireEvent.click(await screen.findByRole("option", { name: "Priority, speed 1.1" }));
-  expect(change).toHaveBeenLastCalledWith(deepinfra[1].id);
+  expect(change).toHaveBeenLastCalledWith(deepinfra[2].id);
 });
 
 it("prefixes provider options with an online/offline status dot", async () => {

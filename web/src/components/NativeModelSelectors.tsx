@@ -104,6 +104,7 @@ export function NativeModelSelectors({
     regular: "Regular",
     fast: "Fast",
     ultra: "Ultra",
+    auto: "Auto",
     flex: "Flex",
     priority: "Priority",
     off: "Off",
@@ -217,7 +218,7 @@ export function NativeModelSelectors({
         "Provider",
         provider,
         providers.map((v) => [v, labels[v] ?? v]),
-        (v) => family && choose(family, v, v === "deepinfra" ? "flex" : undefined),
+        (v) => family && choose(family, v),
         healthByProvider,
         speedByProvider,
       )}

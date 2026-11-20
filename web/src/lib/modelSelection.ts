@@ -40,9 +40,15 @@ export function resolveModelSelection(
 ): NativeModelOption | undefined {
   const models = options.filter((row) => familyId(row) === family);
   const providers = provider ? models.filter((row) => providerId(row) === provider) : models;
-  if (providers.length === 0) return undefined;
+  const findVariant = (value: string) => providers.find((row) => variantId(row) === value);
+  const deepInfra = (value: string) =>
+    providers.find((row) => providerId(row) === "deepinfra" && variantId(row) === value);
+  const regular = findVariant("regular");
   return (
-    providers.find((row) => variantId(row) === (variant ?? "regular")) ??
-    providers.find((row) => variantId(row) === "regular")
+    (variant === undefined ? undefined : findVariant(variant)) ??
+    (provider === "deepinfra" ? undefined : regular) ??
+    deepInfra("auto") ??
+    deepInfra("flex") ??
+    regular
   );
 }

@@ -42,6 +42,7 @@ MULTIDEX_DEEPSEEK_LITHOS = StaticModelFallback(
 
 MULTIDEX_DEEPSEEK_DEEPINFRA = StaticModelFallback(
     model_ids=(
+        "deepinfra/deepseek-v4.1-flash-1017-auto",
         "deepinfra/deepseek-v4.1-flash-1017-flex",
         "deepinfra/deepseek-v4.1-flash-1017-priority",
     ),
