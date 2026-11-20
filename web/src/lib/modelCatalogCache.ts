@@ -22,6 +22,7 @@ export const modelOptionSchema: z.ZodType<NativeModelOption> = z.looseObject({
   providerId: unset(z.string()),
   providerHealth: unset(z.enum(["online", "offline"])),
   variant: unset(z.string()),
+  variantLabel: unset(z.string()),
   speed: unset(z.number()),
   isDefault: unset(z.boolean()),
   defaultReasoningEffort: unset(z.string()),

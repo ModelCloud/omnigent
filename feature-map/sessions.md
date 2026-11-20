@@ -139,7 +139,7 @@ the header menu), and each place is a separate entry point.
   their files, elapsed "worked for" time, and can switch agent or host.
   For a native target, the fork dialog also offers model, reasoning effort,
   and permission mode pickers. MultiDex catalogs reuse the same Model → Provider
-  → Speed (variant) → Reasoning selector as new chat, chat settings, and scheduled
+  → Variant → Reasoning selector as new chat, chat settings, and scheduled
   tasks, including provider health and speed indicators. Untouched settings
   inherit from the source; changing model clears incompatible effort overrides.
   Catalogs without grouped metadata keep the flat model picker.
@@ -939,7 +939,7 @@ plain `uv run pytest`, which starts a private server for the test.
   IDs, provider/variant changes, Off versus Default effort, inheritance, delayed
   catalogs, and flat-catalog fallback. Shared selector behavior has coverage in
   `web/src/components/NativeModelSelectors.test.tsx`. Drive each fork entry point
-  by hand with a grouped Codex catalog: select another provider, speed, and effort;
+  by hand with a grouped Codex catalog: select another provider, variant, and effort;
   expect the fork's model/effort to match. A second fork with untouched controls
   must retain the source settings. Component tests do not prove these browser journeys.
   Duration coverage:

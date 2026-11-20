@@ -52,7 +52,7 @@ export function NativeModelSelectors({
    * When set, the Model field gains a "no override" entry ahead of the
    * families: picking it calls `onModelChange("")` and shows while
    * `selectedModel` is empty. Dependent fields then resolve against the
-   * catalog's `isDefault` row so Provider/Speed/Reasoning still pick from the
+   * catalog's `isDefault` row so Provider/Variant/Reasoning still pick from the
    * model the default launches as.
    */
   modelDefaultLabel?: string;
@@ -85,9 +85,11 @@ export function NativeModelSelectors({
     return rank(a) - rank(b);
   });
   const provider = effectiveSelected ? providerId(effectiveSelected) : undefined;
-  const variants = [
-    ...new Set(familyRows.filter((row) => providerId(row) === provider).map(variantId)),
-  ];
+  const variants = new Map(
+    familyRows
+      .filter((row) => providerId(row) === provider)
+      .map((row) => [variantId(row), row.variantLabel] as const),
+  );
   const variant = effectiveSelected ? variantId(effectiveSelected) : undefined;
   const efforts = effectiveSelected?.supportedReasoningEfforts ?? [];
   const choose = (nextFamily: string, nextProvider?: string, nextVariant?: string) => {
@@ -223,9 +225,9 @@ export function NativeModelSelectors({
         speedByProvider,
       )}
       {field(
-        "Speed",
+        "Variant",
         variant,
-        variants.map((v) => [v, labels[v] ?? v]),
+        [...variants].map(([id, label]) => [id, label ?? labels[id] ?? id]),
         (v) => family && choose(family, provider, v),
         undefined,
         speedByVariant,

@@ -406,16 +406,16 @@ describe("MultiDex fork model selection", () => {
     expect(screen.getByTestId("native-model-selectors")).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Model" })).toHaveTextContent("DeepSeek Flash");
     expect(screen.getByRole("combobox", { name: "Provider" })).toHaveTextContent("Lithos");
-    expect(screen.getByRole("combobox", { name: "Speed" })).toHaveTextContent("Fast");
+    expect(screen.getByRole("combobox", { name: "Variant" })).toHaveTextContent("Fast");
     expect(screen.getByRole("combobox", { name: "Reasoning" })).toHaveTextContent("Max");
     fireEvent.keyDown(screen.getByRole("combobox", { name: "Provider" }), { key: "ArrowDown" });
     expect(
       screen.getByRole("option", { name: /Lithos.*speed 1.25–2.0, online/ }),
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("option", { name: /Local.*speed 1.0, offline/ }));
-    expect(screen.queryByRole("combobox", { name: "Speed" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Variant" })).not.toBeInTheDocument();
     await pick("Provider", /Lithos.*speed 1.25–2.0, online/);
-    await pick("Speed", /Ultra.*speed 2.0/);
+    await pick("Variant", /Ultra.*speed 2.0/);
     await pick("Reasoning", "Off");
     fireEvent.click(screen.getByTestId("fork-session-submit"));
     await waitFor(() =>
@@ -500,7 +500,7 @@ describe("MultiDex fork model selection", () => {
     setCatalog(models);
     view.refresh();
     await waitFor(() =>
-      expect(screen.getByRole("combobox", { name: "Speed" })).toHaveTextContent("Fast"),
+      expect(screen.getByRole("combobox", { name: "Variant" })).toHaveTextContent("Fast"),
     );
     await pick("Model", "GPT Test");
     setCatalog([...models]);

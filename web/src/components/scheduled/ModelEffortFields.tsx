@@ -67,7 +67,7 @@ export function ModelEffortFields({
     (option) => settings.harness === "claude-native" || option.value !== "default",
   );
   // Codex/MultiDex catalogs carry provider + serving-variant axes the flat
-  // picker can't express: dependent Model → Provider → Speed → Reasoning
+  // picker can't express: dependent Model → Provider → Variant → Reasoning
   // selectors (the same component the interactive picker uses) drive one
   // model-override id, with liveness dots and speed bolts on the options.
   const codexGrouped =

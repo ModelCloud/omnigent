@@ -18,6 +18,7 @@ const models = [
     modelFamily: "model-a",
     providerId: "local",
     variant: "fast",
+    variantLabel: "Fast",
     speed: 2,
     providerHealth: "online" as const,
     runnerExtension: { channel: "preview" },
