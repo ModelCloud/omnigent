@@ -7426,8 +7426,8 @@ async def _forward_native_terminal_message(
     :param agent_revision: Effective spec revision used to invalidate runner caches.
     :param native_shell_authorized: Owner authorization for this shell delivery.
     :returns: None.
-    :raises HTTPException: 502 when the runner or harness rejects
-        the injection request.
+    :raises HTTPException: 502 when the runner or harness rejects the
+        injection request; 504 when the runner does not confirm it in time.
     """
     display_name, _, harness = _native_terminal_runtime(conv)
     event = _build_native_terminal_message_event(
@@ -7510,6 +7510,14 @@ async def _forward_native_terminal_message(
             exc_info=True,
             extra={"session_id": session_id},
         )
+        if isinstance(exc, httpx.TimeoutException):
+            raise HTTPException(
+                status_code=504,
+                detail=(
+                    f"The runner did not confirm delivery to {display_name}. "
+                    "Check the session transcript before retrying."
+                ),
+            ) from exc
         raise HTTPException(
             status_code=502,
             detail=f"{display_name} terminal message delivery failed",
@@ -14710,8 +14718,8 @@ async def _load_acp_model_options(
     return options
 
 
-# The tunnel transport does not enforce httpx timeouts, so the runner status
-# probe below is bounded here. Healthy runners answer from memory (99.85% of
+# The runner status probe has a total deadline before applying backoff.
+# Healthy runners answer from memory (99.85% of
 # production probes finish inside 5 s), and the runner's own launch-config
 # read of this snapshot has a 10 s budget the bound must leave room for.
 _RUNNER_STATUS_PROBE_TIMEOUT_S: float = 5.0

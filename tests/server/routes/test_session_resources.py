@@ -8332,6 +8332,96 @@ async def test_ensure_native_terminal_ready_host_bound_refuses_unwaitable_tunnel
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stalled_stage", ["ensure", "forward"])
+async def test_multidex_message_has_a_deadline_over_an_unanswered_runner_tunnel(
+    stalled_stage: str,
+) -> None:
+    import dataclasses
+    from unittest.mock import AsyncMock
+
+    from omnigent.runner.transports.ws_tunnel.frames import (
+        HelloFrame,
+        RequestFrame,
+        ResponseEndFrame,
+        ResponseHeadFrame,
+        decode_frame,
+    )
+    from omnigent.runner.transports.ws_tunnel.registry import TunnelRegistry
+    from omnigent.runner.transports.ws_tunnel.transport import WSTunnelTransport
+    from omnigent.runtime import pending_inputs
+    from omnigent.server.routes.sessions import _dispatch_session_event_to_runner
+
+    store = _ConversationStore()
+    conv = _host_bound_native_conv(store)
+    conv = dataclasses.replace(conv, labels={**conv.labels, "omnigent.wrapper": "codex-native-ui"})
+    registry = TunnelRegistry()
+    peer = AsyncMock()
+    session = registry.register(
+        "runner_one",
+        peer,
+        HelloFrame(
+            runner_version="0.1.0", frame_protocol_version=1, harnesses=["codex-native"], envs=[]
+        ),
+    )
+
+    async def shorten_read_timeout(request: httpx.Request) -> None:
+        assert request.extensions["timeout"]["read"] is not None
+        request.extensions["timeout"]["read"] = 0.05
+
+    body = SessionEventInput(
+        type="message",
+        data={"role": "user", "content": [{"type": "input_text", "text": "first message"}]},
+    )
+    async with httpx.AsyncClient(
+        transport=WSTunnelTransport(registry, "runner_one"),
+        base_url="http://runner",
+        event_hooks={"request": [shorten_read_timeout]},
+    ) as client:
+        async with asyncio.timeout(budget(2.0)):
+            task = asyncio.create_task(
+                _dispatch_session_event_to_runner(
+                    conv.id,
+                    conv,
+                    body,
+                    store,  # type: ignore[arg-type]
+                    client,
+                    agent_name="codex-native-ui",
+                    file_store=None,
+                    artifact_store=None,
+                    created_by=None,
+                )
+            )
+            try:
+                request = decode_frame((await session.outbound_queue.get()).data)
+                assert isinstance(request, RequestFrame)
+                assert request.path == f"/v1/sessions/{conv.id}/resources/terminals"
+                if stalled_stage == "forward":
+                    registry.route_response_frame(
+                        "runner_one", ResponseHeadFrame(id=request.id, status=200)
+                    )
+                    registry.route_response_frame("runner_one", ResponseEndFrame(id=request.id))
+                    request = decode_frame((await session.outbound_queue.get()).data)
+                    assert isinstance(request, RequestFrame)
+                    assert request.path == f"/v1/sessions/{conv.id}/events"
+                    with pytest.raises(HTTPException, match="did not confirm") as exc:
+                        await task
+                    assert exc.value.status_code == 504
+                else:
+                    with pytest.raises(OmnigentError, match="before your message was sent") as exc:
+                        await task
+                    assert exc.value.code == ErrorCode.RUNNER_UNAVAILABLE
+                assert not session.in_flight
+                assert session.outbound_queue.empty(), "the prompt must not be resent"
+                assert store.appended_items == []
+                assert not pending_inputs.has_pending(conv.id)
+            finally:
+                if not task.done():
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
+
+
+@pytest.mark.asyncio
 async def test_ensure_native_terminal_ready_retries_over_the_runners_new_tunnel() -> None:
     """Over the real tunnel transport, a mid-request drop waits for re-registration and retries.
 
