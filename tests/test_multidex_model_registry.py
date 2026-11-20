@@ -66,7 +66,7 @@ def test_wafer_registers_one_standard_deepseek_model_with_speed(tmp_path: Path) 
     assert set(provider) == {"base_url", "experimental_bearer_token"}
 
 
-def test_deepinfra_registers_flex_and_priority_with_one_family(tmp_path: Path) -> None:
+def test_deepinfra_registers_auto_flex_and_priority_with_one_family(tmp_path: Path) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text(
         "[model_providers.deepinfra]\n"
@@ -78,13 +78,19 @@ def test_deepinfra_registers_flex_and_priority_with_one_family(tmp_path: Path) -
     models_path.write_text("[models]\n", encoding="utf-8")
     config = load_multidex_config(config_path, models_path=models_path)
     rows = with_multidex_model_picker_row([], config)
-    assert len(rows) == 2
+    assert [row["variant"] for row in rows] == ["auto", "flex", "priority"]
     assert {row["modelFamily"] for row in rows} == {"ds-v4.1-flash-1017"}
     assert {row["providerId"] for row in rows} == {"deepinfra"}
-    assert {row["variant"]: row["speed"] for row in rows} == {
+    assert {row["variant"]: row.get("speed") for row in rows} == {
+        "auto": None,
         "flex": 1.0,
         "priority": 1.1,
     }
+    auto_model = "deepinfra/deepseek-v4.1-flash-1017-auto"
+    assert rows[0]["id"] == rows[0]["model"] == auto_model
+    auto_registration = multidex_model_for_selection(config, auto_model)
+    assert auto_registration is not None
+    assert auto_registration.provider == "deepinfra"
     assert {row["defaultReasoningEffort"] for row in rows} == {"high"}
     assert all(
         [level["reasoningEffort"] for level in row["supportedReasoningEfforts"]]
@@ -98,6 +104,14 @@ def test_deepinfra_registers_flex_and_priority_with_one_family(tmp_path: Path) -
         "base_url": "https://api.deepinfra.com/v1/openai",
         "experimental_bearer_token": "test-token",
     }
+
+
+def test_deepinfra_auto_live_row_is_grouped_without_local_registration() -> None:
+    auto_model = "deepinfra/deepseek-v4.1-flash-1017-auto"
+    [row] = with_multidex_model_picker_row([{"id": auto_model}], None)
+    assert row["modelFamily"] == "ds-v4.1-flash-1017"
+    assert row["providerId"] == "deepinfra"
+    assert row["variant"] == "auto"
 
 
 @pytest.mark.parametrize("explicit_fast", [False, True])
