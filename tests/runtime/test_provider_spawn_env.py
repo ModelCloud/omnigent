@@ -1837,7 +1837,7 @@ def test_codex_legacy_databricks_profile_fails_without_broker_policy(
         ("auth_command", "remove that environment override"),
         ("worker_egress", "use model_egress"),
         ("profile", "Set the Databricks provider's 'profile'"),
-        ("state", "Codex setup"),
+        ("state", "MultiDex setup"),
     ],
 )
 def test_codex_signer_configuration_failures_keep_fixed_repair_guidance(
@@ -1945,7 +1945,7 @@ def test_codex_spec_databricks_auth_routes_via_synthesized_provider(
         ) as raised:
             _build_codex_spawn_env(spec, workdir=None)
         assert isinstance(raised.value.__cause__, ValueError)
-        assert "Codex setup" in raised.value.client_message
+        assert "MultiDex setup" in raised.value.client_message
         assert "provider.example.test" not in raised.value.client_message
         assert "private-route" not in raised.value.client_message
 

@@ -2900,7 +2900,7 @@ async def test_runner_failed_status_carries_setup_error_message(
         ("kimi", False, "Remove ``executor.auth``"),
         ("kimi", True, "Remove ``executor.auth``"),
         ("signer-profile", False, "Set the Databricks provider's 'profile'"),
-        ("signer-state", False, "Run the provider's Codex setup"),
+        ("signer-state", False, "Run the provider's MultiDex setup"),
         ("harness", False, "Correct the provider configuration and retry."),
         ("harness", True, "Correct the provider configuration and retry."),
     ],
