@@ -9,7 +9,7 @@ and skips).
 Tool categories:
 - _OS_ENV_TOOLS: execute through a runner-local OSEnvironment (sys_os_*)
 - _REST_TOOLS: call server REST APIs (sys_call_async, sys_cancel_async)
-- _FILE_TOOLS: call server file APIs (sys_upload/download/list_files)
+- _FILE_TOOLS: call server file APIs (sys_upload_file, sys_list_files, sys_download_file)
 - _TERMINAL_TOOLS: runner-local TerminalRegistry
 - MCP tools: spec-defined; dispatched via RunnerMcpManager passed
   in by proxy_stream (designs/RUNNER_MCP.md). Not in the static
@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import dataclasses
 import json
 import logging
@@ -32,7 +33,7 @@ import time
 import uuid
 import weakref
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, cast
@@ -58,6 +59,7 @@ from omnigent.harness_aliases import (
     is_native_harness,
     native_terminal_name,
 )
+from omnigent.inner._subprocess_lifecycle import await_cleanup_task
 from omnigent.inner.async_utils import run_sync_cleanup
 from omnigent.inner.executor import ToolCallStatus, classify_tool_result
 from omnigent.models.model_override import (
@@ -90,6 +92,7 @@ from omnigent.tools.builtins.async_inbox import (
 from omnigent.tools.builtins.browser import BROWSER_TOOL_NAMES
 from omnigent.tools.builtins.download_file import DownloadFileTool
 from omnigent.tools.builtins.list_comments import ListCommentsTool
+from omnigent.tools.builtins.list_files import ListFilesTool
 from omnigent.tools.builtins.os_env import (
     OS_ENV_TOOL_TYPES,
     SysOsEditTool,
@@ -166,6 +169,13 @@ class _UnsetLocalToolWorkdir:
 
 
 _UNSET_LOCAL_TOOL_WORKDIR = _UnsetLocalToolWorkdir()
+
+
+class UnknownSessionWorkspace:
+    """Sentinel for a session whose workspace could not be read from the server."""
+
+
+UNKNOWN_SESSION_WORKSPACE = UnknownSessionWorkspace()
 
 
 class _DynamicCallable(Protocol):
@@ -295,14 +305,8 @@ _OS_ENV_TOOLS = frozenset(tool_cls.name() for tool_cls in OS_ENV_TOOL_TYPES)
 # (sys_call_async / sys_cancel_async moved to _ASYNC_INBOX_TOOLS)
 _REST_TOOLS: frozenset[str] = frozenset()
 
-# Priority 5c: File tools — runner calls server file APIs.
-_FILE_TOOLS = frozenset(
-    {
-        UploadFileTool.name(),
-        DownloadFileTool.name(),
-        "list_files",  # from builtins registry; no standalone class
-    }
-)
+# Priority 5c: File tools — runner calls the server's session file APIs.
+_FILE_TOOLS = frozenset({UploadFileTool.name(), ListFilesTool.name(), DownloadFileTool.name()})
 
 # Priority 5d: Terminal tools — runner-local TerminalRegistry.
 _TERMINAL_TOOLS = frozenset(
@@ -532,7 +536,7 @@ _BROWSER_TIMEOUT_ERROR = (
 # ignore the harness ``tools`` list, so the relay is their ONLY tool
 # surface; this set is the runner-/server-proxied builtin surface that
 # rides through the Omnigent ``/mcp`` endpoint (comment, session read/write,
-# async inbox, task lifecycle, agent-discovery, and terminal families —
+# async inbox, task lifecycle, agent-discovery, file, and terminal families —
 # the same dispatch posture non-native harnesses get via
 # ``request.tools``). ``sys_terminal_*`` inherits the spec gate for
 # free: the relay only advertises names that ``ToolManager(spec)``
@@ -574,6 +578,9 @@ _NATIVE_RELAY_BUILTIN_TOOLS = (
     # what discovers host-scope skills (``.agents/skills`` and friends), and a
     # native session's only tool surface is this relay.
     | _SKILL_TOOLS
+    # Session file tools reach only this session's file store, and uploads
+    # only read files inside the session workspace.
+    | _FILE_TOOLS
 )
 
 
@@ -622,7 +629,7 @@ def build_native_relay_tool_schemas(spec: AgentSpec | None) -> list[_JsonObject]
     Returns the same tool set the claude-native / codex-native relay advertises
     and that pi-native registers via ``pi.registerTool``: the spec-gated builtin
     surface (``_NATIVE_RELAY_BUILTIN_TOOLS`` — comment, session read/write,
-    agent-discovery, policy, and terminal families). It never includes
+    agent-discovery, policy, file, and terminal families). It never includes
     ``sys_os_*``: native harnesses use their own shell and file tools.
 
     Each entry is a flat ``{"name", "description", "parameters"}`` dict (the
@@ -701,6 +708,9 @@ def build_native_relay_tool_schemas(spec: AgentSpec | None) -> list[_JsonObject]
             SysAgentDownloadTool,
             SysAddPolicyTool,
             SysPolicyRegistryTool,
+            UploadFileTool,
+            ListFilesTool,
+            DownloadFileTool,
         ):
             if _cls is SysSessionMessageTool and not peer_session_messaging_enabled():
                 continue
@@ -840,6 +850,9 @@ class _DiscoveryPage:
     has_more: bool
     next_after: str | None = None
     failed: bool = False
+    # Whether a row id is a valid server cursor, so a trimmed page can resume
+    # mid-page. Servers may issue opaque page tokens instead.
+    row_cursors: bool = False
 
 
 def _parse_discovery_page(body: object) -> _DiscoveryPage:
@@ -915,7 +928,9 @@ def _bounded_discovery_result(
             has_more[name] = len(rows) > candidate_limit or source_page.has_more
             if not has_more[name]:
                 next_state[name] = (_DISCOVERY_END, None)
-            elif page_rows:
+            elif page_rows and (
+                name == "local_configs" or (source_page.row_cursors and len(page_rows) < len(rows))
+            ):
                 if name == "local_configs":
                     position = _optional_string(page_rows[-1].get("path"))
                 else:
@@ -923,7 +938,8 @@ def _bounded_discovery_result(
                     position = _optional_string(page_rows[-1].get(identifier))
                 if position is not None:
                     next_state[name] = (_DISCOVERY_AT, position)
-            elif source_page.has_more and source_page.next_after is not None:
+            elif source_page.next_after is not None:
+                # The server's own cursor; it may be an opaque page token.
                 next_state[name] = (_DISCOVERY_AT, source_page.next_after)
         metadata: dict[str, object] = {
             "limit": candidate_limit,
@@ -971,6 +987,73 @@ def _bounded_discovery_result(
             "oversized": {"kind": kind, "sections": oversized_sections},
         }
     )
+
+
+_DiscoveryFetch = Callable[
+    [int | None],
+    Awaitable[tuple[dict[str, list[_JsonObject]], dict[str, _DiscoveryPage]]],
+]
+
+
+async def _fitted_discovery_result(
+    fetch: _DiscoveryFetch,
+    *,
+    limit: int | None,
+    cursor_state: dict[str, _DiscoveryState],
+    continued: bool,
+    tool_name: str,
+    filters: _JsonObject,
+    page_sections: tuple[str, ...] | None = None,
+    default_limit: int | None = None,
+) -> str:
+    """
+    Build :func:`_bounded_discovery_result`, refetching server pages it trims.
+
+    A server cursor marks the end of the page it was issued with. When the
+    output budget keeps only part of a page whose rows are not valid cursors,
+    the sources are read again at the kept size so the continuation can resume
+    from the server's cursor without skipping rows.
+
+    :param fetch: Reads every source, given a per-source row limit or ``None``
+        for the caller's default, and returns ``(sections, source_pages)``.
+    :param limit: The caller's ``limit`` argument, if any.
+    :param cursor_state: Continuation positions decoded from the caller's cursor.
+    :param continued: Whether the caller passed a cursor.
+    :param tool_name: The tool the cursor belongs to, e.g. ``"sys_session_list"``.
+    :param filters: The filter arguments the cursor is bound to.
+    :param page_sections: The sections that page; every section when omitted.
+    :param default_limit: Row cap when the caller passes no ``limit``.
+    :returns: The serialized tool result.
+    """
+    source_limit: int | None = None
+    while True:
+        sections, source_pages = await fetch(source_limit)
+        result = _bounded_discovery_result(
+            sections,
+            # A refetched page keeps the size it was read at.
+            limit=limit if source_limit is None else source_limit,
+            cursor_state=cursor_state,
+            continued=continued,
+            source_pages=source_pages,
+            page_sections=page_sections,
+            default_limit=default_limit,
+            tool_name=tool_name,
+            filters=filters,
+        )
+        page = json.loads(result).get("page")
+        kept = page.get("limit") if isinstance(page, dict) else None
+        if not isinstance(kept, int) or not any(
+            len(sections[name]) > kept
+            for name, source_page in source_pages.items()
+            if not source_page.row_cursors and not source_page.failed
+        ):
+            return result
+        if source_limit is not None and kept >= source_limit:
+            # The server ignored the smaller limit, so its cursor can't follow the kept rows.
+            return json.dumps(
+                {"error": f"{tool_name}: the server returned more rows than requested"}
+            )
+        source_limit = kept
 
 
 # Union of all locally-dispatched tools.
@@ -1823,7 +1906,6 @@ async def _send_to_in_flight_child(
             f"Error: failed to steer in-flight sub-agent {agent!r} title {title!r}: "
             f"{msg_resp.status_code} {msg_resp.text[:200]}"
         )
-
     async with _subagent_work.in_flight_send_lock(child_session_id):
         entry = _subagent_work.get_subagent_work(child_session_id)
         if entry is not None and entry.status in ("running", "waiting"):
@@ -1854,6 +1936,7 @@ async def _send_to_in_flight_child(
                 work_id=work_id,
             )
             fresh.status = "running"
+            _subagent_work.apply_child_start_evidence(fresh)
             # Best-effort dispatch-id stamp for restart recovery only; the
             # in-memory entry above already makes the completion deliverable, so
             # a stamp failure degrades recovery but never live delivery.
@@ -5387,7 +5470,9 @@ _SCHEDULED_TASK_GATED_FIELDS = (
 
 
 async def _scheduled_task_session_fields_refusal(
-    server_client: httpx.AsyncClient, tool_name: str, payload: _JsonObject
+    get_info: Callable[[], Awaitable[httpx.Response]],
+    tool_name: str,
+    payload: _JsonObject,
 ) -> str | None:
     """An error for optional fields this server would reject, or ``None`` to send them.
 
@@ -5402,7 +5487,7 @@ async def _scheduled_task_session_fields_refusal(
     ]
     if not gated:
         return None
-    info = await server_client.get("/v1/info", timeout=30.0)
+    info = await get_info()
     advertised = info.json() if info.status_code < 400 else {}
     for capability, reason in gated:
         if advertised.get(capability) is not True:
@@ -5675,11 +5760,22 @@ async def _execute_scheduled_task_tool(
         {ORCHESTRATION_SOURCE_HEADER: conversation_id} if conversation_id is not None else None
     )
 
+    info: httpx.Response | None = None
+
+    async def get_server_info() -> httpx.Response:
+        nonlocal info
+        if info is None:
+            info = await server_client.get("/v1/info", timeout=30.0)
+        return info
+
     try:
         if wants_project:
             # Older servers reject the field; refuse before creating a project for it.
-            info = await server_client.get("/v1/info", timeout=30.0)
-            if info.status_code >= 400 or info.json().get("scheduled_task_projects") is not True:
+            project_info = await get_server_info()
+            if (
+                project_info.status_code >= 400
+                or project_info.json().get("scheduled_task_projects") is not True
+            ):
                 return json.dumps(
                     {
                         "error": f"{tool_name}: this server does not support automation "
@@ -5695,10 +5791,24 @@ async def _execute_scheduled_task_tool(
         elif tool_name == "sys_scheduled_task_create":
             payload = {k: args[k] for k in _SCHEDULED_TASK_CREATE_FIELDS if k in args}
             refusal = await _scheduled_task_session_fields_refusal(
-                server_client, tool_name, payload
+                get_server_info, tool_name, payload
             )
             if refusal is not None:
                 return refusal
+            if payload.get("timezone") is None:
+                try:
+                    timezone_info = await get_server_info()
+                    advertised = timezone_info.json() if timezone_info.status_code < 400 else {}
+                except (httpx.HTTPError, ValueError):
+                    advertised = {}
+                if (
+                    isinstance(advertised, dict)
+                    and advertised.get("scheduled_task_default_timezone") is True
+                ):
+                    payload["timezone"] = None
+                else:
+                    # Older servers reject null; retain their omitted-field UTC default.
+                    payload.pop("timezone", None)
             if project_name is not None:
                 payload["project_id"] = await _project_id_for_name(server_client, project_name)
             resp = await server_client.post(
@@ -5724,7 +5834,7 @@ async def _execute_scheduled_task_tool(
             else:
                 payload = {k: args[k] for k in _SCHEDULED_TASK_UPDATE_FIELDS if k in args}
                 refusal = await _scheduled_task_session_fields_refusal(
-                    server_client, tool_name, payload
+                    get_server_info, tool_name, payload
                 )
                 if refusal is not None:
                     return refusal
@@ -6320,7 +6430,7 @@ async def _session_get_info_via_rest(
     caller's own ``conversation_id`` when omitted), fetches the session
     snapshot, and projects the metadata fields — status, title, agent
     binding, runner binding, host and its reported harness readiness,
-    reasoning effort, effective model,
+    reasoning effort, effective model, the server-resolved permission mode,
     parent linkage, workspace / git branch, project, persisted last-activity
     time, and the outstanding approval prompts (the prompts themselves plus a
     count). Runner connectivity
@@ -6402,6 +6512,10 @@ async def _session_get_info_via_rest(
             "model": (
                 snap.get("reported_model") or snap.get("model_override") or snap.get("llm_model")
             ),
+            # Mode names are the ones sys_session_create's permission_mode takes;
+            # None when the harness has none, the mode is unknown, or the server
+            # predates the field.
+            "permission_mode": _optional_string(snap.get("permission_mode")),
             "workspace": snap.get("workspace"),
             "git_branch": snap.get("git_branch"),
             "project_id": snap.get("project_id"),
@@ -7065,68 +7179,78 @@ async def _agent_list_via_rest(
     :returns: The legacy complete JSON result while it fits, otherwise a
         bounded page with continuation metadata.
     """
-    source_limit = limit or _AGENT_LIST_PAGE_LIMIT
+    default_source_limit = limit or _AGENT_LIST_PAGE_LIMIT
 
     spec = _effective_runner_os_env_spec(agent_spec, conversation_id, runner_workspace)
     assert spec.cwd is not None
     configs_dir = Path(spec.cwd) / _AGENT_CONFIG_SUBDIR
-    builtins_page, sessions_page, local_configs, readiness, family = await asyncio.gather(
-        _agent_list_fetch(
-            "/v1/agents",
-            server_client,
-            after=cursor_state["builtins"][1],
-            limit=source_limit,
-            exhausted=cursor_state["builtins"][0] == _DISCOVERY_END,
-        ),
-        _agent_list_fetch(
-            "/v1/sessions",
-            server_client,
-            after=cursor_state["session_agents"][1],
-            limit=source_limit,
-            exhausted=cursor_state["session_agents"][0] == _DISCOVERY_END,
-        ),
+    # Started now so the first server fetch runs alongside these reads.
+    side_reads = asyncio.gather(
         asyncio.to_thread(_scan_local_agent_configs, configs_dir),
         _agent_list_host_readiness(server_client, conversation_id),
         _spawn_family(server_client, conversation_id),
     )
-    local_state, local_after = cursor_state["local_configs"]
-    if local_state == _DISCOVERY_END:
-        remaining_configs = []
-    elif local_after is not None:
-        remaining_configs = [
-            row for row in local_configs if str(row.get("path", "")) > local_after
-        ]
-    else:
-        remaining_configs = local_configs
-    listing = _project_agent_list(
-        builtins_page.rows,
-        sessions_page.rows,
-        remaining_configs[:source_limit],
-    )
-    listing["builtins"] = _in_spawn_family(listing["builtins"], family)
     from omnigent.harness_availability import harness_launch_availability
 
-    for row in listing["builtins"]:
-        available, reason = harness_launch_availability(
-            _optional_string(row.get("harness")), readiness
+    async def _fetch(
+        source_limit: int | None,
+    ) -> tuple[dict[str, list[_JsonObject]], dict[str, _DiscoveryPage]]:
+        server_limit = source_limit or default_source_limit
+        builtins_page, sessions_page = await asyncio.gather(
+            _agent_list_fetch(
+                "/v1/agents",
+                server_client,
+                after=cursor_state["builtins"][1],
+                limit=server_limit,
+                exhausted=cursor_state["builtins"][0] == _DISCOVERY_END,
+            ),
+            _agent_list_fetch(
+                "/v1/sessions",
+                server_client,
+                after=cursor_state["session_agents"][1],
+                limit=server_limit,
+                exhausted=cursor_state["session_agents"][0] == _DISCOVERY_END,
+            ),
         )
-        row["available_on_host"] = available
-        row["unavailable_reason"] = reason
-    return _bounded_discovery_result(
-        listing,
-        limit=limit,
-        cursor_state=cursor_state,
-        continued=continued,
-        tool_name="sys_agent_list",
-        filters={},
-        source_pages={
+        local_configs, readiness, family = await side_reads
+        local_state, local_after = cursor_state["local_configs"]
+        if local_state == _DISCOVERY_END:
+            remaining_configs = []
+        elif local_after is not None:
+            remaining_configs = [
+                row for row in local_configs if str(row.get("path", "")) > local_after
+            ]
+        else:
+            remaining_configs = local_configs
+        listing = _project_agent_list(
+            builtins_page.rows,
+            sessions_page.rows,
+            remaining_configs[:default_source_limit],
+        )
+        listing["builtins"] = _in_spawn_family(listing["builtins"], family)
+        for row in listing["builtins"]:
+            available, reason = harness_launch_availability(
+                _optional_string(row.get("harness")), readiness
+            )
+            row["available_on_host"] = available
+            row["unavailable_reason"] = reason
+        return listing, {
             "builtins": builtins_page,
             "session_agents": sessions_page,
             "local_configs": _DiscoveryPage(
                 listing["local_configs"],
                 len(listing["local_configs"]) < len(remaining_configs),
+                row_cursors=True,
             ),
-        },
+        }
+
+    return await _fitted_discovery_result(
+        _fetch,
+        limit=limit,
+        cursor_state=cursor_state,
+        continued=continued,
+        tool_name="sys_agent_list",
+        filters={},
     )
 
 
@@ -7250,38 +7374,52 @@ async def _session_list_via_rest(
         :data:`_SESSION_LIST_DEFAULT_LIMIT` sessions exist, otherwise a bounded
         page with continuation metadata.
     """
-    page_limit = limit or _SESSION_LIST_DEFAULT_LIMIT
     # Finding this session's workers doesn't need its named children.
     sub_agents = (
         []
         if created_by_this_session
         else await _collect_sub_agents(conversation_id, server_client)
     )
-    if cursor_state["sessions"][0] == _DISCOVERY_END:
-        sessions_page = _DiscoveryPage([], False)
-    elif created_by_this_session:
-        sessions_page = await _collect_created_sessions(
-            conversation_id,
-            server_client,
-            agent_name,
-            include_archived=include_archived,
-            visibility=visibility,
-            project=project,
-            after=cursor_state["sessions"][1],
-            limit=page_limit,
-        )
-    else:
-        sessions_page = await _collect_global_sessions(
-            server_client,
-            agent_name,
-            include_archived=include_archived,
-            visibility=visibility,
-            project=project,
-            after=cursor_state["sessions"][1],
-            limit=page_limit,
-        )
-    result = _bounded_discovery_result(
-        {"sub_agents": cast(list[_JsonObject], sub_agents), "sessions": sessions_page.rows},
+
+    async def _fetch(
+        source_limit: int | None,
+    ) -> tuple[dict[str, list[_JsonObject]], dict[str, _DiscoveryPage]]:
+        page_limit = source_limit or limit or _SESSION_LIST_DEFAULT_LIMIT
+        if cursor_state["sessions"][0] == _DISCOVERY_END:
+            sessions_page = _DiscoveryPage([], False)
+        elif created_by_this_session:
+            # Matches are filtered locally, so a trimmed page resumes from a row id.
+            sessions_page = replace(
+                await _collect_created_sessions(
+                    conversation_id,
+                    server_client,
+                    agent_name,
+                    include_archived=include_archived,
+                    visibility=visibility,
+                    project=project,
+                    after=cursor_state["sessions"][1],
+                    limit=page_limit,
+                ),
+                row_cursors=True,
+            )
+        else:
+            sessions_page = await _collect_global_sessions(
+                server_client,
+                agent_name,
+                include_archived=include_archived,
+                visibility=visibility,
+                project=project,
+                after=cursor_state["sessions"][1],
+                limit=page_limit,
+            )
+        sections = {
+            "sub_agents": cast(list[_JsonObject], sub_agents),
+            "sessions": sessions_page.rows,
+        }
+        return sections, {"sessions": sessions_page}
+
+    result = await _fitted_discovery_result(
+        _fetch,
         limit=limit,
         cursor_state=cursor_state,
         continued=continued,
@@ -7289,7 +7427,6 @@ async def _session_list_via_rest(
         filters=_session_list_filters(
             agent_name, include_archived, visibility, project, created_by_this_session
         ),
-        source_pages={"sessions": sessions_page},
         page_sections=("sessions",),
         default_limit=_SESSION_LIST_DEFAULT_LIMIT,
     )
@@ -7708,6 +7845,8 @@ async def _collect_global_sessions(
         ],
         page.has_more,
         page.next_after,
+        # The fallback filters rows locally; older servers page by row id.
+        row_cursors=scope_locally,
     )
 
 
@@ -8155,6 +8294,7 @@ async def execute_tool(
     wake_on_async_result: AsyncResultWake | None = None,
     call_id: str | None = None,
     caller_user_id: str | None = None,
+    session_workspace: Path | UnknownSessionWorkspace | None = None,
 ) -> str:
     """
     Execute a tool and return the output string.
@@ -8187,6 +8327,11 @@ async def execute_tool(
         runner can wake a session that is no longer in a turn.
     :param call_id: The harness's tool call ID, when the caller has one; the
         journal tools key their writes on it.
+    :param session_workspace: The session's own server-stored workspace, e.g.
+        ``Path("/repo")``; ``None`` when it has none, or
+        :data:`UNKNOWN_SESSION_WORKSPACE` when it could not be read. Bounds
+        ``sys_upload_file`` reads; unlike ``runner_workspace`` it never falls
+        back to the runner's.
     :returns: Tool output string.
     """
     if not arguments.strip():
@@ -8237,6 +8382,12 @@ async def execute_tool(
                 conversation_id=conversation_id,
                 runner_workspace=runner_workspace,
                 filesystem_registry=filesystem_registry,
+                bundle_dir=(
+                    None
+                    if local_tool_workdir is _UNSET_LOCAL_TOOL_WORKDIR
+                    else cast(Path | None, local_tool_workdir)
+                ),
+                effective_harness=effective_harness,
             )
         elif tool_name in _REST_TOOLS:
             output = await _execute_rest_tool(
@@ -8254,6 +8405,8 @@ async def execute_tool(
                 conversation_id=conversation_id,
                 agent_spec=agent_spec,
                 runner_workspace=runner_workspace,
+                session_workspace=session_workspace,
+                resource_registry=resource_registry,
             )
         elif tool_name in _TERMINAL_TOOLS:
             output = await _execute_terminal_tool(
@@ -8290,6 +8443,7 @@ async def execute_tool(
                 filesystem_registry=filesystem_registry,
                 effective_harness=effective_harness,
                 wake_on_async_result=wake_on_async_result,
+                session_workspace=session_workspace,
             )
         elif tool_name in _SUBAGENT_TOOLS:
             output = await _execute_subagent_tool(
@@ -8885,6 +9039,8 @@ async def _execute_os_env_tool(
     runner_workspace: Path | None = None,
     filesystem_registry: FilesystemRegistry | None = None,
     resource_registry: SessionResourceRegistry | None = None,
+    bundle_dir: Path | None = None,
+    effective_harness: str | None = None,
 ) -> str:
     """
     Execute sys_os_* through a runner-local OSEnvironment.
@@ -8897,6 +9053,8 @@ async def _execute_os_env_tool(
         workspace, e.g. ``"conv_123"``.
     :param runner_workspace: Optional CLI launch workspace used for
         placeholder cwd values in remote app sessions.
+    :param bundle_dir: Extracted bundle workdir from resolved spec provenance.
+    :param effective_harness: Session harness override, ahead of the spec default.
     :param filesystem_registry: Optional registry for tracking agent
         file modifications. When provided, ``sys_os_write`` and
         ``sys_os_edit`` calls record changed paths so the
@@ -8904,7 +9062,9 @@ async def _execute_os_env_tool(
         is not tracked — shell side-effects cannot be attributed to a
         session.
     :param resource_registry: Owner of the session's reusable environment;
-        without it (or a session id) each call starts its own helper.
+        ordinary shells use a separate disposable helper. Scratch-mode calls
+        share their private workspace until the shell retires it. Without a
+        registry (or a session id) each call starts its own helper.
     :returns: Serialized tool result string.
     """
     from omnigent.inner.os_env import _DEFAULT_READ_LIMIT, create_os_environment
@@ -8914,9 +9074,33 @@ async def _execute_os_env_tool(
     tool_lease: ToolEnvironmentLease | None = None
     completed = False
     try:
+        if agent_spec is None and canonicalize_harness(effective_harness) == "claude-sdk":
+            raise ValueError(
+                "Claude SDK callbacks require an agent spec to resolve "
+                "sandbox and credential policy"
+            )
         effective_spec = _effective_runner_os_env_spec(
             agent_spec, conversation_id, runner_workspace
         )
+        model_access = None
+        if (
+            agent_spec is not None
+            and _effective_harness_name(agent_spec, effective_harness) == "claude-sdk"
+            and (effective_spec.sandbox is None or effective_spec.sandbox.type != "none")
+        ):
+            from omnigent.runtime.workflow import claude_terminal_model_access
+
+            model_access = await asyncio.to_thread(
+                claude_terminal_model_access,
+                agent_spec,
+                bundle_dir=bundle_dir,
+                effective_harness=effective_harness,
+                cwd=effective_spec.cwd or os.getcwd(),
+            )
+            if model_access is None:
+                raise ValueError(
+                    "Claude SDK callbacks require a model credential isolation policy"
+                )
         needs_shared_environment = effective_spec.sandbox is not None and any(
             p.copy_on_write for p in effective_spec.sandbox.write_path_specs
         )
@@ -8933,13 +9117,15 @@ async def _execute_os_env_tool(
             if (
                 resource_registry is not None
                 and conversation_id is not None
+                and (tool_name != SysOsShellTool.name() or effective_spec.start_in_scratch)
                 and not effective_spec.fork
                 and (
                     effective_spec.sandbox is None
                     or effective_spec.sandbox.credential_proxy is None
                 )
             ):
-                # Reuse the session's warm helper; a busy one leaves this call its own.
+                # Scratch calls share their private workspace until retirement.
+                # Other shells stay disposable, leaving cached file helpers intact.
                 tool_lease = await resource_registry.lease_tool_environment(
                     conversation_id, effective_spec
                 )
@@ -8952,11 +9138,45 @@ async def _execute_os_env_tool(
                     if resource_registry is not None and conversation_id is not None
                     else []
                 )
-                os_env = create_os_environment(
-                    effective_spec, additional_read_roots=additional_read_roots
+                construction = asyncio.create_task(
+                    asyncio.to_thread(
+                        create_os_environment,
+                        effective_spec,
+                        additional_read_roots=additional_read_roots,
+                        model_access=model_access,
+                    )
                 )
+                try:
+                    os_env = await asyncio.shield(construction)
+                except BaseException:
+                    # A cancelled callback still owns a helper created by its worker.
+                    with contextlib.suppress(BaseException):
+                        await await_cleanup_task(construction)
+                    if (
+                        construction.done()
+                        and not construction.cancelled()
+                        and construction.exception() is None
+                    ):
+                        late_environment = construction.result()
+                        if late_environment is not None:
+                            try:
+                                await run_sync_cleanup(
+                                    late_environment.close,
+                                    component="runner_os_env_tool",
+                                    session_id=conversation_id,
+                                )
+                            except asyncio.CancelledError:
+                                pass
+                            except Exception as cleanup_error:  # noqa: BLE001
+                                _logger.warning(
+                                    "Late runner OSEnvironment cleanup failed",
+                                    extra={"error_type": type(cleanup_error).__name__},
+                                )
+                    raise
         if os_env is None:
             return "Error: unable to create OSEnvironment"
+        if model_access is not None and not owns_environment:
+            await asyncio.to_thread(os_env.isolate_model_credentials, model_access)
 
         if tool_name == SysOsReadTool.name():
             result = await os_env.read(
@@ -9161,6 +9381,79 @@ async def _execute_rest_tool(
 # ── File tools (Phase 1) ──────────────────────────────────
 
 
+def _session_upload_roots(
+    agent_spec: AgentSpec | None,
+    conversation_id: str,
+    *,
+    runner_workspace: Path | None,
+    session_workspace: Path | UnknownSessionWorkspace | None,
+    resource_registry: SessionResourceRegistry | None,
+) -> list[Path]:
+    """
+    Return the directories ``sys_upload_file`` may read from, searched in order.
+
+    The session's own workspace wins: its native terminal and tools run there.
+    Otherwise use the session's default environment root, the one its filesystem
+    routes serve; a runner that isolates sessions gives each session its own
+    subdirectory there, never the shared runner workspace. When neither the
+    session nor the runner has a workspace, the agent's tools use a separate
+    per-session directory, so it is searched first.
+
+    :param agent_spec: The session's agent spec, or ``None`` when unresolved.
+    :param conversation_id: The session id, e.g. ``"conv_abc123"``.
+    :param runner_workspace: The runtime cwd: the session's workspace, else the
+        runner's, e.g. ``Path("/repo")``; ``None`` when neither has one.
+    :param session_workspace: The session's server-stored workspace, e.g.
+        ``Path("/repo")``; ``None`` when it has none, or
+        :data:`UNKNOWN_SESSION_WORKSPACE` when it could not be read, which no
+        fallback root may stand in for.
+    :param resource_registry: The runner's session resource registry.
+    :returns: The upload roots; empty when no boundary can be established.
+    """
+    if isinstance(session_workspace, UnknownSessionWorkspace):
+        return []
+    if session_workspace is not None:
+        return [session_workspace]
+    roots: list[Path] = []
+    if runner_workspace is None:
+        tools_cwd = _effective_runner_os_env_spec(agent_spec, conversation_id).cwd
+        assert tools_cwd is not None
+        roots.append(Path(tools_cwd))
+    if resource_registry is not None:
+        # Without an os_env the registry reports no filesystem; use its spec-less default.
+        spec = agent_spec if getattr(agent_spec, "os_env", None) is not None else None
+        default_root = resource_registry.compute_default_env_root(conversation_id, spec)
+        if default_root is not None and Path(default_root) not in roots:
+            roots.append(Path(default_root))
+    return roots
+
+
+def _resolve_upload_path(path: str, roots: list[Path]) -> Path:
+    """
+    Resolve *path* within the first upload root that holds it as a file.
+
+    :param path: The agent-supplied path, e.g. ``"out/report.md"``.
+    :param roots: Upload roots from :func:`_session_upload_roots`, non-empty.
+    :returns: The file to read; when no root holds it, the first in-bounds
+        candidate, so reading it reports the missing file.
+    :raises ValueError: If *path* escapes every root.
+    """
+    candidates: list[Path] = []
+    first_escape: ValueError | None = None
+    for root in roots:
+        try:
+            candidates.append(safe_resolve(path, root))
+        except ValueError as exc:
+            first_escape = first_escape or exc
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    if candidates:
+        return candidates[0]
+    assert first_escape is not None
+    raise first_escape
+
+
 async def _execute_file_tool(
     tool_name: str,
     args: _JsonObject,
@@ -9169,23 +9462,24 @@ async def _execute_file_tool(
     conversation_id: str | None,
     agent_spec: AgentSpec | None = None,
     runner_workspace: Path | None = None,
+    session_workspace: Path | UnknownSessionWorkspace | None = None,
+    resource_registry: SessionResourceRegistry | None = None,
 ) -> str:
     """
     Execute a file tool by calling session-scoped server file APIs.
 
-    :param tool_name: File tool name, e.g. ``"upload_file"``.
+    :param tool_name: File tool name, e.g. ``"sys_upload_file"``.
     :param args: Parsed tool arguments.
     :param server_client: HTTP client for the Omnigent server.
     :param conversation_id: Owning session/conversation id,
         e.g. ``"conv_abc123"``.
-    :param agent_spec: Agent spec resolved for the current turn, used
-        (with ``runner_workspace``) to derive the workspace root that
-        an ``upload_file`` path is resolved against. ``None`` falls back
-        to the per-conversation default workspace.
-    :param runner_workspace: Authoritative runtime cwd for the runner,
-        sourced from ``OMNIGENT_RUNNER_WORKSPACE``. Combined with
-        ``agent_spec`` to compute the workspace containment boundary
-        for ``upload_file``.
+    :param agent_spec: Agent spec resolved for the current turn.
+    :param runner_workspace: The runtime cwd, e.g. ``Path("/repo")``, or ``None``.
+    :param session_workspace: The session's server-stored workspace, e.g.
+        ``Path("/repo")``, ``None`` or :data:`UNKNOWN_SESSION_WORKSPACE`. See
+        :func:`_session_upload_roots`.
+    :param resource_registry: The runner's session resource registry, which
+        knows the session's default environment root.
     :returns: Tool result string.
     """
     if server_client is None:
@@ -9198,18 +9492,19 @@ async def _execute_file_tool(
         path = args.get("path")
         if not isinstance(path, str) or not path:
             return "Error: sys_upload_file failed: empty path"
-        # Resolve the agent-supplied path against the session workspace
-        # (the same cwd the sys_os_* tools operate in) and reject any
-        # path that escapes it. The read happens in the un-sandboxed
-        # runner process, so without this containment an agent could
-        # exfiltrate arbitrary host files. Mirrors the
-        # builtin UploadFileTool's safe_resolve / sys_agent_download
-        # containment checks.
-        os_spec = _effective_runner_os_env_spec(agent_spec, conversation_id, runner_workspace)
-        assert os_spec.cwd is not None
-        workspace = Path(os_spec.cwd)
+        # The read runs in the un-sandboxed runner, so the path must stay inside this
+        # session's workspace, or an agent could upload host or sibling-session files.
+        roots = _session_upload_roots(
+            agent_spec,
+            conversation_id,
+            runner_workspace=runner_workspace,
+            session_workspace=session_workspace,
+            resource_registry=resource_registry,
+        )
+        if not roots:
+            return "Error: sys_upload_file failed: the session workspace is unknown"
         try:
-            resolved = safe_resolve(path, workspace)
+            resolved = _resolve_upload_path(path, roots)
         except ValueError as exc:
             return f"Error: sys_upload_file failed: {exc}"
         filename = resolved.name
@@ -9241,14 +9536,14 @@ async def _execute_file_tool(
         except Exception as exc:  # noqa: BLE001
             return f"Error: {DownloadFileTool.name()} failed: {exc}"
 
-    if tool_name == "list_files":
+    if tool_name == ListFilesTool.name():
         try:
             resp = await server_client.get(files_path, timeout=30.0)
             if resp.status_code == 200:
                 return json.dumps(resp.json())
-            return f"Error: list_files returned {resp.status_code}"
+            return f"Error: {tool_name} returned {resp.status_code}"
         except Exception as exc:  # noqa: BLE001
-            return f"Error: list_files failed: {exc}"
+            return f"Error: {tool_name} failed: {exc}"
 
     return f"Error: {tool_name} not implemented in file dispatch"
 
@@ -9566,6 +9861,7 @@ async def _execute_async_inbox_tool(
     harness_client: httpx.AsyncClient | None = None,
     effective_harness: str | None = None,
     wake_on_async_result: AsyncResultWake | None = None,
+    session_workspace: Path | UnknownSessionWorkspace | None = None,
 ) -> str:
     """
     Runner-local dispatch for async inbox tools.
@@ -9589,6 +9885,8 @@ async def _execute_async_inbox_tool(
         ``_spawn_async_tool`` so the target is judged against the surface the
         session was advertised.
     :param wake_on_async_result: Forwarded to ``_spawn_async_tool``.
+    :param session_workspace: The session's own workspace, forwarded to
+        ``_spawn_async_tool`` for file tools.
     :returns: Tool output string.
     """
     del harness_client
@@ -9618,6 +9916,7 @@ async def _execute_async_inbox_tool(
             filesystem_registry=filesystem_registry,
             effective_harness=effective_harness,
             wake_on_async_result=wake_on_async_result,
+            session_workspace=session_workspace,
         )
 
     if tool_name == SysCancelAsyncTool.name():
@@ -10130,6 +10429,7 @@ def _spawn_async_tool(
     local_tool_workdir: Path | _UnsetLocalToolWorkdir | None = _UNSET_LOCAL_TOOL_WORKDIR,
     effective_harness: str | None = None,
     wake_on_async_result: AsyncResultWake | None = None,
+    session_workspace: Path | UnknownSessionWorkspace | None = None,
 ) -> str:
     """
     Spawn a tool as a background asyncio.Task.
@@ -10152,6 +10452,8 @@ def _spawn_async_tool(
     :param wake_on_async_result: Called with ``(session_id, handle_id,
         tool_name, status)`` after a completed or failed result is queued.
         Cancelled results are not reported: whoever cancelled is not waiting.
+    :param session_workspace: The session's own workspace, forwarded to
+        ``execute_tool`` for file tools.
     :returns: JSON handle string with canonical ``handle_id``,
         plus compatibility ``task_id`` (identical value; remove in 0.8.0),
         ``tool_name``, ``status``, and ``message``. Prefer
@@ -10233,6 +10535,7 @@ def _spawn_async_tool(
                 session_inbox=session_inbox if target_tool in _TERMINAL_TOOLS else None,
                 filesystem_registry=filesystem_registry,
                 effective_harness=effective_harness,
+                session_workspace=session_workspace,
             )
             execution_task = asyncio.create_task(exec_coro)
             cancellation_task = asyncio.create_task(cancel_event.wait())

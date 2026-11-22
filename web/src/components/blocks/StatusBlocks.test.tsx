@@ -327,6 +327,10 @@ describe("ErrorBanner", () => {
       "MultiDex couldn't get a token from the model provider's sign-in command on the host.",
     ],
     [
+      "content_policy_refusal",
+      "The model's safeguards refused this message. Start a new session and rephrase it without the flagged content.",
+    ],
+    [
       "harness_not_configured",
       "The harness isn't set up on the host, so this session can't start.",
     ],
@@ -695,16 +699,13 @@ describe("ErrorBanner", () => {
     expect(screen.getByRole("button", { name: "View diagnostics" })).toBeInTheDocument();
   });
 
-  it("does not invent retry for non-retryable variants", () => {
-    render(
-      <ErrorBanner
-        message="The conversation is too long."
-        source="llm"
-        code="context_length_exceeded"
-        onRetry={vi.fn()}
-      />,
-    );
+  it.each([
+    { code: "context_length_exceeded", message: "The conversation is too long." },
+    { code: "content_policy_refusal", message: "The model's safeguards blocked this message." },
+  ])("does not invent retry for the $code variant", ({ code, message }) => {
+    render(<ErrorBanner message={message} source="llm" code={code} onRetry={vi.fn()} />);
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Resume session" })).toBeNull();
   });
 
   it("keeps causally related error messages in order inside one expanded banner", () => {
@@ -760,6 +761,16 @@ describe("ErrorBanner", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Resume session" }));
     await waitFor(() => expect(onRetry).toHaveBeenCalledWith(relatedDisconnect));
+  });
+
+  it("shows the final automatic resume guidance without a manual resume action", () => {
+    const message = "Automatic resume failed. Please send a new message to continue.";
+    render(
+      <ErrorBanner message={message} source="" code="session_recovery_failed" onRetry={vi.fn()} />,
+    );
+    expect(screen.getByTestId("error-headline")).toHaveTextContent(message);
+    expect(screen.queryByRole("button", { name: "Resume session" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
   it("retries classified rate-limit errors and preserves the provider's details", async () => {
@@ -833,6 +844,22 @@ describe("ErrorBanner", () => {
       expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     },
   );
+
+  it("headlines an output-limit failure as the model's cap, without retry", () => {
+    render(
+      <ErrorBanner
+        message="Output limit reached — the response exceeded the model’s maximum output length and was cut off."
+        source="execution"
+        code="output_limit_exceeded"
+        onRetry={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("error-headline")).toHaveTextContent(
+      "The model's response hit its maximum output length and was cut off.",
+    );
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Resume session" })).toBeNull();
+  });
 
   it.each(["executor_error", "connection_error", "runner_error", "wrong_replica"])(
     "does not offer reconnect for live-runner code %s",

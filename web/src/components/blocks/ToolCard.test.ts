@@ -6,6 +6,11 @@ import { FileViewerContext } from "@/shell/FileViewerContext";
 import type { RenderItem } from "@/lib/renderItems";
 import { writeTerminalThemeMode } from "@/lib/terminalThemePreferences";
 import {
+  CODE_BLOCK_WORD_WRAP_STORAGE_KEY,
+  readCodeBlockWordWrap,
+  writeCodeBlockWordWrap,
+} from "@/lib/codeWrapPreferences";
+import {
   ToolCard,
   ToolGroupSummary,
   fileChangesFromArguments,
@@ -23,6 +28,7 @@ vi.mock("./toolViews", () => ({ toolViewFor: (name: string) => registeredViews.g
 afterEach(() => {
   cleanup();
   registeredViews.clear();
+  localStorage.removeItem(CODE_BLOCK_WORD_WRAP_STORAGE_KEY);
 });
 
 // Render helper: ToolCard reads a Tooltip (trigger title) so it needs the
@@ -466,9 +472,9 @@ describe("ToolCard rendering", () => {
     }
   });
 
-  it("word-wrap toggle restores the horizontal-scroll view per panel", () => {
+  it("word-wrap toggle restores the horizontal-scroll view for every panel", () => {
     // WHY: column-aligned output (tables, diffs) sometimes reads better
-    // unwrapped, so each panel's toggle must flip it back to `pre`.
+    // unwrapped; the choice is one preference shared by every code panel.
     const { container } = renderCard({
       name: "my_tool",
       arguments: {},
@@ -482,12 +488,16 @@ describe("ToolCard rendering", () => {
     expect(toggles.length).toBe(2); // Input + Result
     fireEvent.click(toggles[0]);
 
-    // Only the toggled panel unwraps; the other keeps the default.
-    const wrapped = Array.from(container.querySelectorAll("pre")).filter((pre) =>
-      pre.className.includes("whitespace-pre-wrap"),
-    );
-    expect(wrapped.length).toBe(1);
-    expect(screen.getByRole("button", { name: "Enable word wrap" })).toBeInTheDocument();
+    // Both panels unwrap together, and either toggle wraps them again.
+    const wrapped = () =>
+      Array.from(container.querySelectorAll("pre")).filter((pre) =>
+        pre.className.includes("whitespace-pre-wrap"),
+      );
+    expect(wrapped()).toHaveLength(0);
+    const enableToggles = screen.getAllByRole("button", { name: "Enable word wrap" });
+    expect(enableToggles).toHaveLength(2);
+    fireEvent.click(enableToggles[1]);
+    expect(wrapped()).toHaveLength(container.querySelectorAll("pre").length);
   });
 });
 
@@ -940,6 +950,11 @@ describe("ToolCard shell terminal panel", () => {
     fireEvent.click(toggle);
     expect(screen.getByRole("button", { name: "Enable word wrap" })).toBe(toggle);
     expect(document.activeElement).toBe(toggle);
+
+    // The shell card shares the code wrap preference with every other block.
+    expect(readCodeBlockWordWrap()).toBe(false);
+    act(() => writeCodeBlockWordWrap(true));
+    expect(screen.getByRole("button", { name: "Disable word wrap" })).toBe(toggle);
   });
 
   it("shows a running status while the command has no output yet", () => {

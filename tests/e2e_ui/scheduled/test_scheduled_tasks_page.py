@@ -223,7 +223,7 @@ def test_automations_introduction_first_visit(
 ) -> None:
     """Walk through first-visit onboarding and keep it dismissed after a reload."""
     page.set_viewport_size(viewport)
-    if viewport["width"] < 768:
+    if viewport["width"] < 1181:
         page.goto(f"{live_server}/tasks")
     else:
         page.goto(live_server)
@@ -1157,7 +1157,7 @@ def test_scheduled_task_trigger_template_creates_polling_manager_task(
     automation_projects = [p for p in projects if p["name"] == "Omnigent Automation"]
     assert len(automation_projects) == 1
     assert created["project_id"] == automation_projects[0]["id"]
-    assert created["rrule"].startswith("FREQ=MINUTELY;INTERVAL=10"), created
+    assert created["rrule"] is None, created
     expect(_row_by_name(page, name)).to_contain_text("Runs when new items match")
     expect(_row_by_name(page, name).get_by_test_id("task-next-run")).to_have_count(0)
     # The prompt's details are covered by the dialog and renderer tests.
