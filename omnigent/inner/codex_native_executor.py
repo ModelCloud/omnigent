@@ -83,6 +83,7 @@ from omnigent.inner.executor import (
     ExecutorEvent,
     InjectionDeliveryAmbiguous,
     Message,
+    NativeTurnAcceptance,
     ToolSpec,
     TurnComplete,
 )
@@ -577,7 +578,7 @@ async def _start_codex_turn(
     state: CodexNativeBridgeState,
     input_items: list[dict[str, object]],
     settings_overrides: Mapping[str, object],
-) -> None:
+) -> NativeTurnAcceptance | None:
     """Apply optional settings and start one Codex turn on an idle thread."""
     settings_overrides = dict(settings_overrides)
     # Settings applied while their config write failed are recorded beside the config.
@@ -658,6 +659,13 @@ async def _start_codex_turn(
                 turn_id,
             )
 
+        return NativeTurnAcceptance(
+            session_id=state.session_id,
+            thread_id=state.thread_id,
+            response_id=f"codex_{turn_id}",
+        )
+    return None
+
 
 async def _steer_codex_turn(
     client: CodexAppServerClient,
@@ -665,7 +673,7 @@ async def _steer_codex_turn(
     bridge_dir: Path,
     state: CodexNativeBridgeState,
     input_items: list[dict[str, object]],
-) -> None:
+) -> NativeTurnAcceptance | None:
     """Steer one bridge-recorded active Codex turn."""
     assert state.active_turn_id is not None
     response = await _native_delivery_request(
@@ -689,6 +697,13 @@ async def _steer_codex_turn(
                 "Codex native steer acknowledged after the active turn changed: turn_id=%s",
                 turn_id,
             )
+
+        return NativeTurnAcceptance(
+            session_id=state.session_id,
+            thread_id=state.thread_id,
+            response_id=f"codex_{turn_id}",
+        )
+    return None
 
 
 # Bound reconciliation after shell submission before releasing the injection lock.
@@ -842,24 +857,23 @@ async def _inject_codex_turn(
     state: CodexNativeBridgeState,
     input_items: list[dict[str, object]],
     settings_overrides: Mapping[str, object],
-) -> None:
+) -> NativeTurnAcceptance | None:
     """Retain input while a standalone shell or explicitly refused compaction settles."""
     state = await _wait_for_shell_completion(client, bridge_dir, state)
     try:
-        await _inject_codex_turn_once(
+        return await _inject_codex_turn_once(
             client,
             bridge_dir=bridge_dir,
             state=state,
             input_items=input_items,
             settings_overrides=settings_overrides,
         )
-        return
     except CodexAppServerResponseError as error:
         if state.active_turn_id is None or not is_compaction_steer_refusal(error):
             raise
     recovered_state = await _wait_for_compaction_turn(bridge_dir, state)
     try:
-        await _inject_codex_turn_once(
+        return await _inject_codex_turn_once(
             client,
             bridge_dir=bridge_dir,
             state=recovered_state,
@@ -930,27 +944,25 @@ async def _inject_codex_turn_once(
     state: CodexNativeBridgeState,
     input_items: list[dict[str, object]],
     settings_overrides: Mapping[str, object],
-) -> None:
+) -> NativeTurnAcceptance | None:
     """Steer an active turn or start one, recovering one proven stale steer."""
     if state.active_turn_id is None:
-        await _start_codex_turn(
+        return await _start_codex_turn(
             client,
             bridge_dir=bridge_dir,
             state=state,
             input_items=input_items,
             settings_overrides=settings_overrides,
         )
-        return
 
     expected_turn_id = state.active_turn_id
     try:
-        await _steer_codex_turn(
+        return await _steer_codex_turn(
             client,
             bridge_dir=bridge_dir,
             state=state,
             input_items=input_items,
         )
-        return
     except CodexAppServerResponseError as error:
         if not is_stale_active_turn_error(error):
             raise
@@ -967,15 +979,14 @@ async def _inject_codex_turn_once(
             "Codex native stale steer raced with a newer turn; steering turn_id=%s",
             recovered_state.active_turn_id,
         )
-        await _steer_codex_turn(
+        return await _steer_codex_turn(
             client,
             bridge_dir=bridge_dir,
             state=recovered_state,
             input_items=input_items,
         )
-        return
     _logger.info("Codex native reconciled completed stale turn: turn_id=%s", expected_turn_id)
-    await _start_codex_turn(
+    return await _start_codex_turn(
         client,
         bridge_dir=bridge_dir,
         state=recovered_state,
@@ -1392,6 +1403,7 @@ class CodexNativeExecutor(Executor):
         undelivered = False
         delivery_unconfirmed = False
         preserve_session = False
+        native_acceptance: NativeTurnAcceptance | None = None
         while True:
             if state is None:
                 (
@@ -1509,7 +1521,7 @@ class CodexNativeExecutor(Executor):
                                     state, settings_overrides
                                 )
                             )
-                            await _inject_codex_turn(
+                            native_acceptance = await _inject_codex_turn(
                                 client,
                                 bridge_dir=self._bridge_dir,
                                 state=state,
@@ -1618,7 +1630,7 @@ class CodexNativeExecutor(Executor):
                 or (undelivered and state is not None and state.active_turn_id is not None),
             )
         else:
-            yield TurnComplete(response=None)
+            yield TurnComplete(response=None, native_acceptance=native_acceptance)
 
 
 def _model_effort_overrides(config: ExecutorConfig | None) -> dict[str, object]:
