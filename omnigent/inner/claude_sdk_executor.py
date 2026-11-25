@@ -74,6 +74,7 @@ from omnigent.models.claude_model_vocabulary import (
 )
 from omnigent.models.model_metadata import concrete_reported_model
 from omnigent.models.model_override import is_databricks_model_id
+from omnigent.privacy_env import apply_privacy_env
 from omnigent.runtime.mcp_tool_result import decode_mcp_image_result
 from omnigent.spec.types import RetryPolicy
 from omnigent.telemetry.surface import harness_client_surface
@@ -3682,6 +3683,10 @@ class ClaudeSDKExecutor(Executor):
         # ``""`` here would still leave an empty key in the child env.
         env = dict(self._extra_env)
         env["CLAUDE_AGENT_SDK_CLIENT_APP"] = "omnigent"
+        # The SDK merges ``options.env`` over the inherited environment, so
+        # forcing the opt-outs here reaches the CLI and every MCP server it
+        # starts; see :mod:`omnigent.privacy_env`.
+        apply_privacy_env(env)
         api_key_helper = env.pop(_CLAUDE_API_KEY_HELPER_ENV_KEY, None)
         # Windows uses a Python helper instead of POSIX printf.
         api_key_helper, static_api_key = _platform_safe_api_key_helper(api_key_helper)

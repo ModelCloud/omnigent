@@ -28,6 +28,7 @@ from collections.abc import Iterable, Mapping
 
 from omnigent._platform import WINDOWS_ENV_PASSTHROUGH
 from omnigent.databricks_ai_gateway import CI_CONTEXT_ENV, ci_request_tags
+from omnigent.privacy_env import apply_privacy_env
 from omnigent.runner.identity import (
     OMNIGENT_SESSION_ENV_VAR,
     RUNNER_AUTH_SECRET_ENV_VARS,
@@ -122,7 +123,8 @@ def clean_agent_env(
         allowed, subject to the deny rules.
     :returns: A filtered copy without runner-auth secrets that also keeps the
         variables the launching CLI forwarded for this session; desktop-session
-        variables require ``extra_allowed``.
+        variables require ``extra_allowed``. Telemetry opt-outs from
+        :mod:`omnigent.privacy_env` are always present.
     """
     env_source = os.environ if source is None else source
     prefixes = BASE_ALLOW_PREFIXES + tuple(allow_prefixes)
@@ -145,6 +147,9 @@ def clean_agent_env(
         for key, value in env_source.items()
         if key not in denied and (key in exact or key.startswith(prefixes))
     }
+    # Every harness child gets the telemetry opt-outs whether or not the
+    # launching shell exported them; see :mod:`omnigent.privacy_env`.
+    apply_privacy_env(filtered)
     if CI_CONTEXT_ENV not in denied and (tags := ci_request_tags(env_source)):
         filtered[CI_CONTEXT_ENV] = json.dumps(tags, separators=(",", ":"))
     return filtered

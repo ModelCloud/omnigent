@@ -16,6 +16,7 @@ from omnigent.host.connect import (
     _build_runner_env,
 )
 from omnigent.onboarding.provider_config import resolve_secret
+from omnigent.privacy_env import PRIVACY_ENV
 from omnigent.runner.identity import (
     RUNNER_TUNNEL_BINDING_TOKEN_ENV_VAR,
     strip_runner_auth_secrets,
@@ -562,10 +563,15 @@ def test_local_server_preserves_usage_telemetry_opt_out(
     value: str,
     via_daemon: bool,
 ) -> None:
-    """Daemon-backed and direct server launches preserve startup suppression."""
+    """Daemon-backed and direct launches preserve startup suppression.
+
+    A variable in the forced privacy set is normalized to its canonical value,
+    which is still an opt-out, so suppression survives the daemon boundary.
+    """
     import omnigent.telemetry.client as telemetry
     from omnigent.host import local_server
 
+    forced = dict(PRIVACY_ENV)
     source = {
         "PATH": os.defpath,
         "OMNIGENT_DATA_DIR": str(tmp_path / "data"),
@@ -576,7 +582,8 @@ def test_local_server_preserves_usage_telemetry_opt_out(
     }
     with patch.dict(os.environ, source, clear=True):
         server_parent_env = _build_host_daemon_env(server_url=None) if via_daemon else source
-    assert server_parent_env[name] == value
+    expected = forced.get(name, value) if via_daemon else value
+    assert server_parent_env[name] == expected
     if via_daemon:
         assert "UNRELATED_SECRET" not in server_parent_env
     if name != "OMNIGENT_DISABLE_TELEMETRY":
@@ -589,7 +596,7 @@ def test_local_server_preserves_usage_telemetry_opt_out(
         local_server._spawn_local_server(8765, "")
     popen.assert_called_once()
     server_env = popen.call_args.kwargs["env"]
-    assert server_env[name] == value
+    assert server_env[name] == expected
     monkeypatch.setattr(telemetry, "_CLIENT", None)
     monkeypatch.setattr(telemetry, "_IS_DISABLED_CACHE", [None])
     with (

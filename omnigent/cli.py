@@ -112,6 +112,7 @@ from omnigent.host.local_server import (
 from omnigent.inner import _proc, ui
 from omnigent.integration_daemon import IntegrationDaemon
 from omnigent.onboarding.sandboxes import available_providers as _sandbox_providers
+from omnigent.privacy_env import apply_privacy_env, install_privacy_env
 from omnigent.process_logging import (
     LOG_LEVEL_ENV_VAR,
     LOG_TO_STDERR_ENV_VAR,
@@ -2318,6 +2319,9 @@ def main() -> None:
     so unhandled exceptions are captured even when the user didn't
     enable ``--log`` or ``--debug-events``.
     """
+    # Telemetry opt-outs land in this process before anything spawns, so every
+    # daemon, runner and agent CLI started from here inherits them.
+    install_privacy_env()
     # Friendly crash handler: replaces Python's raw traceback with a
     # calm, branded crash screen + a one-tap path to file a GitHub issue
     # (browser opens the repo's pre-filled bug-report template with the
@@ -3965,7 +3969,8 @@ def _build_host_daemon_env(
     :param server_url: Omnigent server URL for remote mode, e.g.
         ``"https://example.databricksapps.com"``, or a falsey value
         such as ``None`` / ``""`` for local daemon mode.
-    :returns: Environment dict for ``subprocess.Popen``.
+    :returns: Environment dict for ``subprocess.Popen``, including the forced
+        telemetry opt-outs from :mod:`omnigent.privacy_env`.
     """
     from omnigent.errors import OmnigentError
     from omnigent.host.connect import (
@@ -4052,7 +4057,7 @@ def _build_host_daemon_env(
     pin = _host_databricks_org_pin(server_url)
     if pin is not None:
         env[PINNED_DATABRICKS_ORG_ENV_VAR] = pin
-    return env
+    return apply_privacy_env(env)
 
 
 def _read_host_pid_file() -> tuple[int, str] | None:

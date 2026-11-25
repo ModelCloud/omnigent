@@ -164,6 +164,7 @@ from omnigent.native.native_terminal import (
 from omnigent.native.native_terminal import (
     terminal_attach_url as _attach_url,
 )
+from omnigent.privacy_env import apply_privacy_env
 from omnigent.process_logging import log_info_once
 from omnigent.terminals.ws_common import (
     WS_CLOSE_TERMINAL_DETACHED,
@@ -228,9 +229,6 @@ _CLAUDE_CODE_USE_GATEWAY_ENV = "CLAUDE_CODE_USE_GATEWAY"
 #: Kill-switch for Claude Code's server-side advisor tool, which runs only when the
 #: user sets an advisor model in their own Claude settings.
 _CLAUDE_CODE_DISABLE_ADVISOR_TOOL_ENV = "CLAUDE_CODE_DISABLE_ADVISOR_TOOL"
-#: Kill-switch Claude Code treats as covering nonessential startup traffic;
-#: the probe strips it so speed knobs never mask harness output.
-_CLAUDE_NONESSENTIAL_TRAFFIC_ENV = "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"
 #: Starting page size for the cold-resume history fetch. On a 5xx the fetch
 #: halves the page size down to the floor before giving up — a deployed
 #: backend can choke on one oversized page of a big conversation while the
@@ -1078,21 +1076,12 @@ def _claude_model_probe_invocation(
     )
     env = dict(os.environ)
     env.update(build_native_claude_terminal_env(claude_config))
-    env.update(
-        {
-            "DISABLE_TELEMETRY": "1",
-            "DISABLE_ERROR_REPORTING": "1",
-            "DISABLE_AUTOUPDATER": "1",
-        }
-    )
-    # Mirrors the native terminal's env-unset list, plus the nonessential-
-    # traffic kill-switch, so speed knobs never mask harness output.
+    # Mirrors the native terminal's env-unset list.
     env.pop("DATABRICKS_CONFIG_PROFILE", None)
     env.pop(_CLAUDE_CODE_NESTED_SESSION_ENV, None)
-    env.pop(_CLAUDE_NONESSENTIAL_TRAFFIC_ENV, None)
     for name in native_claude_auth_env_unset(claude_config):
         env.pop(name, None)
-    return command, launch_args, env
+    return command, launch_args, apply_privacy_env(env)
 
 
 async def _resolve_claude_model_alias(
@@ -1686,6 +1675,8 @@ def build_native_claude_terminal_env(
     may not serve Claude Code's canonical refusal-fallback target. Model
     requests default to :class:`RetryPolicy`'s per-request timeout so an
     unanswered request is retried (see :data:`_CLAUDE_CODE_API_TIMEOUT_ENV`).
+    The telemetry opt-outs from :mod:`omnigent.privacy_env` are forced last,
+    so a configured or inherited value cannot re-enable tracking.
 
     :param claude_config: Optional provider/ucode launch config, e.g.
         one carrying ``{"ANTHROPIC_BASE_URL": "https://example.com"}``.
@@ -1739,7 +1730,7 @@ def build_native_claude_terminal_env(
                 f"carries a raw {name}; the credential must reach "
                 "Claude Code via the helper, not the environment."
             )
-    return terminal_env
+    return apply_privacy_env(terminal_env)
 
 
 def _mark_startup_step(

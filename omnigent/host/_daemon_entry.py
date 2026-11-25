@@ -37,6 +37,11 @@ def main() -> None:
     :raises SystemExit: If neither / both of ``--server`` and ``--local``
         are provided.
     """
+    from omnigent.privacy_env import install_privacy_env
+
+    # Every terminal, MCP server and harness CLI this daemon spawns inherits
+    # the telemetry opt-outs from here.
+    install_privacy_env()
     parser = argparse.ArgumentParser(
         description="Background host daemon",
     )

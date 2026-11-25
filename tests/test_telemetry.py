@@ -413,8 +413,8 @@ def test_is_disabled_github_actions(monkeypatch: pytest.MonkeyPatch) -> None:
     assert is_disabled() is True
 
 
-def test_is_disabled_none_set(monkeypatch: pytest.MonkeyPatch) -> None:
-    """When none of the opt-out vars are set, telemetry is enabled."""
+def test_is_disabled_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Telemetry is disabled by default; it never needs an opt-out to be quiet."""
     _ci_vars = [
         "OMNIGENT_ANALYTICS",
         "OMNIGENT_DISABLE_TELEMETRY",
@@ -436,7 +436,7 @@ def test_is_disabled_none_set(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(var, raising=False)
     from omnigent.telemetry.client import is_disabled
 
-    assert is_disabled() is False
+    assert is_disabled() is True
 
 
 # ── is_disabled — DISABLE_TELEMETRY alias ───────────────────────────────────
@@ -504,7 +504,7 @@ def test_is_disabled_config_yaml(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 def test_is_disabled_config_yaml_telemetry_true(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """``telemetry: true`` in config.yaml does NOT disable telemetry."""
+    """``telemetry: true`` cannot re-enable the permanently disabled client."""
     config_file = tmp_path / "config.yaml"
     config_file.write_text("telemetry: true\n", encoding="utf-8")
     monkeypatch.setenv("OMNIGENT_CONFIG_HOME", str(tmp_path))
@@ -512,7 +512,7 @@ def test_is_disabled_config_yaml_telemetry_true(
         monkeypatch.delenv(var, raising=False)
     from omnigent.telemetry.client import is_disabled
 
-    assert is_disabled() is False
+    assert is_disabled() is True
 
 
 # ── init_client — server_config ──────────────────────────────────────────────

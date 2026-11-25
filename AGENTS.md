@@ -9,6 +9,33 @@ repository. See `CONTRIBUTING.md` for the full contributor workflow.
   implementation if that avoids duplication.
 - Use descriptive names; avoid unexplained abbreviations and single-letter names.
 
+## Privacy: no telemetry, tracking, or phone-home
+
+Every session subprocess runs with the opt-outs in `omnigent/privacy_env.py`:
+`DO_NOT_TRACK=1`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, and the rest of
+`PRIVACY_ENV`. This is a hard product requirement, not a default. See
+[.claude/skills/privacy-no-telemetry/SKILL.md](.claude/skills/privacy-no-telemetry/SKILL.md).
+
+- Never remove, weaken, or route around `apply_privacy_env` or
+  `install_privacy_env`. The values are forced, so an inherited or
+  caller-supplied `DO_NOT_TRACK=0` must not win.
+- New harnesses, terminals, MCP servers, and integrations that spawn a process
+  must build their environment through `clean_agent_env` or call
+  `apply_privacy_env` explicitly. Add a newly discovered tool opt-out to
+  `PRIVACY_ENV` rather than at the call site.
+- Omnigent's own product telemetry is permanently disabled:
+  `TELEMETRY_PERMANENTLY_DISABLED` in `omnigent/telemetry/client.py` makes
+  `is_disabled()` return `True`, so no event or remote config fetch can leave a
+  process. Never clear that constant, and never add a config or consent path
+  that re-enables it.
+- Do not add analytics, usage reporting, crash uploads, session replay, update
+  pings, or third-party telemetry SDKs. Absence of configuration means off, and
+  an explicit opt-in must not override the forced opt-outs.
+- Do not make telemetry depend on a variable being absent to stay quiet; the
+  opt-out must be an explicit forced value that config cannot override.
+- Changing this behavior requires an explicit user request that names the tool
+  and the data it would collect.
+
 ## Test changes
 
 Before adding test setup, read [the test guide](tests/README.md) and

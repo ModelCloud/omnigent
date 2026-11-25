@@ -35,6 +35,7 @@ from omnigent.cli_invocation import cli_invocation
 from omnigent.debug_logging import debug_event
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.native import owner_claim
+from omnigent.privacy_env import apply_privacy_env
 from omnigent.process_logging import redact_log_text
 from omnigent.runner.identity import strip_runner_auth_secrets
 from omnigent.util.tmux_compat import tmux_unavailable_reason
@@ -847,7 +848,8 @@ def terminal_pane_environment(
         ``None`` when there are none.
     :param sandbox_policy: Active sandbox whose env allowlist filters the inherited
         environment, or ``None`` when the pane is not sandboxed.
-    :returns: The pane environment, e.g. ``{"HOME": "/home/user", "LANG": "C.UTF-8"}``.
+    :returns: The pane environment, e.g. ``{"HOME": "/home/user", "LANG": "C.UTF-8"}``,
+        including the forced telemetry opt-outs from :mod:`omnigent.privacy_env`.
     """
     # Do NOT advertise the tmux control socket path to the
     # pane. The tmux server runs unsandboxed, so exposing its socket
@@ -886,7 +888,9 @@ def terminal_pane_environment(
     # ASCII/Latin-1 codeset and re-encode their UTF-8 output byte-by-byte,
     # rendering multibyte characters as mojibake in the pane (issue #2427).
     _apply_utf8_locale_default(result)
-    return result
+    # A pane runs agent CLIs and their integrations, so the telemetry opt-outs
+    # are forced even when an override or the inherited shell disabled them.
+    return apply_privacy_env(result)
 
 
 def _apply_utf8_locale_default(env: dict[str, str]) -> None:
