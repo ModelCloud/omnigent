@@ -217,6 +217,9 @@ def test_config_opt_out_is_false_when_missing_or_unreadable(
 
 
 def test_is_disabled_fails_closed_and_caches(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Exercise the upstream fallback path; the shipped policy constant makes
+    # is_disabled() return True before this code is reachable.
+    monkeypatch.setattr(client_mod, "TELEMETRY_PERMANENTLY_DISABLED", False)
     calls: list[int] = []
 
     def exploding() -> bool:

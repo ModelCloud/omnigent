@@ -21,7 +21,14 @@ from omnigent.inner.agent_env import (
     clean_agent_env,
     declared_passthrough,
 )
+from omnigent.privacy_env import PRIVACY_ENV
 from omnigent.runner.identity import RUNNER_AUTH_SECRET_ENV_VARS
+
+
+def _without_privacy_env(env: dict[str, str]) -> dict[str, str]:
+    """Drop the always-forced telemetry opt-outs before an exact comparison."""
+    return {name: value for name, value in env.items() if name not in dict(PRIVACY_ENV)}
+
 
 # Families that must never reach a vendor CLI unless the spec asks for them.
 # One planted value per family, all distinct so a failure names the leak.
@@ -261,7 +268,7 @@ def test_forwarded_session_names_cannot_admit_runner_secrets_or_desktop_session(
 
     env = clean_agent_env(deny_exact=("OPENAI_API_KEY",), source=source)
 
-    assert env == {"ARCATERM_CAPABILITY": "capability-for-pane-1"}
+    assert _without_privacy_env(env) == {"ARCATERM_CAPABILITY": "capability-for-pane-1"}
 
 
 def test_real_builders_strip_desktop_session(monkeypatch):
@@ -291,7 +298,7 @@ def test_desktop_session_requires_explicit_cli_passthrough(explicit):
         source=session_env,
     )
 
-    assert env == (session_env if explicit else {})
+    assert _without_privacy_env(env) == (session_env if explicit else {})
 
 
 def test_goose_receives_declared_desktop_session(monkeypatch):
@@ -312,7 +319,7 @@ def test_goose_receives_declared_desktop_session(monkeypatch):
         ),
     )
 
-    assert executor._build_spawn_env() == session_env
+    assert _without_privacy_env(executor._build_spawn_env()) == session_env
 
 
 @pytest.mark.parametrize("harness", sorted(HARNESS_PREFIXES))
@@ -407,7 +414,7 @@ def test_operator_passthrough_uses_exact_names_from_source(monkeypatch):
 
     env = clean_agent_env(extra_allowed=("FROM_SPEC", *RUNNER_AUTH_SECRET_ENV_VARS), source=source)
 
-    assert env == {"KEY": "named", "EMPTY": "", "FROM_SPEC": "declared"}
+    assert _without_privacy_env(env) == {"KEY": "named", "EMPTY": "", "FROM_SPEC": "declared"}
     assert source == before
 
 

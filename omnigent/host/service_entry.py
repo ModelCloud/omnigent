@@ -71,6 +71,11 @@ def run(server: str) -> int:
 
 def main() -> int:
     """Parse the service mode and run the host."""
+    from omnigent.privacy_env import install_privacy_env
+
+    # A service-started host must carry the same telemetry opt-outs as one the
+    # CLI launches, so its terminals and harness CLIs inherit them.
+    install_privacy_env()
     parser = argparse.ArgumentParser(description="Omnigent host service")
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--server", help="Remote Omnigent server URL.")

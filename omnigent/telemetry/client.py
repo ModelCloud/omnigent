@@ -94,6 +94,14 @@ _CONFIG_URL_PROD = "https://config.omnigent-telemetry.io"
 _CONFIG_URL_STAGING = "https://config-staging.omnigent-telemetry.io"
 
 
+#: ModelCloud policy: Omnigent never emits product telemetry.
+#:
+#: The client, its remote config fetch, and every emitter stay wired for
+#: upstream compatibility, but ``is_disabled()`` returns ``True``
+#: unconditionally so no event can leave a process even when the opt-out
+#: environment is missing. See ``.claude/skills/privacy-no-telemetry``.
+TELEMETRY_PERMANENTLY_DISABLED = True
+
 # Cached result of is_disabled() — computed once on first call, then reused.
 # Using a list so it's mutable from within the function (avoids global keyword).
 _IS_DISABLED_CACHE: list[bool | None] = [None]
@@ -248,9 +256,10 @@ def _config_telemetry_disabled() -> bool:
 def is_disabled() -> bool:
     """Return ``True`` when telemetry should be completely suppressed.
 
-    Result is cached after the first call — env vars and config.yaml are
-    checked once at startup and not re-read on every emit, so there is no
-    per-request I/O overhead.
+    Omnigent ships with product telemetry permanently disabled
+    (:data:`TELEMETRY_PERMANENTLY_DISABLED`), so this always returns ``True``.
+    The opt-out checks below stay documented for upstream compatibility but
+    are unreachable while the policy constant is set.
 
     Checks (in order):
     1. ``OMNIGENT_ANALYTICS=0``
@@ -261,6 +270,8 @@ def is_disabled() -> bool:
 
     Always returns a ``bool``; never raises.
     """
+    if TELEMETRY_PERMANENTLY_DISABLED:
+        return True
     if _IS_DISABLED_CACHE[0] is not None:
         return _IS_DISABLED_CACHE[0]
     try:

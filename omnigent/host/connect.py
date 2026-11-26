@@ -189,6 +189,7 @@ from omnigent.onboarding.harness_readiness import (
     harness_is_configured,
 )
 from omnigent.onboarding.provider_config import ANTHROPIC_FAMILY, OPENAI_FAMILY
+from omnigent.privacy_env import apply_privacy_env
 from omnigent.process_logging import (
     LOG_TTY_FD_ENV_VAR,
     PROCESS_LOG_FILE_ENV_VAR,
@@ -1021,7 +1022,8 @@ def _build_runner_env(
         host janitor. ``None`` preserves the standalone runner default.
     :param session_env: Variables the launching CLI forwarded for this
         session only. They bypass the allowlist but not the runner wiring.
-    :returns: The runner subprocess environment.
+    :returns: The runner subprocess environment, including the forced
+        telemetry opt-outs from :mod:`omnigent.privacy_env`.
     """
     extra_names = {
         name.strip()
@@ -1093,7 +1095,9 @@ def _build_runner_env(
         )
     if interactive_shells is not None:
         env[RUNNER_INTERACTIVE_SHELLS_ENV_VAR] = json.dumps(interactive_shells)
-    return env
+    # The runner is the parent of every harness CLI and terminal pane, so the
+    # opt-outs are forced here as well as at each child boundary.
+    return apply_privacy_env(env)
 
 
 def _write_runner_inference_config(session_id: str, inference_config: dict[str, object]) -> Path:

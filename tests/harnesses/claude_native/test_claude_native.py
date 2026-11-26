@@ -11852,10 +11852,10 @@ async def test_probe_claude_model_options_runs_the_harness_under_the_launch_env(
 ) -> None:
     """The probe launches Claude Code with the exact launch env.
 
-    Speed env vars ride along, the nonessential-traffic kill-switch is
-    stripped (Claude treats it as covering the probe's own runs), and the
-    apiKeyHelper is delivered via ``--settings`` — so the enumeration
-    answers for the session the user would actually get.
+    Speed env vars ride along, the telemetry opt-outs stay forced even for a
+    probe (no session may phone home), and the apiKeyHelper is delivered via
+    ``--settings`` — so the enumeration answers for the session the user would
+    actually get.
     """
     monkeypatch.setenv("OMNIGENT_CONFIG_HOME", str(tmp_path))
     monkeypatch.setenv("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
@@ -11897,7 +11897,7 @@ async def test_probe_claude_model_options_runs_the_harness_under_the_launch_env(
     assert env["ANTHROPIC_BASE_URL"] == "https://gw.example/anthropic"
     assert env["DISABLE_TELEMETRY"] == "1"
     assert env["DISABLE_AUTOUPDATER"] == "1"
-    assert "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" not in env
+    assert env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] == "1"
     assert "CLAUDECODE" not in env
 
 

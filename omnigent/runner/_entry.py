@@ -2535,6 +2535,10 @@ def main() -> None:
 
     :returns: None.
     """
+    from omnigent.privacy_env import install_privacy_env
+
+    # Set the telemetry opt-outs before any harness child can spawn.
+    install_privacy_env()
     # Set the boot-time disposition before the slow imports below, so an early
     # hangup cannot kill the runner while they run.
     _ignore_finish_work_signal_until_handled()
